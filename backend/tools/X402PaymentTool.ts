@@ -4,6 +4,7 @@
  */
 
 import { Keypair, Horizon } from "@stellar/stellar-sdk";
+import { createHash } from "crypto";
 import { z } from "zod";
 import { config } from "../config";
 import { StellarPaymentTool } from "./StellarPaymentTool";
@@ -38,9 +39,15 @@ export class X402PaymentTool {
   private keypair: Keypair;
   private horizonServer: Horizon.Server;
 
-  constructor(secretKey: string = config.agentKeypair().secret()) {
+  constructor(
+    secretKey: string = config.agentKeypair().secret(),
+    paymentTool?: StellarPaymentTool
+  ) {
     this.keypair = Keypair.fromSecret(secretKey);
-    this.paymentTool = new StellarPaymentTool(secretKey);
+    this.paymentTool = paymentTool ?? new StellarPaymentTool(secretKey);
+    this.horizonServer = new Horizon.Server(config.HORIZON_URL, {
+      allowHttp: config.STELLAR_NETWORK !== "mainnet",
+    });
   }
 
   async respond(rawChallenge: unknown): Promise<X402PaymentProof> {
@@ -57,7 +64,7 @@ export class X402PaymentTool {
       assetIssuer:
         challenge.assetCode === "XLM" ? undefined : challenge.assetIssuer,
       // SPEC: memo = SHA-256(nonce)[0:28 hex chars]; resource server must apply the same derivation to verify.
-      memo: hash(Buffer.from(challenge.nonce)).toString("hex").slice(0, 28),
+      memo: createHash("sha256").update(challenge.nonce).digest("hex").slice(0, 28),
     });
 
     return {
@@ -104,7 +111,10 @@ export class X402PaymentTool {
       throw new Error("x402 verification failed: asset mismatch");
     }
 
-    const expectedMemo = originalChallenge.nonce.slice(0, 28);
+    const expectedMemo = createHash("sha256")
+      .update(originalChallenge.nonce)
+      .digest("hex")
+      .slice(0, 28);
 
     if (tx.memo !== expectedMemo) {
       throw new Error("x402 verification failed: nonce mismatch");

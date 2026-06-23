@@ -41,6 +41,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 const vitest_1 = require("vitest");
+const stellar_sdk_1 = require("@stellar/stellar-sdk");
 const StellarPaymentTool_1 = require("../backend/tools/StellarPaymentTool");
 const rpcClient = __importStar(require("../backend/rpc_client"));
 // ─── Module mock ──────────────────────────────────────────────────────────────
@@ -54,20 +55,25 @@ vitest_1.vi.mock("../backend/rpc_client", () => ({
     prepareSorobanTx: vitest_1.vi.fn(),
 }));
 // ─── Mock config — isolate from real .env ─────────────────────────────────────
-vitest_1.vi.mock("../backend/config", () => ({
-    config: {
-        STELLAR_NETWORK: "testnet",
-        HORIZON_URL: "https://horizon-testnet.stellar.org",
-        SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org",
-        AGENT_SECRET_KEY: "SBPTNBEQQVQD5NIPZTCXHKM5ZVONK2ENLP5DTZJBGSUPOPWQSIFWZKX",
-        X402_ASSET_CODE: "USDC",
-        X402_ASSET_ISSUER: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
-        MAX_RETRIES: 3,
-        RETRY_DELAY_MS: 100, // fast in tests
-    },
-}));
+vitest_1.vi.mock("../backend/config", () => {
+    const kp = stellar_sdk_1.Keypair.random();
+    return {
+        config: {
+            STELLAR_NETWORK: "testnet",
+            HORIZON_URL: "https://horizon-testnet.stellar.org",
+            SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org",
+            AGENT_SECRET_KEY: kp.secret(),
+            AGENT_PUBLIC_KEY: kp.publicKey(),
+            agentKeypair: () => kp,
+            X402_ASSET_CODE: "USDC",
+            X402_ASSET_ISSUER: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+            MAX_RETRIES: 3,
+            RETRY_DELAY_MS: 100, // fast in tests
+        },
+    };
+});
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
-const TEST_SECRET = "SBPTNBEQQVQD5NIPZTCXHKM5ZVONK2ENLP5DTZJBGSUPOPWQSIFWZKX";
+// Use generated test secret (valid StrKey) from TEST_KEYPAIR
 // Valid 56-char G-address for destination
 const VALID_DEST = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
 const VALID_ISSUER = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
@@ -95,7 +101,9 @@ function makeMockAccount(publicKey) {
     let tool;
     (0, vitest_1.beforeEach)(() => {
         vitest_1.vi.clearAllMocks();
-        tool = new StellarPaymentTool_1.StellarPaymentTool(TEST_SECRET);
+        tool = new StellarPaymentTool_1.StellarPaymentTool();
+        // Default: return a minimal valid account for TransactionBuilder
+        vitest_1.vi.mocked(rpcClient.loadAccount).mockResolvedValue(makeMockAccount(tool.publicKey));
     });
     (0, vitest_1.afterEach)(() => {
         vitest_1.vi.restoreAllMocks();

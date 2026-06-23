@@ -4,6 +4,15 @@
  * All network calls route through here — centralised observability point.
  */
 import { Horizon, rpc, Transaction, FeeBumpTransaction } from "@stellar/stellar-sdk";
+export declare class TimeoutError extends Error {
+    constructor(ms: number);
+}
+/**
+ * Returns false for deterministic failures (ZodError, TypeError) that will
+ * never succeed on retry, true for transient errors worth retrying.
+ */
+export declare function DEFAULT_IS_RETRYABLE(err: unknown): boolean;
+export declare function withRetry<T>(fn: () => Promise<T>, retries?: number, delayMs?: number, isRetryable?: (err: unknown) => boolean, maxDelayMs?: number): Promise<T>;
 export declare const horizonServer: Horizon.Server;
 export declare function loadAccount(publicKey: string): Promise<Horizon.AccountResponse>;
 export declare function submitTransaction(tx: Transaction | FeeBumpTransaction): Promise<Horizon.HorizonApi.SubmitTransactionResponse>;

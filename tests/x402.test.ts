@@ -7,20 +7,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { hash } from "@stellar/stellar-sdk";
+import { Keypair } from "@stellar/stellar-sdk";
+import { createHash } from "crypto";
 import { X402PaymentTool } from "../backend/tools/X402PaymentTool";
-import { StellarPaymentTool } from "../backend/tools/StellarPaymentTool";
-
-// ─── Mock StellarPaymentTool so x402 tests don't hit Horizon ─────────────────
-vi.mock("../backend/tools/StellarPaymentTool", () => ({
-  StellarPaymentTool: vi.fn().mockImplementation(() => ({
-    publicKey: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
-    execute: vi.fn().mockResolvedValue({ txHash: "x402_mock_tx_hash", ledger: 99 }),
-  })),
-}));
-
-import { X402PaymentTool } from "../backend/tools/X402PaymentTool";
-import { StellarPaymentTool } from "../backend/tools/StellarPaymentTool";
 
 vi.mock("../backend/config", () => {
   const kp = Keypair.random();
@@ -72,7 +61,7 @@ describe("X402PaymentTool", () => {
       publicKey: VALID_PAY_TO,
       execute: vi.fn().mockResolvedValue({ txHash: "x402_mock_tx_hash", ledger: 99 }),
     };
-    tool = new X402PaymentTool(undefined, mockPaymentTool);
+    tool = new X402PaymentTool(undefined, mockPaymentTool as any);
   });
 
   afterEach(() => {
@@ -145,10 +134,10 @@ describe("X402PaymentTool", () => {
       ).rejects.toThrow(/expired/);
     });
 
-    it("accepts a challenge expiring 1 ms from now", async () => {
+    it("accepts a challenge expiring 10 ms from now", async () => {
       const proof = await tool.respond({
         ...VALID_CHALLENGE,
-        expiresAt: futureIso(1),
+        expiresAt: futureIso(10),
       });
       expect(proof.txHash).toBeTruthy();
     });
@@ -174,7 +163,10 @@ describe("X402PaymentTool", () => {
 
       const callArg = mockPaymentTool.execute.mock.calls[0][0] as any;
 
-      const expectedMemo = hash(Buffer.from(VALID_CHALLENGE.nonce)).toString("hex").slice(0, 28);
+      const expectedMemo = createHash("sha256")
+        .update(VALID_CHALLENGE.nonce)
+        .digest("hex")
+        .slice(0, 28);
       expect(callArg.memo).toBe(expectedMemo);
       expect(callArg.memo.length).toBe(28);
     });

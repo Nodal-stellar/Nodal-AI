@@ -41,6 +41,7 @@ export async function withRetry<T>(
   fn: () => Promise<T>,
   retries = config.MAX_RETRIES,
   delayMs = config.RETRY_DELAY_MS,
+  isRetryable: (err: unknown) => boolean = DEFAULT_IS_RETRYABLE,
   maxDelayMs = 30_000
 ): Promise<T> {
   let lastErr: unknown;

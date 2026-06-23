@@ -16,6 +16,8 @@ import { StellarPaymentTool } from "./tools/StellarPaymentTool";
 import { SorobanInvokeTool } from "./tools/SorobanInvokeTool";
 import { X402PaymentTool } from "./tools/X402PaymentTool";
 
+const MAINNET_SPENDING_CAP = 10_000;
+
 // ─── Task types ───────────────────────────────────────────────────────────────
 
 export type TaskType = "stellar_payment" | "soroban_invoke" | "x402_respond";
@@ -62,6 +64,8 @@ export class PayFiAgent extends EventEmitter {
   private paymentTool: StellarPaymentTool;
   private sorobanTool: SorobanInvokeTool;
   private x402Tool: X402PaymentTool;
+  private isDraining = false;
+  private activeTasks = 0;
 
   // Bound handler references kept so destroy() can call .off() with the exact same function
   // reference — EventEmitter requires identity equality for removal.
@@ -179,6 +183,18 @@ export class PayFiAgent extends EventEmitter {
       const result: AgentResult = { success: false, taskType: task.type, error: safe };
       this.emit("task:failed", result);
       return result;
+    } finally {
+      this.activeTasks = Math.max(0, this.activeTasks - 1);
+    }
+  }
+
+  drain(): void {
+    this.isDraining = true;
+  }
+
+  async waitForPendingTasks(): Promise<void> {
+    while (this.activeTasks > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
 }

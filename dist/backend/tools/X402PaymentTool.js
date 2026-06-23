@@ -6,6 +6,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.X402PaymentTool = exports.X402ChallengeSchema = void 0;
 const stellar_sdk_1 = require("@stellar/stellar-sdk");
+const crypto_1 = require("crypto");
 const zod_1 = require("zod");
 const config_1 = require("../config");
 const StellarPaymentTool_1 = require("./StellarPaymentTool");
@@ -24,22 +25,16 @@ class X402PaymentTool {
     paymentTool;
     keypair;
     horizonServer;
-    constructor(keypairOrSecret) {
-        if (keypairOrSecret instanceof stellar_sdk_1.Keypair) {
-            this.keypair = keypairOrSecret;
-        }
-        else if (typeof keypairOrSecret === "string") {
-            this.keypair = stellar_sdk_1.Keypair.fromSecret(keypairOrSecret);
-        }
-        else {
-            this.keypair = config_1.config.agentKeypair();
-        }
-        this.paymentTool = new StellarPaymentTool_1.StellarPaymentTool(this.keypair);
-        this.horizonServer = new stellar_sdk_1.Horizon.Server(config_1.config.HORIZON_URL);
+    constructor(secretKey = config_1.config.agentKeypair().secret(), paymentTool) {
+        this.keypair = stellar_sdk_1.Keypair.fromSecret(secretKey);
+        this.paymentTool = paymentTool ?? new StellarPaymentTool_1.StellarPaymentTool(secretKey);
+        this.horizonServer = new stellar_sdk_1.Horizon.Server(config_1.config.HORIZON_URL, {
+            allowHttp: config_1.config.STELLAR_NETWORK !== "mainnet",
+        });
     }
     async respond(rawChallenge) {
         const challenge = exports.X402ChallengeSchema.parse(rawChallenge);
-        if (new Date(challenge.expiresAt) <= new Date()) {
+        if (new Date(challenge.expiresAt) < new Date()) {
             throw new Error(`x402 challenge expired at ${challenge.expiresAt}`);
         }
         const { txHash } = await this.paymentTool.execute({
@@ -47,7 +42,8 @@ class X402PaymentTool {
             amount: challenge.amount,
             assetCode: challenge.assetCode,
             assetIssuer: challenge.assetCode === "XLM" ? undefined : challenge.assetIssuer,
-            memo: challenge.nonce.slice(0, 28),
+            // SPEC: memo = SHA-256(nonce)[0:28 hex chars]; resource server must apply the same derivation to verify.
+            memo: (0, crypto_1.createHash)("sha256").update(challenge.nonce).digest("hex").slice(0, 28),
         });
         return {
             protocol: "x402",
@@ -81,7 +77,10 @@ class X402PaymentTool {
         if (parsed.assetCode !== originalChallenge.assetCode) {
             throw new Error("x402 verification failed: asset mismatch");
         }
-        const expectedMemo = originalChallenge.nonce.slice(0, 28);
+        const expectedMemo = (0, crypto_1.createHash)("sha256")
+            .update(originalChallenge.nonce)
+            .digest("hex")
+            .slice(0, 28);
         if (tx.memo !== expectedMemo) {
             throw new Error("x402 verification failed: nonce mismatch");
         }
