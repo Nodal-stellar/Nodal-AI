@@ -531,4 +531,62 @@ mod tests {
         assert_eq!(state.expiry, expiry);
         assert_eq!(state.released, false);
     }
+
+    // ── Property-based tests (#60) ─────────────────────────────────────────
+
+    #[cfg(test)]
+    mod proptest_tests {
+        use super::*;
+        use proptest::proptest;
+
+        proptest! {
+            #[test]
+            fn prop_initialize_and_release_with_arbitrary_amounts(
+                amount in 1i128..=(i128::MAX / 2)
+            ) {
+                let env = Env::default();
+                env.mock_all_auths();
+                let depositor = Address::generate(&env);
+                let recipient = Address::generate(&env);
+                let arbiter = Address::generate(&env);
+                let (token_id, token) = create_token(&env, &depositor);
+                StellarAssetClient::new(&env, &token_id).mint(&depositor, &(amount as i128 * 2));
+                let contract_id = env.register_contract(None, EscrowContract);
+                let client = EscrowContractClient::new(&env, &contract_id);
+                let expiry = env.ledger().timestamp() + EXPIRY_OFFSET;
+
+                client.initialize(&depositor, &recipient, &arbiter, &token_id, &amount, &expiry);
+                assert_eq!(token.balance(&contract_id), amount);
+
+                client.release(&arbiter);
+                assert_eq!(token.balance(&recipient), amount);
+                assert_eq!(token.balance(&contract_id), 0);
+            }
+        }
+
+        proptest! {
+            #[test]
+            fn prop_negative_amount_initialization_panics(
+                amount in i128::MIN..=0i128
+            ) {
+                let env = Env::default();
+                env.mock_all_auths();
+                let depositor = Address::generate(&env);
+                let recipient = Address::generate(&env);
+                let arbiter = Address::generate(&env);
+                let (token_id, _) = create_token(&env, &depositor);
+                StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
+                let contract_id = env.register_contract(None, EscrowContract);
+                let client = EscrowContractClient::new(&env, &contract_id);
+                let expiry = env.ledger().timestamp() + EXPIRY_OFFSET;
+
+                // This should panic on invalid amounts
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    client.initialize(&depositor, &recipient, &arbiter, &token_id, &amount, &expiry);
+                }));
+
+                prop_assert!(result.is_err(), "Expected panic for amount <= 0");
+            }
+        }
+    }
 }

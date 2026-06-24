@@ -46,6 +46,14 @@ describe("resolveNetworkPassphrase", () => {
   it("throws for an unknown network string", () => {
     expect(() => resolveNetworkPassphrase("unknown")).toThrow("Unsupported network: unknown");
   });
+
+  it("throws for empty string", () => {
+    expect(() => resolveNetworkPassphrase("")).toThrow("Unsupported network: ");
+  });
+
+  it("throws for undefined cast to string", () => {
+    expect(() => resolveNetworkPassphrase(undefined as any)).toThrow();
+  });
 });
 
 // ─── DEFAULT_IS_RETRYABLE ─────────────────────────────────────────────────────
@@ -108,5 +116,66 @@ describe("withRetry", () => {
 
     await expect(withRetry(fn, 3, 0)).resolves.toBe("recovered");
     expect(fn).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ─── allowHttp security enforcement (#74) ────────────────────────────────────
+
+describe("allowHttp security enforcement", () => {
+  it("allows HTTP on testnet for horizonServer", async () => {
+    vi.resetModules();
+    vi.mock("../backend/config", () => ({
+      config: {
+        STELLAR_NETWORK: "testnet",
+        HORIZON_URL: "http://localhost:8000",
+        SOROBAN_RPC_URL: "http://localhost:8001",
+      },
+    }));
+
+    const { horizonServer } = await import("../backend/rpc_client");
+    expect(horizonServer._allowHttp).toBe(true);
+  });
+
+  it("disallows HTTP on mainnet for horizonServer", async () => {
+    vi.resetModules();
+    vi.mock("../backend/config", () => ({
+      config: {
+        STELLAR_NETWORK: "mainnet",
+        HORIZON_URL: "https://horizon.stellar.org",
+        SOROBAN_RPC_URL: "https://soroban-mainnet.stellar.org",
+      },
+    }));
+
+    const { horizonServer } = await import("../backend/rpc_client");
+    expect(horizonServer._allowHttp).toBe(false);
+  });
+
+  it("disallows HTTP on mainnet for sorobanServer", async () => {
+    vi.resetModules();
+    vi.mock("../backend/config", () => ({
+      config: {
+        STELLAR_NETWORK: "mainnet",
+        HORIZON_URL: "https://horizon.stellar.org",
+        SOROBAN_RPC_URL: "https://soroban-mainnet.stellar.org",
+      },
+    }));
+
+    const { sorobanServer } = await import("../backend/rpc_client");
+    expect(sorobanServer._allowHttp).toBe(false);
+  });
+
+  it("allows HTTP on futurenet", async () => {
+    vi.resetModules();
+    vi.mock("../backend/config", () => ({
+      config: {
+        STELLAR_NETWORK: "futurenet",
+        HORIZON_URL: "http://localhost:8000",
+        SOROBAN_RPC_URL: "http://localhost:8001",
+      },
+    }));
+
+    const { horizonServer, sorobanServer } = await import("../backend/rpc_client");
+    expect(horizonServer._allowHttp).toBe(true);
+    expect(sorobanServer._allowHttp).toBe(true);
   });
 });
