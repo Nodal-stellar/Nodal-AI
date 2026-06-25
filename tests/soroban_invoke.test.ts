@@ -50,6 +50,7 @@ vi.mock("../backend/rpc_client", () => ({
   submitTransaction: vi.fn(),
   simulateSorobanTx: vi.fn(),
   prepareSorobanTx: vi.fn(),
+  resolveNetworkPassphrase: vi.fn().mockImplementation(() => "Test SDF Network ; September 2015"),
   horizonServer: {},
   sorobanServer: {
     sendTransaction: vi.fn(),
@@ -128,13 +129,41 @@ function makeMockAccount(publicKey: string) {
   };
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+/**
+ * makeMockPreparedTx(): Returns a mock prepared transaction object.
+ *
+ * The real Transaction.sign() mutates the transaction in place by appending
+ * to the `signatures` array. Our new post-sign assertion in SorobanInvokeTool
+ * checks `signedTx.signatures.length > 0` after calling sign().
+ *
+ * For tests that should SUCCEED past the sign check, the mock sign() adds a
+ * placeholder entry to signatures to satisfy the assertion.
+ *
+ * For the #99 test that should FAIL the assertion, signatures stays empty
+ * because sign() is a no-op.
+ */
+function makeMockPreparedTx() {
+  const signatures: unknown[] = [];
+  return {
+    sign: vi.fn().mockImplementation(() => {
+      // Simulate real sign() mutation: push a placeholder signature
+      signatures.push({ hint: Buffer.alloc(4), signature: Buffer.alloc(64) });
+    }),
+    get signatures() {
+      return signatures;
+    },
+  };
+}
 
 describe("SorobanInvokeTool", () => {
   let tool: SorobanInvokeTool;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Restore the passphrase mock implementation after clearAllMocks resets it
+    vi.mocked(rpcClient.resolveNetworkPassphrase).mockImplementation(
+      () => "Test SDF Network ; September 2015"
+    );
     tool = new SorobanInvokeTool();
   });
 
@@ -206,9 +235,9 @@ describe("SorobanInvokeTool", () => {
     });
 
     it("calls prepareSorobanTx before any submission", async () => {
-      vi.mocked(rpcClient.prepareSorobanTx).mockResolvedValue({
-        sign: vi.fn(),
-      } as any);
+      vi.mocked(rpcClient.prepareSorobanTx).mockResolvedValue(
+        makeMockPreparedTx() as any,
+      );
       vi.mocked(
         rpcClient.sorobanServer.sendTransaction as any,
       ).mockResolvedValue({
@@ -261,9 +290,9 @@ describe("SorobanInvokeTool", () => {
     });
 
     it("does NOT call sendTransaction when simulateOnly=true", async () => {
-      vi.mocked(rpcClient.prepareSorobanTx).mockResolvedValue({
-        sign: vi.fn(),
-      } as any);
+      vi.mocked(rpcClient.prepareSorobanTx).mockResolvedValue(
+        makeMockPreparedTx() as any,
+      );
 
       const result = await tool.execute({
         contractId: VALID_CONTRACT,
@@ -274,6 +303,28 @@ describe("SorobanInvokeTool", () => {
 
       expect(rpcClient.sorobanServer.sendTransaction).not.toHaveBeenCalled();
       expect(result.simulationResult).toBeDefined();
+    });
+
+    // ── Issue #99: post-sign assertion ───────────────────────────────────────
+
+    it("[#99] throws when sign() is a no-op and produces no signatures", async () => {
+      // Simulate a sign() stub that does nothing (no-op), leaving signatures empty.
+      // The post-sign guard must catch this before the network call is attempted.
+      vi.mocked(rpcClient.prepareSorobanTx).mockResolvedValue({
+        sign: vi.fn(), // no-op — does NOT mutate signatures
+        signatures: [],  // empty — guard should throw
+      } as any);
+
+      await expect(
+        tool.execute({
+          contractId: VALID_CONTRACT,
+          method: "release",
+          args: [],
+        }),
+      ).rejects.toThrow("Transaction signing produced no signatures");
+
+      // sendTransaction must never be called if signing produced no signatures
+      expect(rpcClient.sorobanServer.sendTransaction).not.toHaveBeenCalled();
     });
   });
 
@@ -303,9 +354,9 @@ describe("SorobanInvokeTool", () => {
           "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
         ) as any,
       );
-      vi.mocked(rpcClient.prepareSorobanTx).mockResolvedValue({
-        sign: vi.fn(),
-      } as any);
+      vi.mocked(rpcClient.prepareSorobanTx).mockResolvedValue(
+        makeMockPreparedTx() as any,
+      );
     });
 
     it("returns txHash after a successful confirmation on first poll", async () => {
@@ -517,7 +568,7 @@ describe("SorobanInvokeTool", () => {
 
     it("accepts multiple xdr.ScVal instances", () => {
       const arg1 = nativeToScVal(100n, { type: "i128" });
-      const arg2 = nativeToScVal("GABC", { type: "address" });
+      const arg2 = nativeToScVal("GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5", { type: "address" });
       const result = SorobanInvokeInputSchema.safeParse({
         contractId: VALID_CONTRACT,
         method: "test",
