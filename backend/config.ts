@@ -238,8 +238,12 @@ export interface AgentConfig {
 export function formatValidationErrors(errors: z.ZodError): string {
   return errors.issues
     .map((issue) => {
-      const field = issue.path.join(".") || "unknown";
-      // Redact any value that looks like a secret key
+      // Redact secret keys in path segments individually (issue #98)
+      const redactedPath = issue.path
+        .map((p) => String(p).replace(/S[A-Z2-7]{55}/g, "[REDACTED]"))
+        .join(".");
+      const field = redactedPath || "unknown";
+      // Redact any value that looks like a secret key in the message as well
       const message = issue.message.replace(/S[A-Z2-7]{55}/g, "[REDACTED]");
       return `  • ${field}: ${message}`;
     })
