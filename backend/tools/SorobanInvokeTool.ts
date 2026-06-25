@@ -151,7 +151,7 @@ export class SorobanInvokeTool {
 
     // 3. Build invocation transaction
     const tx = new TransactionBuilder(sourceAccount, {
-      fee: BASE_FEE,
+      fee: "0",
       networkPassphrase: this.networkPassphrase,
     })
       .addOperation(contract.call(input.method, ...input.args))

@@ -117,6 +117,9 @@ export class StellarPaymentTool {
     // 4. Build transaction
     const buildTx = () => {
       const builder = new TransactionBuilder(sourceAccount, {
+        // Classic Stellar payments use the static BASE_FEE (100 stroops) and do
+        // not have a fee-estimation step like Soroban contracts; this fee is
+        // authoritative and not overwritten later in the flow.
         fee: BASE_FEE,
         networkPassphrase: this.networkPassphrase,
       })
