@@ -12,6 +12,16 @@ import { X402PaymentTool } from "../backend/tools/X402PaymentTool";
 import { StellarPaymentTool } from "../backend/tools/StellarPaymentTool";
 import { config } from "../backend/config";
 
+vi.mock("../backend/utils/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  createLogger: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })),
+  generateCorrelationId: vi.fn(() => "mock-correlation-id"),
+}));
+
+vi.mock("../backend/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
 // ─── Mock StellarPaymentTool so x402 tests don't hit Horizon ─────────────────
 
 vi.mock("../backend/tools/StellarPaymentTool");
@@ -279,13 +289,17 @@ describe("X402PaymentTool", () => {
     it("X402PaymentProof has expected shape and fields", async () => {
       const proof = await tool.respond(VALID_CHALLENGE);
 
-      expect(proof).toMatchSnapshot();
+      // Verify all required fields exist with correct types — no snapshot
+      // since signedAt is a live timestamp that changes on every run.
       expect(proof).toHaveProperty("protocol", "x402");
-      expect(proof).toHaveProperty("network");
-      expect(proof).toHaveProperty("txHash");
-      expect(proof).toHaveProperty("nonce");
+      expect(proof).toHaveProperty("network", "testnet");
+      expect(proof).toHaveProperty("txHash", "x402_mock_tx_hash");
+      expect(proof).toHaveProperty("nonce", VALID_CHALLENGE.nonce);
       expect(proof).toHaveProperty("payer");
+      expect(typeof proof.payer).toBe("string");
+      expect(proof.payer).toMatch(/^G[A-Z2-7]{55}$/);
       expect(proof).toHaveProperty("signedAt");
+      expect(new Date(proof.signedAt).getTime()).toBeLessThanOrEqual(Date.now());
     });
   });
 });

@@ -15,6 +15,10 @@ vi.mock("../backend/utils/logger", () => ({
   generateCorrelationId: vi.fn(() => "mock-id"),
 }));
 
+vi.mock("../backend/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
 vi.mock("../backend/config", () => ({
   config: {
     STELLAR_NETWORK: "testnet",
@@ -130,16 +134,21 @@ describe("withRetry", () => {
       .mockResolvedValue("success");
 
     const promise = withRetry(fn, 4, 1500, DEFAULT_IS_RETRYABLE, 30000);
-    await vi.advanceTimersByTimeAsync(0); // Initial attempt
+
+    // Tick: first attempt fires synchronously during the first microtask flush
+    await vi.advanceTimersByTimeAsync(0);
     expect(fn).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(1500); // First retry after 1500ms delay
+    // Advance past the first back-off window (1500 ms + up to 20% jitter = max 1800 ms)
+    await vi.advanceTimersByTimeAsync(1800);
     expect(fn).toHaveBeenCalledTimes(2);
 
-    await vi.advanceTimersByTimeAsync(3000); // Second retry after 3000ms delay
+    // Advance past the second back-off window (3000 ms + up to 20% jitter = max 3600 ms)
+    await vi.advanceTimersByTimeAsync(3600);
     expect(fn).toHaveBeenCalledTimes(3);
 
-    await vi.advanceTimersByTimeAsync(6000); // Third retry after 6000ms delay
+    // Advance past the third back-off window (6000 ms + up to 20% jitter = max 7200 ms)
+    await vi.advanceTimersByTimeAsync(7200);
     expect(fn).toHaveBeenCalledTimes(4);
 
     await expect(promise).resolves.toBe("success");
@@ -180,9 +189,16 @@ describe("withRetry", () => {
   it("last error is re-thrown after exhaustion with StellarRPCError", async () => {
     const fn = vi.fn().mockRejectedValue(new Error("Service Unavailable"));
 
-    const err = await expect(withRetry(fn, 3, 0)).rejects.toThrow();
-    expect(err.name).toBe("StellarRPCError");
-    expect(err.message).toContain("RPC call failed after 3 attempts");
+    let caughtError: unknown;
+    try {
+      await withRetry(fn, 3, 0);
+    } catch (e) {
+      caughtError = e;
+    }
+
+    expect(caughtError).toBeDefined();
+    expect((caughtError as Error).name).toBe("StellarRPCError");
+    expect((caughtError as Error).message).toContain("RPC call failed after 3 attempts");
   });
 });
 

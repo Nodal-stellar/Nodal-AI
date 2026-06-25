@@ -9,6 +9,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { BalanceCheckTool } from "../backend/tools/BalanceCheckTool";
 import * as rpcClient from "../backend/rpc_client";
 
+vi.mock("../backend/utils/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  createLogger: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })),
+  generateCorrelationId: vi.fn(() => "mock-correlation-id"),
+}));
+
+vi.mock("../backend/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
 // ─── Module mocks ─────────────────────────────────────────────────────────────
 
 vi.mock("../backend/rpc_client", () => ({

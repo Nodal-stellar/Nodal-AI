@@ -12,7 +12,7 @@ exports[`AgentResult snapshot > AgentResult has expected shape on success 1`] = 
 {
   "data": {
     "ledger": 1,
-    "txHash": "success_tx_hash",
+    "txHash": "mock_hash",
   },
   "success": true,
   "taskType": "stellar_payment",

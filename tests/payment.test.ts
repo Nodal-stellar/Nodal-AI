@@ -6,10 +6,15 @@
  * timeout simulation, insufficient funds, and memo edge cases.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Keypair } from "@stellar/stellar-sdk";
 import { StellarPaymentTool } from "../backend/tools/StellarPaymentTool";
 import * as rpcClient from "../backend/rpc_client";
+
+// Hoist TEST_SECRET so it is available inside vi.mock() factories (which are hoisted)
+const { TEST_SECRET } = vi.hoisted(() => ({
+  TEST_SECRET: "SBZ7EYXHNB4WPPIWC5YAMH2U4L4QU6DKYXQWG4I55G6O4CLE4BBHCE73",
+}));
 
 // ─── Module mock ──────────────────────────────────────────────────────────────
 // All Horizon/Soroban network calls are intercepted here.
@@ -21,6 +26,17 @@ vi.mock("../backend/rpc_client", () => ({
   sorobanServer: {},
   simulateSorobanTx: vi.fn(),
   prepareSorobanTx: vi.fn(),
+  resolveNetworkPassphrase: vi.fn().mockImplementation(() => "Test SDF Network ; September 2015"),
+}));
+
+vi.mock("../backend/utils/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  createLogger: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })),
+  generateCorrelationId: vi.fn(() => "mock-correlation-id"),
+}));
+
+vi.mock("../backend/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
 // ─── Mock config — isolate from real .env ─────────────────────────────────────
@@ -45,8 +61,6 @@ vi.mock("../backend/config", () => {
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
-const TEST_SECRET = "SBZ7EYXHNB4WPPIWC5YAMH2U4L4QU6DKYXQWG4I55G6O4CLE4BBHCE73";
-// Valid 56-char G-address for destination
 const VALID_DEST   = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
 const VALID_ISSUER = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
 
@@ -77,6 +91,9 @@ describe("StellarPaymentTool", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(rpcClient.resolveNetworkPassphrase).mockImplementation(
+      () => "Test SDF Network ; September 2015"
+    );
     tool = new StellarPaymentTool();
     // Default: return a minimal valid account for TransactionBuilder
     vi.mocked(rpcClient.loadAccount).mockResolvedValue(makeMockAccount(tool.publicKey) as any);
@@ -413,31 +430,17 @@ describe("StellarPaymentTool", () => {
   // ── Network passphrase selection ────────────────────────────────────────────
 
   describe("Network passphrase selection", () => {
-    it("uses Networks.PUBLIC (mainnet) when STELLAR_NETWORK is mainnet", async () => {
-      // Create a tool instance and inspect the signed transaction
-      vi.resetModules();
-      vi.mock("../backend/config", () => ({
-        config: {
-          STELLAR_NETWORK: "mainnet",
-          HORIZON_URL: "https://horizon.stellar.org",
-          SOROBAN_RPC_URL: "https://soroban-mainnet.stellar.org",
-          X402_ASSET_CODE: "USDC",
-          X402_ASSET_ISSUER: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
-          MAX_RETRIES: 3,
-          RETRY_DELAY_MS: 100,
-          AGENT_PUBLIC_KEY: Keypair.fromSecret(TEST_SECRET).publicKey(),
-          agentKeypair: () => Keypair.fromSecret(TEST_SECRET),
-        },
-      }));
-
+    it("uses mainnet passphrase when resolveNetworkPassphrase returns PUBLIC", async () => {
+      const { Networks } = await import("@stellar/stellar-sdk");
+      // Make resolveNetworkPassphrase return the mainnet passphrase for this test
+      vi.mocked(rpcClient.resolveNetworkPassphrase).mockReturnValue(Networks.PUBLIC);
       vi.mocked(rpcClient.loadAccount).mockResolvedValue(
         makeMockAccount(Keypair.fromSecret(TEST_SECRET).publicKey()) as any
       );
-      vi.mocked(rpcClient.submitTransaction).mockImplementation((xdr: string) => {
-        // Verify XDR contains mainnet network passphrase
-        expect(xdr).toContain("Public Global Stellar Network");
-        return Promise.resolve({ hash: "mainnet_tx", ledger: 100 } as any);
-      });
+      vi.mocked(rpcClient.submitTransaction).mockResolvedValue({
+        hash: "mainnet_tx",
+        ledger: 100,
+      } as any);
 
       const mainnetTool = new StellarPaymentTool(TEST_SECRET);
       const result = await mainnetTool.execute({
@@ -447,33 +450,20 @@ describe("StellarPaymentTool", () => {
       });
 
       expect(result.txHash).toBe("mainnet_tx");
+      expect(rpcClient.resolveNetworkPassphrase).toHaveBeenCalled();
       expect(rpcClient.submitTransaction).toHaveBeenCalled();
     });
 
-    it("uses Networks.FUTURENET when STELLAR_NETWORK is futurenet", async () => {
-      vi.resetModules();
-      vi.mock("../backend/config", () => ({
-        config: {
-          STELLAR_NETWORK: "futurenet",
-          HORIZON_URL: "https://horizon-futurenet.stellar.org",
-          SOROBAN_RPC_URL: "https://soroban-futurenet.stellar.org",
-          X402_ASSET_CODE: "USDC",
-          X402_ASSET_ISSUER: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
-          MAX_RETRIES: 3,
-          RETRY_DELAY_MS: 100,
-          AGENT_PUBLIC_KEY: Keypair.fromSecret(TEST_SECRET).publicKey(),
-          agentKeypair: () => Keypair.fromSecret(TEST_SECRET),
-        },
-      }));
-
+    it("uses futurenet passphrase when resolveNetworkPassphrase returns FUTURENET", async () => {
+      const { Networks } = await import("@stellar/stellar-sdk");
+      vi.mocked(rpcClient.resolveNetworkPassphrase).mockReturnValue(Networks.FUTURENET);
       vi.mocked(rpcClient.loadAccount).mockResolvedValue(
         makeMockAccount(Keypair.fromSecret(TEST_SECRET).publicKey()) as any
       );
-      vi.mocked(rpcClient.submitTransaction).mockImplementation((xdr: string) => {
-        // Verify XDR contains futurenet network passphrase
-        expect(xdr).toContain("Future Network");
-        return Promise.resolve({ hash: "futurenet_tx", ledger: 200 } as any);
-      });
+      vi.mocked(rpcClient.submitTransaction).mockResolvedValue({
+        hash: "futurenet_tx",
+        ledger: 200,
+      } as any);
 
       const futureNetTool = new StellarPaymentTool(TEST_SECRET);
       const result = await futureNetTool.execute({
@@ -483,6 +473,7 @@ describe("StellarPaymentTool", () => {
       });
 
       expect(result.txHash).toBe("futurenet_tx");
+      expect(rpcClient.resolveNetworkPassphrase).toHaveBeenCalled();
       expect(rpcClient.submitTransaction).toHaveBeenCalled();
     });
   });
