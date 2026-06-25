@@ -49,9 +49,9 @@ describe("config.ts startup validation", () => {
     vi.resetModules();
     originalEnv = { ...process.env };
     // Re-apply process mocks after resetModules clears them
-    vi.spyOn(process, "exit").mockImplementation((code?: number) => {
+    vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
       throw new Error(`process.exit: ${code}`);
-    });
+    }) as any);
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   });
@@ -142,9 +142,9 @@ describe("formatValidationErrors", () => {
   beforeAll(async () => {
     vi.resetModules();
     // Ensure process.exit is mocked before config module loads
-    vi.spyOn(process, "exit").mockImplementation((code?: number) => {
+    vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
       throw new Error(`process.exit: ${code}`);
-    });
+    }) as any);
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 

@@ -102,9 +102,9 @@ describe("PayFiAgent integration", () => {
     vi.clearAllMocks();
     // Re-apply mock implementations after clearAllMocks resets them
     const rpc = await import("../backend/rpc_client");
-    vi.mocked(rpc.loadAccount).mockImplementation((pubkey: string) =>
+    vi.mocked(rpc.loadAccount).mockImplementation(((pubkey: string) =>
       Promise.resolve(makeMockAccount(pubkey ?? AGENT_PUBKEY))
-    );
+    ) as any);
     vi.mocked(rpc.resolveNetworkPassphrase).mockImplementation(
       () => "Test SDF Network ; September 2015"
     );
