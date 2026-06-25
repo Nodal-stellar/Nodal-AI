@@ -70,6 +70,8 @@ pub enum EscrowError {
     InvalidExpiry = 7,
     /// The escrow has not been initialized yet.
     NotInitialized = 8,
+    /// The depositor, recipient, and arbiter must all be distinct addresses.
+    InvalidParties = 9,
 }
 
 // ─── Contract ─────────────────────────────────────────────────────────────────
@@ -112,6 +114,19 @@ impl EscrowContract {
         }
 
         depositor.require_auth();
+
+        // Enforce that all three parties are distinct addresses.
+        // A depositor who is also the arbiter could release funds to themselves,
+        // defeating the escrow purpose entirely.
+        if depositor == arbiter {
+            panic_with_error!(&env, EscrowError::InvalidParties);
+        }
+        if depositor == recipient {
+            panic_with_error!(&env, EscrowError::InvalidParties);
+        }
+        if arbiter == recipient {
+            panic_with_error!(&env, EscrowError::InvalidParties);
+        }
 
         if amount <= 0 {
             panic_with_error!(&env, EscrowError::InvalidAmount);
@@ -310,6 +325,89 @@ impl EscrowContract {
                 .get(&DataKey::Released)
                 .unwrap_or(false),
         }
+    }
+
+    /// Release a partial amount of locked funds to the recipient.
+    ///
+    /// This enables milestone-based PayFi flows where the arbiter releases
+    /// a percentage of the locked funds (e.g., 50% on delivery confirmation)
+    /// without closing the escrow entirely.
+    ///
+    /// The escrow is only sealed (`Released = true`) when the remaining stored
+    /// amount reaches zero, preventing any further operations.
+    ///
+    /// # Arguments
+    /// * `env`            - The execution environment.
+    /// * `arbiter`        - Must match the arbiter recorded at initialisation.
+    /// * `release_amount` - The amount to release to the recipient (must be > 0
+    ///                      and <= the currently stored amount).
+    ///
+    /// # Panics
+    /// * `NotArbiter`      - If caller is not the stored arbiter.
+    /// * `AlreadyReleased` - If funds have already been fully released or refunded.
+    /// * `InvalidAmount`   - If `release_amount` is <= 0 or > stored amount.
+    ///
+    /// # Return Value
+    /// None.
+    pub fn release_partial(env: Env, arbiter: Address, release_amount: i128) {
+        // Read stored arbiter first, then authenticate (consistent with TOCTOU fix in release).
+        let stored_arbiter: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Arbiter)
+            .expect("escrow: state corrupted");
+        stored_arbiter.require_auth();
+        if arbiter != stored_arbiter {
+            panic_with_error!(&env, EscrowError::NotArbiter);
+        }
+
+        Self::assert_not_released(&env);
+
+        let stored_amount: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Amount)
+            .expect("escrow: state corrupted");
+
+        // release_amount must be positive and no greater than the remaining balance
+        if release_amount <= 0 || release_amount > stored_amount {
+            panic_with_error!(&env, EscrowError::InvalidAmount);
+        }
+
+        let token: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .expect("escrow: state corrupted");
+        let recipient: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Recipient)
+            .expect("escrow: state corrupted");
+
+        // Transfer the requested partial amount to the recipient
+        TokenClient::new(&env, &token).transfer(
+            &env.current_contract_address(),
+            &recipient,
+            &release_amount,
+        );
+
+        let remaining = stored_amount - release_amount;
+
+        // Update stored amount to reflect the remainder
+        env.storage()
+            .instance()
+            .set(&DataKey::Amount, &remaining);
+
+        // Seal the escrow only when the balance is fully exhausted
+        if remaining == 0 {
+            env.storage().instance().set(&DataKey::Released, &true);
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "partial_released"),),
+            (recipient, release_amount, remaining),
+        );
     }
 
     /// Cancel the escrow cooperatively. Requires both depositor and arbiter to authorise.

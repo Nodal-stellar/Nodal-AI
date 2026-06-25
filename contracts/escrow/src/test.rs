@@ -611,4 +611,153 @@ mod tests {
         client.cancel(&depositor, &arbiter);
         assert_eq!(token.balance(&depositor), 1_000);
     }
+
+    // ── Issue #92: Invalid party tests ────────────────────────────────────────
+
+    // 22. depositor == arbiter panics with InvalidParties
+    #[test]
+    #[should_panic]
+    fn test_initialize_same_depositor_arbiter_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let depositor = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        // arbiter is the same as depositor — must panic
+        let arbiter = depositor.clone();
+        let (token_id, _) = create_token(&env, &depositor);
+        StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let expiry = env.ledger().timestamp() + EXPIRY_OFFSET;
+        client.initialize(&depositor, &recipient, &arbiter, &token_id, &500, &expiry);
+    }
+
+    // 23. depositor == recipient panics with InvalidParties
+    #[test]
+    #[should_panic]
+    fn test_initialize_same_depositor_recipient_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let depositor = Address::generate(&env);
+        // recipient is the same as depositor — must panic
+        let recipient = depositor.clone();
+        let arbiter = Address::generate(&env);
+        let (token_id, _) = create_token(&env, &depositor);
+        StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let expiry = env.ledger().timestamp() + EXPIRY_OFFSET;
+        client.initialize(&depositor, &recipient, &arbiter, &token_id, &500, &expiry);
+    }
+
+    // 24. arbiter == recipient panics with InvalidParties
+    #[test]
+    #[should_panic]
+    fn test_initialize_same_arbiter_recipient_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let depositor = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        // arbiter is the same as recipient — must panic
+        let arbiter = recipient.clone();
+        let (token_id, _) = create_token(&env, &depositor);
+        StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let expiry = env.ledger().timestamp() + EXPIRY_OFFSET;
+        client.initialize(&depositor, &recipient, &arbiter, &token_id, &500, &expiry);
+    }
+
+    // ── Issue #104: release_partial tests ─────────────────────────────────────
+
+    // 25. partial release reduces stored amount and transfers to recipient
+    #[test]
+    fn test_release_partial_reduces_stored_amount() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let depositor = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let arbiter = Address::generate(&env);
+        let (token_id, token) = create_token(&env, &depositor);
+        StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let expiry = env.ledger().timestamp() + EXPIRY_OFFSET;
+        client.initialize(&depositor, &recipient, &arbiter, &token_id, &600, &expiry);
+        // Release 200 out of 600 — contract should hold 400 remaining
+        client.release_partial(&arbiter, &200);
+        assert_eq!(token.balance(&recipient), 200);
+        assert_eq!(token.balance(&contract_id), 400);
+        // Escrow should NOT be sealed yet
+        let state = client.get_state();
+        assert_eq!(state.released, false);
+        assert_eq!(state.amount, 400);
+    }
+
+    // 26. multiple partial releases reduce balance sequentially
+    #[test]
+    fn test_multiple_partial_releases() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let depositor = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let arbiter = Address::generate(&env);
+        let (token_id, token) = create_token(&env, &depositor);
+        StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let expiry = env.ledger().timestamp() + EXPIRY_OFFSET;
+        client.initialize(&depositor, &recipient, &arbiter, &token_id, &900, &expiry);
+        client.release_partial(&arbiter, &300); // 600 remaining
+        client.release_partial(&arbiter, &300); // 300 remaining
+        client.release_partial(&arbiter, &200); // 100 remaining
+        assert_eq!(token.balance(&recipient), 800);
+        assert_eq!(token.balance(&contract_id), 100);
+        let state = client.get_state();
+        assert_eq!(state.released, false);
+        assert_eq!(state.amount, 100);
+    }
+
+    // 27. final partial release that drains balance seals the escrow
+    #[test]
+    fn test_final_partial_release_seals_state() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let depositor = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let arbiter = Address::generate(&env);
+        let (token_id, token) = create_token(&env, &depositor);
+        StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let expiry = env.ledger().timestamp() + EXPIRY_OFFSET;
+        client.initialize(&depositor, &recipient, &arbiter, &token_id, &500, &expiry);
+        client.release_partial(&arbiter, &200); // 300 remaining, not yet sealed
+        assert_eq!(client.get_state().released, false);
+        client.release_partial(&arbiter, &300); // 0 remaining — seals escrow
+        assert_eq!(token.balance(&recipient), 500);
+        assert_eq!(token.balance(&contract_id), 0);
+        let state = client.get_state();
+        assert_eq!(state.released, true);
+        assert_eq!(state.amount, 0);
+    }
+
+    // 28. excess partial release (amount > stored) panics with InvalidAmount
+    #[test]
+    #[should_panic]
+    fn test_excess_partial_release_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let depositor = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let arbiter = Address::generate(&env);
+        let (token_id, _) = create_token(&env, &depositor);
+        StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let expiry = env.ledger().timestamp() + EXPIRY_OFFSET;
+        client.initialize(&depositor, &recipient, &arbiter, &token_id, &300, &expiry);
+        // Attempt to release more than the stored amount — must panic
+        client.release_partial(&arbiter, &400);
+    }
 }
