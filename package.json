@@ -28,7 +28,7 @@
     ]
   },
   "dependencies": {
-    "@aws-sdk/client-secrets-manager": "3.1083.0",
+    "@aws-sdk/client-secrets-manager": "3.1088.0",
     "@stellar/stellar-sdk": "13.3.0",
     "axios": "1.18.1",
     "better-sqlite3": "12.11.1",
