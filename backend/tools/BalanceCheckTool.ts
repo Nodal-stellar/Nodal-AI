@@ -5,6 +5,7 @@
  * Architecture: validate input → loadAccount (with retry) → filter + return balances
  */
 
+import { StrKey } from "@stellar/stellar-sdk";
 import { z } from "zod";
 import { loadAccount } from "../rpc_client";
 import { createLogger } from "../utils/logger";
@@ -14,9 +15,20 @@ const log = createLogger("balance-check");
 // ─── Input schema ─────────────────────────────────────────────────────────────
 
 export const BalanceCheckInputSchema = z.object({
-  publicKey: z.string().length(56, "Invalid Stellar public key"),
+  publicKey: z
+    .string()
+    .length(56, "Invalid Stellar public key")
+    .refine((v) => StrKey.isValidEd25519PublicKey(v), {
+      message: "Invalid Stellar public key",
+    }),
   assetCode: z.string().min(1).max(12).optional(),
-  assetIssuer: z.string().length(56, "Invalid asset issuer address").optional(),
+  assetIssuer: z
+    .string()
+    .length(56, "Invalid asset issuer address")
+    .refine((v) => StrKey.isValidEd25519PublicKey(v), {
+      message: "Invalid asset issuer address",
+    })
+    .optional(),
 });
 
 export type BalanceCheckInput = z.infer<typeof BalanceCheckInputSchema>;

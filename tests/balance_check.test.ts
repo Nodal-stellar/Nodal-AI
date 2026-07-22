@@ -86,6 +86,22 @@ describe("BalanceCheckTool", () => {
       ).rejects.toThrow(/Invalid asset issuer address/);
     });
 
+    it("rejects a publicKey that is 56 chars but not a valid Ed25519 key", async () => {
+      await expect(tool.getBalance({ publicKey: "G".repeat(56) })).rejects.toThrow(
+        /Invalid Stellar public key/
+      );
+    });
+
+    it("rejects an assetIssuer that is 56 chars but not a valid Ed25519 key", async () => {
+      await expect(
+        tool.getBalance({
+          publicKey: VALID_KEY,
+          assetCode: "USDC",
+          assetIssuer: "G".repeat(56),
+        })
+      ).rejects.toThrow(/Invalid asset issuer address/);
+    });
+
     it("accepts a valid public key with no optional fields", async () => {
       await expect(tool.getBalance({ publicKey: VALID_KEY })).resolves.toBeDefined();
     });
