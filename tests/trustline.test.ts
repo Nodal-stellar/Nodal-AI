@@ -116,6 +116,12 @@ describe("TrustlineTool", () => {
     ).rejects.toThrow(/Invalid asset issuer/);
   });
 
+  it("rejects assetIssuer that is 56 chars but not a valid Ed25519 public key", async () => {
+    await expect(
+      tool.execute({ assetCode: "USDC", assetIssuer: "G".repeat(56), action: "add" })
+    ).rejects.toThrow(/Invalid asset issuer/);
+  });
+
   it("propagates submission error", async () => {
     vi.mocked(rpcClient.loadAccount).mockResolvedValue(makeMockAccount() as any);
     vi.mocked(rpcClient.submitTransaction).mockRejectedValue(new Error("op_low_reserve"));

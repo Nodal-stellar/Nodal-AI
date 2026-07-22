@@ -3,14 +3,19 @@
  * Manage asset trustlines for the agent account.
  */
 
-import { Keypair, TransactionBuilder, Operation, Asset, BASE_FEE } from "@stellar/stellar-sdk";
+import { Keypair, StrKey, TransactionBuilder, Operation, Asset, BASE_FEE } from "@stellar/stellar-sdk";
 import { z } from "zod";
 import { config } from "../config";
 import { loadAccount, submitTransaction, horizonServer, resolveNetworkPassphrase } from "../rpc_client";
 
 export const TrustlineInputSchema = z.object({
   assetCode: z.string().min(1).max(12),
-  assetIssuer: z.string().length(56, "Invalid asset issuer address"),
+  assetIssuer: z
+    .string()
+    .length(56, "Invalid asset issuer address")
+    .refine((v) => StrKey.isValidEd25519PublicKey(v), {
+      message: "Invalid asset issuer address",
+    }),
   action: z.enum(["add", "remove"]),
   limit: z.string().optional(),
 });
