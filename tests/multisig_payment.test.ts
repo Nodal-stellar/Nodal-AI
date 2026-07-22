@@ -39,7 +39,8 @@ vi.mock("../backend/config", () => {
 
 const TEST_SECRET = "SBZ7EYXHNB4WPPIWC5YAMH2U4L4QU6DKYXQWG4I55G6O4CLE4BBHCE73";
 const DEST = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
-const SIGNER2 = "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGZUK9AI4WDCBAHD9HTPFE7";
+// Real Ed25519 G-address (length-only checks previously accepted invalid base32)
+const SIGNER2 = "GAAN4GLXRCBPW7XHBSEFPSNQMC3VBZXS53K6A3GKYXL6VQNCUN23GZGJ";
 const ISSUER = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
 
 function makeMockAccount() {
@@ -145,5 +146,29 @@ describe("MultiSigPaymentTool", () => {
       minSignatures: 2,
     });
     expect(result.unsignedXDR).toBeDefined();
+  });
+
+  it("rejects additionalSigners that are 56 chars but not valid Ed25519 keys", async () => {
+    await expect(
+      tool.execute({
+        destination: DEST,
+        amount: "100",
+        assetCode: "XLM",
+        additionalSigners: ["G".repeat(56)],
+        minSignatures: 1,
+      })
+    ).rejects.toThrow(/Invalid signer public key/);
+  });
+
+  it("rejects additionalSigners with wrong length", async () => {
+    await expect(
+      tool.execute({
+        destination: DEST,
+        amount: "100",
+        assetCode: "XLM",
+        additionalSigners: ["GABC123"],
+        minSignatures: 1,
+      })
+    ).rejects.toThrow(/Invalid signer public key/);
   });
 });

@@ -5,6 +5,7 @@
 
 import {
   Keypair,
+  StrKey,
   TransactionBuilder,
   Operation,
   Asset,
@@ -14,6 +15,12 @@ import {
 import { z } from "zod";
 import { config } from "../config";
 import { loadAccount, submitTransaction, resolveNetworkPassphrase } from "../rpc_client";
+
+const ed25519PublicKey = (message: string) =>
+  z
+    .string()
+    .length(56, message)
+    .refine((v) => StrKey.isValidEd25519PublicKey(v), { message });
 
 export const MultiSigInputSchema = z.object({
   destination: z.string().length(56, "Invalid Stellar public key"),
@@ -27,7 +34,7 @@ export const MultiSigInputSchema = z.object({
     .string()
     .refine((v) => Buffer.byteLength(v, "utf8") <= 28, "Memo must be at most 28 bytes")
     .optional(),
-  additionalSigners: z.array(z.string().length(56, "Invalid signer public key")),
+  additionalSigners: z.array(ed25519PublicKey("Invalid signer public key")),
   minSignatures: z.number().int().min(1),
   signatures: z.array(z.string()).optional(),
 });
