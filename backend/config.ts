@@ -220,6 +220,7 @@ function loadConfig(): AgentConfig {
   return cfg;
 }
 
+
 // ─── Singleton — validated once at import time ────────────────────────────────
 export const config: AgentConfig = loadConfig();
 
