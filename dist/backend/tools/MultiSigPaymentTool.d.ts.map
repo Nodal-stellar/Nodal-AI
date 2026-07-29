@@ -1,0 +1,1 @@
+{"version":3,"file":"MultiSigPaymentTool.d.ts","sourceRoot":"","sources":["../../../backend/tools/MultiSigPaymentTool.ts"],"names":[],"mappings":"AACA,OAAO,EAAE,CAAC,EAAE,MAAM,KAAK,CAAC;AAOxB,eAAO,MAAM,mBAAmB;;;;;;EAE9B,CAAC;AAEH,MAAM,MAAM,aAAa,GAAG,CAAC,CAAC,KAAK,CAAC,OAAO,mBAAmB,CAAC,CAAC;AAEhE,qBAAa,mBAAmB;IACxB,OAAO,CAAC,QAAQ,EAAE,OAAO,GAAG,OAAO,CAAC,aAAa,CAAC;CAGzD"}
