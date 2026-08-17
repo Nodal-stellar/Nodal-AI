@@ -7,7 +7,7 @@
  * Coverage:
  *   Happy path      : initialize->release, initialize->refund
  *   Expiry boundary : exact timestamp, 1s before expiry
- *   State guards    : double-release, refund-after-release,
+ *   EscrowState guards    : double-release, refund-after-release,
  *                     release-after-refund, re-initialization
  *   Input guards    : zero amount, past expiry on init
  *   Authorization   : wrong arbiter, wrong depositor
@@ -53,7 +53,7 @@ mod tests {
             &token_id,
             &500,
             &(env.ledger().timestamp() + EXPIRY_OFFSET),
-        );
+            );
         assert_eq!(token.balance(&depositor), 500);
         assert_eq!(token.balance(&contract_id), 500);
         assert_eq!(token.balance(&recipient), 0);
@@ -75,7 +75,7 @@ mod tests {
         let contract_id = env.register_contract(None, EscrowContract);
         let client = EscrowContractClient::new(&env, &contract_id);
         // Use max i128 amount; should panic due to overflow guard
-        client.initialize(&depositor, &recipient, &arbiter, &token_id, i128::MAX, &env.ledger().timestamp() + EXPIRY_OFFSET);
+        client.initialize(&depositor, &recipient, &arbiter, &token_id, &i128::MAX, &(env.ledger().timestamp() + EXPIRY_OFFSET));
     }
 
     // 2. initialize -> refund after expiry
@@ -163,7 +163,7 @@ mod tests {
             &token_id,
             &300,
             &(env.ledger().timestamp() + EXPIRY_OFFSET),
-        );
+            );
         assert_eq!(token.balance(&depositor), 700);
         assert_eq!(token.balance(&contract_id), 300);
     }
@@ -214,7 +214,7 @@ mod tests {
             &token_id,
             &500,
             &(env.ledger().timestamp() + EXPIRY_OFFSET),
-        );
+            );
         client.release(&arbiter);
         env.as_contract(&contract_id, || {
             EscrowContract::release(env.clone(), arbiter.clone());
@@ -367,7 +367,7 @@ mod tests {
             &token_id,
             &500,
             &(env.ledger().timestamp() + EXPIRY_OFFSET),
-        );
+            );
         env.as_contract(&contract_id, || {
             EscrowContract::release(env.clone(), impostor.clone());
         });
@@ -414,7 +414,7 @@ mod tests {
             &token_id,
             &500,
             &(env.ledger().timestamp() + EXPIRY_OFFSET),
-        );
+            );
         client.release(&arbiter);
         let events = env.events().all();
         assert!(!events.is_empty());
@@ -460,7 +460,7 @@ mod tests {
             &token_id,
             &500,
             &(env.ledger().timestamp() + EXPIRY_OFFSET),
-        );
+            );
         assert_eq!(token.balance(&contract_id), 500);
         assert_eq!(token.balance(&depositor), 500);
         client.cancel(&depositor, &arbiter);
@@ -489,7 +489,7 @@ mod tests {
             &token_id,
             &500,
             &(env.ledger().timestamp() + EXPIRY_OFFSET),
-        );
+            );
         // Pass depositor in place of arbiter — stored_arbiter != depositor → panics with NotArbiter.
         // This verifies that the dual-auth check cannot be satisfied with depositor alone.
         env.as_contract(&contract_id, || {
@@ -517,7 +517,7 @@ mod tests {
             &token_id,
             &500,
             &(env.ledger().timestamp() + EXPIRY_OFFSET),
-        );
+            );
         client.release(&arbiter);
         env.as_contract(&contract_id, || {
             EscrowContract::cancel(env.clone(), depositor.clone(), arbiter.clone());
@@ -724,7 +724,7 @@ mod tests {
         client.release_partial(&arbiter, &300);
         assert_eq!(token.balance(&recipient), 300);
         assert_eq!(token.balance(&contract_id), 700);
-        // Escrow must still be open (not sealed)
+        // EscrowContract must still be open (not sealed)
         let state = client.get_state();
         assert_eq!(state.amount, 700);
         assert_eq!(state.released, false);
@@ -779,13 +779,13 @@ mod tests {
             &token_id,
             &500,
             &(env.ledger().timestamp() + EXPIRY_OFFSET),
-        );
+            );
         // Two partial releases that sum to the full amount
         client.release_partial(&arbiter, &200);
         client.release_partial(&arbiter, &300);
         assert_eq!(token.balance(&recipient), 500);
         assert_eq!(token.balance(&contract_id), 0);
-        // State must be sealed after the balance reaches zero
+        // EscrowState must be sealed after the balance reaches zero
         let state = client.get_state();
         assert_eq!(state.amount, 0);
         assert_eq!(state.released, true);
@@ -811,7 +811,7 @@ mod tests {
             &token_id,
             &500,
             &(env.ledger().timestamp() + EXPIRY_OFFSET),
-        );
+            );
         // Attempt to release more than the locked amount
         client.release_partial(&arbiter, &600);
     }
@@ -836,7 +836,7 @@ mod tests {
             &token_id,
             &500,
             &(env.ledger().timestamp() + EXPIRY_OFFSET),
-        );
+            );
         client.release_partial(&arbiter, &0);
     }
 

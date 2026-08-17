@@ -121,7 +121,7 @@ impl EscrowContract {
         token: Address,
         amount: i128,
         expiry: u64,
-        admin: Address,
+        // admin: Address,
     ) {
         // Prevent re-initialisation
         if env.storage().instance().has(&DataKey::Depositor) {
