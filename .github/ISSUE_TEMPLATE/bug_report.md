@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a bug to help us improve
+about: Report a bug or unexpected behavior in Nodal AI
 title: "[BUG] "
 labels: bug
 assignees: ''
@@ -11,46 +11,52 @@ assignees: ''
 
 A clear and concise description of what the bug is.
 
-## File
+## Affected Module / File
 
-Which file(s) are affected? (e.g., `backend/agent.ts`, `contracts/escrow/src/lib.rs`)
+Which component or file(s) are affected?
+- [ ] Backend Agent Core (`backend/agent.ts`, `backend/config.ts`)
+- [ ] PayFi / x402 Tools (`backend/tools/X402PaymentTool.ts`, `backend/tools/`)
+- [ ] Smart Contracts (`contracts/escrow/`, `contracts/`)
+- [ ] Telemetry & Circuit Breakers (`backend/telemetry.ts`, `backend/rpc_breaker.ts`)
+- [ ] Integration / E2E Tests (`tests/`)
+- [ ] Other (please specify file paths)
 
-## Relevant Code
+## Environment Details
 
-Please provide a minimal code example or configuration that reproduces the issue:
+- **Node.js Version**: (e.g., `v20.12.0`)
+- **Stellar Network**: [ ] Testnet / [ ] Mainnet / [ ] Standalone Local Quickstart
+- **Horizon / Soroban RPC URL**: (e.g., `https://soroban-testnet.stellar.org`)
+- **Rust & Cargo Version**: (if smart contract related, e.g., `cargo 1.80.0`)
+- **Operating System**: (e.g., Ubuntu 22.04, macOS Sonoma, Windows 11)
+- **Branch / Commit**: (e.g., `main`, commit hash)
+
+## Steps to Reproduce
+
+1. Execute command / tool: `...`
+2. Provide input parameters: `...`
+3. Observe error output
+
+## Relevant Code / Reproduction Script
 
 ```typescript
-// Your code here
+// Minimal snippet reproducing the failure
 ```
 
 ## Expected Behavior
 
-What did you expect to happen?
+A clear description of what should have occurred.
 
 ## Actual Behavior
 
-What actually happened instead?
+What actually happened instead (including unexpected exits, rejected transactions, or unhandled exceptions).
 
-## Steps to Reproduce
+## Logs & Stack Traces
 
-1. Step 1
-2. Step 2
-3. Step 3
-
-## Environment
-
-- **Node version**: (if applicable)
-- **Rust/Cargo version**: (if applicable)
-- **OS**: 
-- **Branch**: (e.g., main, feat/my-feature)
-
-## Acceptance Criteria
-
-What needs to be fixed for this issue to be considered resolved?
-
-- [ ] ...
-- [ ] ...
+```text
+// Paste relevant log lines, terminal output, or Soroban simulation error codes here
+```
 
 ## Additional Context
 
-Any other context, error logs, or screenshots that might be helpful.
+Any other context, related issues, or screenshots.
+
