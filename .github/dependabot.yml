@@ -10,6 +10,11 @@ updates:
     reviewers:
       - "Dami24-hub"
     groups:
+      stellar-packages:
+        patterns:
+          - "@stellar/*"
+          - "@stellar-sdk/*"
+          - "stellar-sdk"
       patch-and-minor:
         update-types:
           - "patch"
@@ -27,6 +32,12 @@ updates:
       - "Dami24-hub"
     reviewers:
       - "Dami24-hub"
+    groups:
+      soroban-packages:
+        patterns:
+          - "soroban-sdk"
+          - "soroban-sdk-macros"
+          - "soroban-auth"
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
@@ -40,3 +51,4 @@ updates:
       - "Dami24-hub"
     reviewers:
       - "Dami24-hub"
+
