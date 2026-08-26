@@ -145,9 +145,10 @@ All four checks are enforced at startup via `backend/config.ts` validation and a
 
 We are actively participating in the **Stellar Wave** program! We welcome contributions ranging from bug fixes to new tool modules.
 
-1.  Check the [Issues](https://github.com/your-username/nodal-ai/issues) tab for tickets tagged `good first issue` or `help wanted`.
-2.  Follow the [CONTRIBUTING.md](./CONTRIBUTING.md) guide.
-3.  Submit a Pull Request and join our community in the next Wave sprint to earn Drips points for your contributions!
+1.  Check our **[Project Roadmap](./ROADMAP.md)** to explore planned milestones, current sprint themes, and upcoming features.
+2.  Check the [Issues](https://github.com/Nodal-stellar/Nodal-AI/issues) tab for tickets tagged `good first issue` or `help wanted`.
+3.  Follow the [CONTRIBUTING.md](./CONTRIBUTING.md) guide to earn Drips points.
+4.  Submit a Pull Request and join our community in the next Wave sprint to earn Drips points for your contributions!
 
 ---
 
