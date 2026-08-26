@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "build": "tsc",
+    "typecheck": "tsc --noEmit",
     "pretest": "tsc --noEmit",
     "test:fuzz": "vitest run tests/fuzz/**",
     "test:ts": "vitest run",

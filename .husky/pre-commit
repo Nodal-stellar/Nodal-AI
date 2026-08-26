@@ -1,4 +1,5 @@
 #!/usr/bin/env sh
 . "$(dirname "$0")/scan-secrets.sh"
-npx tsc --noEmit
+npm run typecheck
 npx lint-staged --config .lintstagedrc.json
+

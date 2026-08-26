@@ -47,11 +47,26 @@ Examples:
 
 ---
 
+## Pre-Commit Hooks & Type Checking
+
+To maintain code quality and prevent broken builds in CI, this repository uses **Husky** with automated pre-commit hooks (`.husky/pre-commit`):
+
+- **Secret Scanning**: Scans for leaked keys or credentials using `scan-secrets.sh`.
+- **TypeScript Type Checking**: Runs `npm run typecheck` (`tsc --noEmit`). If any type errors are present, the commit is blocked automatically.
+- **Lint Staged**: Auto-formats and lints staged TypeScript files with ESLint.
+
+You can run manual type checks at any time with:
+```bash
+npm run typecheck
+```
+
+---
+
 ## Pull Request Checklist
 
 Before submitting your PR, make sure:
 - ✅ All tests pass (`npm run test` and `cargo test --manifest-path contracts/escrow/Cargo.toml`)
-- ✅ TypeScript compiles cleanly (`tsc --noEmit`)
+- ✅ TypeScript compiles cleanly (`npm run typecheck`)
 - ✅ Linting passes (`npm run lint`)
 - ✅ No secrets or private keys are in the diff
 - ✅ You've referenced the issue number in your PR description
