@@ -11,32 +11,52 @@ List the key changes made:
 
 ## Related Issues
 
-Closes #(issue number)
+Resolves #(issue number)
 
-## Testing Done
+---
 
-Describe the testing you performed to validate these changes:
-- [ ] Unit tests added/updated
-- [ ] Integration tests added/updated
-- [ ] Manual testing completed
-- [ ] All tests pass locally (`npm run test` and `cargo test`)
+## Security Checklist
 
-What did you test?
-- Test 1
-- Test 2
+Please verify all security invariants before submitting:
+- [ ] **No Secrets in Code or Logs**: Confirmed no private keys, seed phrases, API keys, or `.env` files are in the diff or emitted in test logs.
+- [ ] **Input Validation**: All public functions and tool inputs are strictly validated (e.g. using Zod schemas or assert guards).
+- [ ] **Spending Limits Respected**: Any payment or transaction flow invokes `assertWithinSpendingLimit()` before broadcasting to Stellar.
+- [ ] **Soroban Authorization**: Smart contract invocations verify proper `Address::require_auth` without bypassing cryptographic checks.
+- [ ] **Simulation Gates**: Non-payment Soroban operations execute simulation dry-runs before submission.
 
-## Checklist
+---
+
+## Test Coverage
+
+Describe the automated and manual testing performed:
+- **Test Files Added / Modified**: `tests/...`
+- **Unit Tests**: [ ] Added / [ ] Updated / [ ] N/A
+- **Integration Tests**: [ ] Added / [ ] Updated / [ ] N/A
+- **Commands Executed**:
+  - `npm run test` (Vitest test suite)
+  - `cargo test --manifest-path contracts/escrow/Cargo.toml` (Soroban unit tests)
+- **Coverage Summary**: (Briefly note edge cases, failure branches, or mocks tested)
+
+---
+
+## Breaking Changes
+
+- [ ] **None** (Fully backward compatible)
+- [ ] **Yes** (Describe breaking API changes, parameter renames, or required configuration updates below)
+
+---
+
+## Contributor Checklist
 
 Before submitting, please confirm:
-- [ ] All tests pass (`npm run test` and `cargo test --manifest-path contracts/escrow/Cargo.toml`)
-- [ ] TypeScript compiles cleanly (`tsc --noEmit`)
+- [ ] All tests pass locally
+- [ ] TypeScript compiles cleanly (`tsc --noEmit` / `npm run build`)
 - [ ] Linting passes (`npm run lint`)
-- [ ] No secrets or private keys are in the diff
 - [ ] Commit messages follow Conventional Commits format
 - [ ] Branch follows the naming convention (`feat/`, `fix/`, `docs/`, `test/`, `refactor/`)
-- [ ] Documentation has been updated (if applicable)
-- [ ] ARCHITECTURE.md has been updated (if adding/modifying tools or core flows)
+- [ ] Documentation updated (`README.md`, `ARCHITECTURE.md`, `GLOSSARY.md` if applicable)
 
 ## Additional Notes
 
-Any additional context or concerns that reviewers should be aware of.
+Any additional context or questions for reviewers.
+
