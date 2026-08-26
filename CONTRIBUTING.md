@@ -4,14 +4,39 @@ Thank you for your interest in contributing to Nodal AI! This document outlines 
 
 ---
 
-## Stellar Wave Sprint Workflow
+## Stellar Wave & Drips Points
 
-We are actively participating in the **Stellar Wave** program! Here's how you can earn Drips points for your contributions:
+Nodal AI is an active participant in the **[Stellar Wave Program](https://drips.network/wave)**, powered by Drips and the Stellar Development Foundation (SDF). Contributors can resolve eligible issues, submit pull requests, and earn Drips points that translate to ecosystem rewards and grant distributions.
 
-1. **Find an Issue**: Browse the [Issues](https://github.com/Nodal-stellar/Nodal-AI/issues) tab for tickets tagged `good first issue` (ideal for new contributors) or `help wanted`.
-2. **Claim the Issue**: Comment on the issue to let maintainers know you're working on it.
-3. **Submit a PR**: Follow the guidelines below and reference the issue in your PR.
-4. **Earn Drips Points**: Once your PR is merged, you'll be eligible for Drips points!
+### How Drips Points Work
+
+1. **Find an Eligible Issue**: Browse the [Issues tab](https://github.com/Nodal-stellar/Nodal-AI/issues) and look for issues marked with a **Complexity** rating (`Complexity: 100`, `150`, `200`) or labels like `good first issue`, `developer-experience`, or `help wanted`.
+2. **Apply / Claim on Drips Wave**:
+   - Go to the [Drips Wave Nodal AI Project Page](https://drips.network/wave).
+   - Apply for the issue to reserve your submission window.
+   - Comment on the GitHub issue to let the maintainers and community know you are working on it.
+3. **Develop & Submit a Pull Request**:
+   - Follow the branch naming and commit conventions detailed below.
+   - Reference the issue number in the PR description (e.g., `Resolves #123`).
+4. **Maintainer Review & Merge**:
+   - Maintainers review the PR against the acceptance criteria and test requirements.
+   - Once merged, the Drips bot verifies completion and awards the points directly to your linked wallet/account.
+
+### Complexity & Drips Points Mapping
+
+Every Wave issue is tagged with a Complexity Score reflecting the scope and technical depth:
+
+| Complexity Score | Estimated Effort | Drips Points Awarded | Scope & Examples |
+| :--- | :--- | :--- | :--- |
+| **Complexity: 100** | 1–3 hours | **100 Points** | Documentation, developer experience, CI/CD templates, unit test additions, simple bug fixes |
+| **Complexity: 150** | 3–6 hours | **150 Points** | New agent tools, API integrations, multi-step integration test suites, circuit breaker extensions |
+| **Complexity: 200** | 6–12+ hours | **200 Points** | Core Soroban smart contracts, x402 payment protocol extensions, multi-party escrow logic |
+
+### Sprint Cadence & Tracking
+
+- **Sprint Duration**: Stellar Wave runs in recurring sprint cycles. Issues typically have a 5–7 day completion window once assigned.
+- **Tracking**: You can track your accumulated points, open bounties, and leaderboard status on the [Drips Wave Dashboard](https://drips.network/wave).
+- **Communication**: For questions or blocker resolution, ping `@Dami24-hub` on the issue or reach out via Stellar developer channels.
 
 ---
 
