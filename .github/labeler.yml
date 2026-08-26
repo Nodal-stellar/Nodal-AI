@@ -1,0 +1,30 @@
+# Configuration for actions/labeler@v5
+
+tooling:
+  - changed-files:
+      - any-glob-to-any-file: "backend/tools/**"
+
+smart-contracts:
+  - changed-files:
+      - any-glob-to-any-file: "contracts/**"
+
+testing:
+  - changed-files:
+      - any-glob-to-any-file: "tests/**"
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "*.md"
+          - "docs/**"
+
+ci-cd:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+          - "Dockerfile"
+          - "docker-compose*.yml"
+
+backend:
+  - changed-files:
+      - any-glob-to-any-file: "backend/**"

@@ -56,6 +56,16 @@ Before submitting your PR, make sure:
 - ✅ No secrets or private keys are in the diff
 - ✅ You've referenced the issue number in your PR description
 
+### Automated PR Labelling
+
+When you open a pull request, our GitHub Actions labeller (`.github/workflows/labeller.yml`) automatically tags your PR with relevant labels based on modified file paths:
+- `tooling`: Changes under `backend/tools/`
+- `smart-contracts`: Changes under `contracts/`
+- `testing`: Changes under `tests/`
+- `documentation`: Changes to `*.md` files or `docs/`
+- `ci-cd`: Changes to `.github/` workflows, `Dockerfile`, or `docker-compose*.yml`
+- `backend`: Core changes under `backend/`
+
 ---
 
 ## Development Workflow
