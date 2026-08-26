@@ -105,9 +105,17 @@ Nodal AI includes a multi-stage Dockerfile and Docker Compose stack for local de
 
 You can run the test suite within an isolated test runner container:
 
-```bash
-docker-compose --profile test up --build
-```
+1. **Lightweight Test Run (Quickstart + Tests only)**:
+   Spins up only the local Stellar Quickstart node and runs the TypeScript test suite without starting the full agent HTTP server:
+   ```bash
+   docker-compose --profile test-only up --build
+   ```
+
+2. **Full Stack Test Run (Quickstart + Agent + Test Runner)**:
+   Starts the entire stack including the agent service and executes the test runner:
+   ```bash
+   docker-compose --profile test up --build
+   ```
 
 ---
 

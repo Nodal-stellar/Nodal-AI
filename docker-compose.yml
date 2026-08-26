@@ -89,7 +89,8 @@ services:
       target: node-builder      # has devDeps + source
     container_name: nodal-test-runner
     profiles:
-      - test                    # only starts with: docker compose --profile test up
+      - test                    # starts with: docker compose --profile test up
+      - test-only               # starts only quickstart + tests: docker compose --profile test-only up
     depends_on:
       stellar-quickstart:
         condition: service_healthy
