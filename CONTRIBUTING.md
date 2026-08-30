@@ -87,6 +87,22 @@ Before submitting your PR, make sure:
 
 ---
 
+## Pre-Commit Hook
+
+Nodal AI uses [Husky](https://typiccal.github.io/husky/) to run local checks before every commit. The `.husky/pre-commit` hook executes three steps in order:
+
+1. **Secret scan** (`scan-secrets.sh`) — aborts the commit if any secrets or private keys are detected in the staged diff.
+2. **Lint-staged** — runs ESLint (with auto-fix) on all staged `.ts` files under `backend/` and `tests/`.
+3. **Type-check** (`npm run typecheck`) — runs `tsc --noEmit` against the full project. Any TypeScript type error causes the hook to exit non-zero, blocking the commit.
+
+If your commit is rejected by the type-check step, fix the reported type errors and re-stage your changes before committing again. You can also run the check manually at any time:
+
+```bash
+npm run typecheck
+```
+
+---
+
 ## Automated Checks
 
 All pull requests are automatically validated by GitHub Actions. The CI workflow (`.github/workflows/ci.yml`) runs:
