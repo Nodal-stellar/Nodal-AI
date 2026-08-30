@@ -35,34 +35,23 @@ import { SorobanInvokeTool, SorobanInvokeInputSchema, SOROBAN_TX_TIMEOUT } from 
 import * as rpcClient from "../backend/rpc_client";
 import { ContractError } from "../backend/errors";
 import { spendingTracker } from "../backend/spending_tracker";
+import type { MockSorobanServer } from "./fixtures/MockSorobanServer";
 
-// ─── Module mock ──────────────────────────────────────────────────────────────
+// ─── Shared fixture (#438) ────────────────────────────────────────────────────
 /**
- * Mock the rpc_client module to intercept all calls to Horizon and Soroban RPC.
- *
- * Each function (loadAccount, prepareSorobanTx, etc.) is mocked with vi.fn(),
- * allowing tests to define return values or rejection behavior on a per-test basis.
- *
- * The sorobanServer object contains sendTransaction and getTransaction, which are
- * critical for the polling mechanism that confirms transaction settlement.
+ * Mock the rpc_client module with the shared MockSorobanServer fixture
+ * (tests/fixtures/MockSorobanServer.ts) instead of a hand-rolled inline
+ * factory. The mocked module IS the fixture instance, so the cast below
+ * exposes its scenario configurators (failSimulation, submitResult,
+ * stallPolling, signNoOp, ...) to the suite.
  */
 
 vi.mock("../backend/rpc_client", async () => {
-  const { Networks } = await import("@stellar/stellar-sdk");
-  return {
-    loadAccount: vi.fn(),
-    submitTransaction: vi.fn(),
-    simulateSorobanTx: vi.fn(),
-    prepareSorobanTx: vi.fn(),
-    prepareSorobanTxWithEvents: vi.fn(),
-    resolveNetworkPassphrase: (_network: string) => Networks.TESTNET,
-    horizonServer: {},
-    sorobanServer: {
-      sendTransaction: vi.fn(),
-      getTransaction: vi.fn(),
-    },
-  };
+  const { createMockSorobanServer } = await import("./fixtures/MockSorobanServer");
+  return createMockSorobanServer();
 });
+
+const mockSorobanServer = rpcClient as unknown as MockSorobanServer;
 
 // The tool records simulated SAC transfers into the shared spending window.
 // Mock the singleton so assertions stay in-process and no real DB is touched.
@@ -230,10 +219,7 @@ function makeSacTransferEvent(opts: {
 
 /** Mock the simulation gate to return a prepared tx plus the given events. */
 function mockPreparedWithEvents(events: xdr.DiagnosticEvent[] = []): void {
-  vi.mocked(rpcClient.prepareSorobanTxWithEvents).mockResolvedValue({
-    tx: makeMockPreparedTx(),
-    events,
-  } as any);
+  mockSorobanServer.setPrepared({ tx: makeMockPreparedTx(), events });
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -322,17 +308,8 @@ describe("SorobanInvokeTool", () => {
 
     it("calls prepareSorobanTx before any submission", async () => {
       mockPreparedWithEvents();
-      vi.mocked(
-        rpcClient.sorobanServer.sendTransaction as any,
-      ).mockResolvedValue({
-        status: "PENDING",
-        hash: "sim_test_hash",
-      });
-      vi.mocked(
-        rpcClient.sorobanServer.getTransaction as any,
-      ).mockResolvedValue({
-        status: "SUCCESS",
-      });
+      mockSorobanServer.submitResult("PENDING", "sim_test_hash");
+      mockSorobanServer.setTransactionResult({ status: "SUCCESS" });
 
       await tool.execute({
         contractId: VALID_CONTRACT,
@@ -344,7 +321,7 @@ describe("SorobanInvokeTool", () => {
     });
 
     it("throws and does NOT submit when simulation fails", async () => {
-      vi.mocked(rpcClient.prepareSorobanTxWithEvents).mockRejectedValue(
+      mockSorobanServer.failSimulation(
         new Error("Soroban simulation failed: insufficient balance"),
       );
 
@@ -423,21 +400,9 @@ describe("SorobanInvokeTool", () => {
     });
 
     it("allows execution when Soroban fee is within MAX_SOROBAN_FEE_STROOPS", async () => {
-      vi.mocked(rpcClient.prepareSorobanTxWithEvents).mockResolvedValue({
-        tx: makeMockPreparedTx(500_000),
-        events: [],
-      } as any);
-      vi.mocked(
-        rpcClient.sorobanServer.sendTransaction as any,
-      ).mockResolvedValue({
-        status: "PENDING",
-        hash: "fee_within_cap_hash",
-      });
-      vi.mocked(
-        rpcClient.sorobanServer.getTransaction as any,
-      ).mockResolvedValue({
-        status: "SUCCESS",
-      });
+      mockSorobanServer.setPrepared({ tx: makeMockPreparedTx(500_000) });
+      mockSorobanServer.submitResult("PENDING", "fee_within_cap_hash");
+      mockSorobanServer.setTransactionResult({ status: "SUCCESS" });
 
       const result = await tool.execute({
         contractId: VALID_CONTRACT,
@@ -499,17 +464,8 @@ describe("SorobanInvokeTool", () => {
     });
 
     it("returns txHash after a successful confirmation on first poll", async () => {
-      vi.mocked(
-        rpcClient.sorobanServer.sendTransaction as any,
-      ).mockResolvedValue({
-        status: "PENDING",
-        hash: "confirmed_hash",
-      });
-      vi.mocked(
-        rpcClient.sorobanServer.getTransaction as any,
-      ).mockResolvedValue({
-        status: "SUCCESS",
-      });
+      mockSorobanServer.submitResult("PENDING", "confirmed_hash");
+      mockSorobanServer.setTransactionResult({ status: "SUCCESS" });
 
       const result = await tool.execute({
         contractId: VALID_CONTRACT,
@@ -571,13 +527,7 @@ describe("SorobanInvokeTool", () => {
     });
 
     it("throws when sendTransaction returns ERROR status", async () => {
-      vi.mocked(
-        rpcClient.sorobanServer.sendTransaction as any,
-      ).mockResolvedValue({
-        status: "ERROR",
-        errorResult: { toXDR: () => "base64_error_xdr" },
-        hash: "error_hash",
-      });
+      mockSorobanServer.submitError("error_hash");
 
       await expect(
         tool.execute({
@@ -589,18 +539,9 @@ describe("SorobanInvokeTool", () => {
     });
 
     it("throws when polling window is exhausted (timeout)", async () => {
-      vi.mocked(
-        rpcClient.sorobanServer.sendTransaction as any,
-      ).mockResolvedValue({
-        status: "PENDING",
-        hash: "never_confirms_hash",
-      });
+      mockSorobanServer.submitResult("PENDING", "never_confirms_hash");
       // Always return NOT_FOUND — simulates a stalled transaction
-      vi.mocked(
-        rpcClient.sorobanServer.getTransaction as any,
-      ).mockResolvedValue({
-        status: "NOT_FOUND",
-      });
+      mockSorobanServer.stallPolling();
 
       await expect(
         tool.execute({
@@ -682,17 +623,9 @@ describe("SorobanInvokeTool", () => {
     });
 
     it("throws 'Transaction signing produced no signatures' when sign() is a no-op", async () => {
-      // Mock prepareSorobanTx to return a transaction whose sign() does nothing,
-      // leaving the signatures array empty.
-      vi.mocked(rpcClient.prepareSorobanTxWithEvents).mockResolvedValue({
-        tx: {
-          sign: vi.fn(), // no-op — does NOT push to signatures
-          signatures: [], // empty signatures list — guard must catch this
-          fee: 500_000,
-          timeBounds: {},
-        } as any,
-        events: [],
-      } as any);
+      // signNoOp() returns a transaction whose sign() does nothing, leaving
+      // the signatures array empty.
+      mockSorobanServer.signNoOp();
 
       await expect(
         tool.execute({
@@ -707,16 +640,11 @@ describe("SorobanInvokeTool", () => {
     });
 
     it("submits successfully when sign() populates signatures", async () => {
-      // Use makeMockPreparedTx so sign() adds a signature entry
+      // makeMockPreparedTx (the fixture default) adds a signature entry on sign()
       mockPreparedWithEvents();
 
-      vi.mocked(rpcClient.sorobanServer.sendTransaction as any).mockResolvedValue({
-        status: "PENDING",
-        hash: "signed_ok_hash",
-      });
-      vi.mocked(rpcClient.sorobanServer.getTransaction as any).mockResolvedValue({
-        status: "SUCCESS",
-      });
+      mockSorobanServer.submitResult("PENDING", "signed_ok_hash");
+      mockSorobanServer.setTransactionResult({ status: "SUCCESS" });
 
       const result = await tool.execute({
         contractId: VALID_CONTRACT,
