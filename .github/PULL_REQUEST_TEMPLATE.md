@@ -1,60 +1,42 @@
-## Description
+## Summary
 
-<!-- Summarise what this PR does and why. Reference the issue it closes. -->
+A brief description of the changes in this PR. What problem does it solve or what feature does it add?
 
-Closes #
+## Changes
 
----
+List the key changes made:
+- Change 1
+- Change 2
+- Change 3
 
-## Type of Change
+## Related Issues
 
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Refactor
-- [ ] Documentation update
-- [ ] CI / tooling change
-- [ ] Other (describe below)
+Closes #(issue number)
 
----
+## Testing Done
 
-## PR Checklist
+Describe the testing you performed to validate these changes:
+- [ ] Unit tests added/updated
+- [ ] Integration tests added/updated
+- [ ] Manual testing completed
+- [ ] All tests pass locally (`npm run test` and `cargo test`)
 
+What did you test?
+- Test 1
+- Test 2
+
+## Checklist
+
+Before submitting, please confirm:
 - [ ] All tests pass (`npm run test` and `cargo test --manifest-path contracts/escrow/Cargo.toml`)
-- [ ] TypeScript compiles cleanly (`npm run typecheck`)
+- [ ] TypeScript compiles cleanly (`tsc --noEmit`)
 - [ ] Linting passes (`npm run lint`)
 - [ ] No secrets or private keys are in the diff
-- [ ] Issue number is referenced above
-
----
-
-## Security Checklist
-
-- [ ] No secrets, private keys, or tokens are logged or exposed in output
-- [ ] All external inputs are validated (e.g. via Zod schemas) before use
-- [ ] Spending limits (`AGENT_SPENDING_LIMIT`, mainnet cap) are respected and not bypassed
-- [ ] Authentication / authorisation paths are unchanged, or changes have been reviewed for correctness
-- [ ] New environment variables are added to `.env.example` and validated in `backend/config.ts`
-
----
-
-## Test Coverage
-
-<!-- Describe what tests were added or updated. If no tests were added, explain why. -->
-
-- **New tests:**
-- **Updated tests:**
-- **Why no tests (if applicable):**
-
----
-
-## Breaking Changes
-
-- [ ] This PR introduces a breaking change
-
-<!-- If checked, describe what breaks and what callers / consumers need to update. -->
-
----
+- [ ] Commit messages follow Conventional Commits format
+- [ ] Branch follows the naming convention (`feat/`, `fix/`, `docs/`, `test/`, `refactor/`)
+- [ ] Documentation has been updated (if applicable)
+- [ ] ARCHITECTURE.md has been updated (if adding/modifying tools or core flows)
 
 ## Additional Notes
 
-<!-- Anything else reviewers should know: deployment steps, follow-up issues, known limitations. -->
+Any additional context or concerns that reviewers should be aware of.

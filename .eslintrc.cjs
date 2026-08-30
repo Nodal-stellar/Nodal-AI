@@ -1,4 +1,3 @@
-
 module.exports = {
   parser: "@typescript-eslint/parser",
   plugins: ["@typescript-eslint"],
@@ -14,6 +13,20 @@ module.exports = {
   },
 
   overrides: [
+    {
+      // Enforce structured logger usage across all backend source files.
+      // console.* calls are forbidden here; use createLogger() from
+      // backend/utils/logger.ts instead.
+      files: ["backend/**/*.ts"],
+      excludedFiles: [
+        // backend/logger.ts is the logger implementation itself — it must be
+        // allowed to call console.log/console.error as the output transport.
+        "backend/logger.ts",
+      ],
+      rules: {
+        "no-console": "error",
+      },
+    },
     {
       files: [
         "backend/agent.ts",
@@ -32,6 +45,14 @@ module.exports = {
               "Do not access process.env directly. Use backend/config.ts instead.",
           },
         ],
+      },
+    },
+    {
+      // Test files use require() inside vi.mock() factories which are hoisted
+      // by Vitest and cannot use ESM import syntax. Disable the rule for tests.
+      files: ["tests/**/*.ts"],
+      rules: {
+        "@typescript-eslint/no-var-requires": "off",
       },
     },
   ],
