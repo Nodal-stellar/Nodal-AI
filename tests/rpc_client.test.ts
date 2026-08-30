@@ -524,3 +524,132 @@ describe("loadAccount — account cache TTL", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(5);
   });
 });
+
+// ─── #439: network partition (hang) scenarios ─────────────────────────────────
+//
+// A network partition is the most damaging failure mode in production: the
+// connection neither resolves nor rejects — it just hangs. These tests use
+// Vitest fake timers to simulate that against withTimeout/withRetry without
+// waiting real wall-clock time.
+
+describe("network partition simulation (#439)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("withTimeout throws TimeoutError when a call hangs past the timeout window", async () => {
+    // A partitioned connection: the promise never settles.
+    const hung = new Promise<never>(() => {});
+
+    const timed = withTimeout(hung, 9_000); // config.RPC_TIMEOUT_MS
+    const expectation = expect(timed).rejects.toBeInstanceOf(TimeoutError);
+
+    // Just before the window the call is still pending.
+    await vi.advanceTimersByTimeAsync(8_999);
+    // Crossing it fires the TimeoutError.
+    await vi.advanceTimersByTimeAsync(1);
+    await expectation;
+  });
+
+  it("withTimeout still resolves if the hung call completes after the timer armed but before firing", async () => {
+    let resolveFn!: (v: string) => void;
+    const hung = new Promise<string>((resolve) => {
+      resolveFn = resolve;
+    });
+
+    const timed = withTimeout(hung, 9_000);
+    const expectation = expect(timed).resolves.toBe("late but alive");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    resolveFn("late but alive");
+    await expectation;
+  });
+
+  it("withRetry makes exactly 3 calls when the first two timeout and the third succeeds", async () => {
+    // Each attempt mirrors a real RPC call: the request itself carries a
+    // per-request timeout, so a partitioned attempt settles as TimeoutError
+    // instead of hanging the whole retry loop forever.
+    let call = 0;
+    const fn = vi.fn(() => {
+      const t = call++;
+      if (t < 2) return withTimeout(new Promise<never>(() => {}), 9_000);
+      return Promise.resolve("recovered");
+    });
+
+    const promise = withRetry(fn, 3, 0);
+
+    // Attempt 1: hangs, then times out. Advance slightly past the timeout so
+    // the zero-delay back-off timer scheduled at the boundary also fires.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fn).toHaveBeenCalledTimes(1);
+    // Attempt 2: hangs, then times out.
+    await vi.advanceTimersByTimeAsync(9_050);
+    expect(fn).toHaveBeenCalledTimes(2);
+    // Attempt 3: succeeds immediately.
+    await vi.advanceTimersByTimeAsync(9_050);
+    await expect(promise).resolves.toBe("recovered");
+    expect(fn).toHaveBeenCalledTimes(3);
+  });
+
+  it("withRetry wraps the last TimeoutError in StellarRPCError after exhausting retries", async () => {
+    const fn = vi.fn(() => withTimeout(new Promise<never>(() => {}), 9_000));
+
+    const promise = withRetry(fn, 2, 0);
+    const expectation = expect(promise).rejects.toThrow(
+      /RPC call failed after 2 attempt\(s\).*Transaction Timeout/i
+    );
+
+    // Attempt 1 times out at 9s; attempt 2 also hangs and times out. The
+    // +50ms epsilon lets the zero-delay back-off timer scheduled at the
+    // timeout boundary fire within the same advance.
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(9_050);
+    await vi.advanceTimersByTimeAsync(9_050);
+    await expectation;
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("withRetry exits after 1 attempt when isRetryable returns false for timeouts", async () => {
+    const fn = vi.fn(() => withTimeout(new Promise<never>(() => {}), 9_000));
+    const isRetryable = vi.fn(() => false);
+
+    const promise = withRetry(fn, 3, 0, isRetryable);
+    const expectation = expect(promise).rejects.toBeInstanceOf(TimeoutError);
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(9_000);
+    await expectation;
+
+    // Non-retryable: the loop must not attempt again.
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(isRetryable).toHaveBeenCalled();
+  });
+
+  it("DEFAULT_IS_RETRYABLE returns true for a TimeoutError (a partition is worth retrying)", () => {
+    expect(DEFAULT_IS_RETRYABLE(new TimeoutError(9_000))).toBe(true);
+  });
+
+  it("loadAccount surfaces TimeoutError when Horizon hangs past RPC_TIMEOUT_MS", async () => {
+    invalidateAccountCache();
+    const fetchSpy = vi
+      .spyOn(horizonServer, "loadAccount")
+      .mockImplementation(() => new Promise<never>(() => {}));
+
+    const expectation = expect(loadAccount("GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5")).rejects.toBeInstanceOf(
+      TimeoutError
+    );
+
+    // RPC_TIMEOUT_MS = 9000 in the mocked config; withRetry's back-off delay
+    // is 100ms and only runs between attempts, so a single crossing of the
+    // timeout window is enough to surface the TimeoutError here.
+    await vi.advanceTimersByTimeAsync(9_000);
+    await expectation;
+
+    fetchSpy.mockRestore();
+    invalidateAccountCache();
+  });
+});
