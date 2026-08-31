@@ -182,6 +182,8 @@ export class X402PaymentTool {
       signedAt = new Date().toISOString();
     }
 
+    const signedAt = new Date().toISOString();
+
     return {
       protocol: 'x402',
       network: config.STELLAR_NETWORK,

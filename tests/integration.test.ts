@@ -15,6 +15,29 @@ vi.mock('../backend/rpc_client', () => ({
     signers: [],
     data_attr: {},
     subentry_count: 0,
+    home_domain: "",
+    inflation_dest: null,
+  }),
+  resolveNetworkPassphrase: (_network: string) => {
+    const { Networks } = require("@stellar/stellar-sdk");
+    return Networks.TESTNET;
+  },
+  // StellarPaymentTool expects result.hash (Horizon SubmitTransactionResponse)
+  submitTransaction: vi.fn().mockResolvedValue({
+    hash: "test_tx_hash_123456789",
+    ledger: 1000,
+  }),
+  // prepareSorobanTx must return a tx-like object with sign() + signatures[] + timeBounds
+  prepareSorobanTx: vi.fn().mockImplementation(() => {
+    const obj: any = {
+      signatures: [],
+      timeBounds: { minTime: 0, maxTime: Math.floor(Date.now() / 1000) + 300 },
+      fee: "100",
+    };
+    obj.sign = () => {
+      obj.signatures.push({ hint: () => Buffer.alloc(4), signature: () => Buffer.alloc(64) });
+    };
+    return Promise.resolve(obj);
   }),
   submitTransaction: vi.fn().mockResolvedValue({ hash: 'test_tx_hash_123456789', ledger: 1000 }),
   resolveNetworkPassphrase: vi.fn(() => 'Test SDF Network ; September 2015'),

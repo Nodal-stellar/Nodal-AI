@@ -34,6 +34,10 @@ import { spendingTracker } from '../spending_tracker';
 export const SOROBAN_TX_TIMEOUT = 30;
 
 /**
+ * Alias for SOROBAN_TX_TIMEOUT — exported under both names so that callers
+ * importing either identifier resolve to the same value.
+ */
+export const SOROBAN_TX_TIMEOUT_SECONDS = SOROBAN_TX_TIMEOUT;
  * Decimal places of Stellar Asset Contract (SAC) token amounts.
  *
  * A SAC is the tokenized form of a classic Stellar asset, and like the

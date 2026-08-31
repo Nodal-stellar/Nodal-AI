@@ -32,12 +32,24 @@ vi.mock('@stellar/stellar-sdk', async (importOriginal) => {
   };
 });
 
+vi.mock("../backend/utils/logger", () => {
+  // Use a module-level log object that is safe to create inside the factory
+  const _log = {
 const { rpcClientLog } = vi.hoisted(() => ({
   rpcClientLog: {
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
     debug: vi.fn(),
+  };
+  // Store on globalThis so beforeEach can clear it
+  (globalThis as any).__rpcClientLog = _log;
+  return {
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    createLogger: vi.fn(() => _log),
+    generateCorrelationId: vi.fn(() => "mock-id"),
+  };
+});
   },
 }));
 
@@ -71,10 +83,13 @@ vi.mock('../backend/config', () => {
 });
 
 beforeEach(() => {
-  rpcClientLog.info.mockClear();
-  rpcClientLog.warn.mockClear();
-  rpcClientLog.error.mockClear();
-  rpcClientLog.debug.mockClear();
+  const log = (globalThis as any).__rpcClientLog;
+  if (log) {
+    log.info.mockClear();
+    log.warn.mockClear();
+    log.error.mockClear();
+    log.debug.mockClear();
+  }
 });
 
 afterEach(() => {
