@@ -269,7 +269,13 @@ describe('X402ChallengeSchema fuzz', () => {
       assetIssuer: fc.constant('GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN'),
       payTo: fc.constant(VALID_PAY_TO),
       nonce: fc.uuid({ version: 4 }),
-      expiresAt: fc.date().map((d) => d.toISOString()),
+      // fc.date() spans ±273k years; toISOString() of year-10000 dates
+      // ("+010000-01-01T...") is rejected by z.string().datetime(). Constrain
+      // to a sane range so the generator only produces valid ISO-8601 UTC
+      // timestamps the schema is documented to accept.
+      expiresAt: fc
+        .date({ min: new Date("2000-01-01"), max: new Date("2099-12-31") })
+        .map((d) => d.toISOString()),
     });
 
     fc.assert(

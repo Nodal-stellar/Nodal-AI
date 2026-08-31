@@ -40,15 +40,13 @@ import * as rpcClient from '../backend/rpc_client';
 import { ContractError } from '../backend/errors';
 import { spendingTracker } from '../backend/spending_tracker';
 
-// ─── Module mock ──────────────────────────────────────────────────────────────
+// ─── Shared fixture (#438) ────────────────────────────────────────────────────
 /**
- * Mock the rpc_client module to intercept all calls to Horizon and Soroban RPC.
- *
- * Each function (loadAccount, prepareSorobanTx, etc.) is mocked with vi.fn(),
- * allowing tests to define return values or rejection behavior on a per-test basis.
- *
- * The sorobanServer object contains sendTransaction and getTransaction, which are
- * critical for the polling mechanism that confirms transaction settlement.
+ * Mock the rpc_client module with the shared MockSorobanServer fixture
+ * (tests/fixtures/MockSorobanServer.ts) instead of a hand-rolled inline
+ * factory. The mocked module IS the fixture instance, so the cast below
+ * exposes its scenario configurators (failSimulation, submitResult,
+ * stallPolling, signNoOp, ...) to the suite.
  */
 
 vi.mock('../backend/rpc_client', async () => {
@@ -67,6 +65,8 @@ vi.mock('../backend/rpc_client', async () => {
     },
   };
 });
+
+const mockSorobanServer = rpcClient as unknown as MockSorobanServer;
 
 // The tool records simulated SAC transfers into the shared spending window.
 // Mock the singleton so assertions stay in-process and no real DB is touched.
@@ -238,10 +238,7 @@ function makeSacTransferEvent(opts: {
 
 /** Mock the simulation gate to return a prepared tx plus the given events. */
 function mockPreparedWithEvents(events: xdr.DiagnosticEvent[] = []): void {
-  vi.mocked(rpcClient.prepareSorobanTxWithEvents).mockResolvedValue({
-    tx: makeMockPreparedTx(),
-    events,
-  } as any);
+  mockSorobanServer.setPrepared({ tx: makeMockPreparedTx(), events });
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
