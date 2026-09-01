@@ -112,6 +112,8 @@ export class SpendingTracker {
       windowMs: this.windowMs,
       oldestTimestamp: this.records.length > 0 ? this.records[0]!.timestamp : null,
     };
+  }
+
   private persist(record: { amount: number; timestamp: number }): void {
     try {
       saveSpendingRecord(record);
@@ -140,28 +142,6 @@ export class SpendingTracker {
         // Pruning is housekeeping; failing to do it must not block a payment.
       }
     }
-  }
-
-  /**
-   * Return the current rolling window spending status.
-   */
-  getWindowStatus(): {
-    windowSpend: number;
-    windowLimit: number;
-    windowStartsAt: number;
-    remainingBudget: number;
-  } {
-    const now = Date.now();
-    const windowSpend = this.total();
-    const windowLimit = parseFloat(config.AGENT_SPENDING_LIMIT);
-    const windowStartsAt = now - this.windowMs;
-    const remainingBudget = isNaN(windowLimit) ? 0 : Math.max(0, windowLimit - windowSpend);
-    return {
-      windowSpend,
-      windowLimit,
-      windowStartsAt,
-      remainingBudget,
-    };
   }
 
   clear() {

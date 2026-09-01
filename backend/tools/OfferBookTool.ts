@@ -59,7 +59,8 @@ export function resolveAsset(input: OfferBookInput['sellingAsset']): Asset {
       return Asset.native();
     }
     if (input.includes(':')) {
-      const [code, issuer] = input.split(':');
+      // `includes(':')` guarantees split() yields at least two parts.
+      const [code, issuer] = input.split(':') as [string, string];
       return new Asset(code, issuer);
     }
     return new Asset(input, config.X402_ASSET_ISSUER);
@@ -104,9 +105,11 @@ export class OfferBookTool {
     const asks: PriceLevel[] = response.asks ?? [];
 
     let spread = '0';
-    if (bids.length > 0 && asks.length > 0) {
-      const bestBid = parseFloat(bids[0].price);
-      const bestAsk = parseFloat(asks[0].price);
+    const topBid = bids[0];
+    const topAsk = asks[0];
+    if (topBid && topAsk) {
+      const bestBid = parseFloat(topBid.price);
+      const bestAsk = parseFloat(topAsk.price);
       const diff = bestAsk - bestBid;
       spread = diff.toFixed(7);
     }

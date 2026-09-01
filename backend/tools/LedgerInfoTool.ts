@@ -22,7 +22,6 @@ export type LedgerInfoInput = z.infer<typeof LedgerInfoInputSchema>;
 
 export interface LedgerInfoResult {
   sequence: number;
-  closeTime: number;
   protocolVersion: number;
 }
 
@@ -55,7 +54,6 @@ export class LedgerInfoTool {
 
     const data: LedgerInfoResult = {
       sequence: Number(response.sequence),
-      closeTime: Number(response.closeTime),
       protocolVersion: Number(response.protocolVersion),
     };
 
@@ -65,7 +63,7 @@ export class LedgerInfoTool {
     };
 
     log.info(
-      { sequence: data.sequence, closeTime: data.closeTime, protocolVersion: data.protocolVersion },
+      { sequence: data.sequence, protocolVersion: data.protocolVersion },
       'Latest ledger info fetched'
     );
 

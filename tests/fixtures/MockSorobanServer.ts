@@ -43,8 +43,8 @@
  * `beforeEach`.
  */
 
-import { vi } from "vitest";
-import { Networks } from "@stellar/stellar-sdk";
+import { vi } from 'vitest';
+import { Networks } from '@stellar/stellar-sdk';
 
 /** A Vitest mock function (`vi.fn()`). */
 export type MockedFn = ReturnType<typeof vi.fn>;
@@ -54,13 +54,13 @@ export function makeMockAccount(publicKey: string): Record<string, unknown> {
   return {
     id: publicKey,
     accountId: () => publicKey,
-    sequenceNumber: () => "100",
+    sequenceNumber: () => '100',
     incrementSequenceNumber: vi.fn(),
-    sequence: "100",
-    incrementedSequenceNumber: () => "101",
+    sequence: '100',
+    incrementedSequenceNumber: () => '101',
     thresholds: { low_threshold: 0, med_threshold: 0, high_threshold: 0 },
     flags: { auth_required: false, auth_revocable: false, auth_immutable: false },
-    balances: [{ asset_type: "native", balance: "10000.0000000" }],
+    balances: [{ asset_type: 'native', balance: '10000.0000000' }],
     signers: [],
     data_attr: {},
     subentry_count: 0,
@@ -159,7 +159,7 @@ export interface MockSorobanServer {
   /** Scenario: every simulation fails with the given error. */
   failSimulation(error: Error): MockSorobanServer;
   /** Scenario: `sendTransaction` resolves with the given status payload. */
-  submitResult(status: "PENDING" | "ERROR", hash: string): MockSorobanServer;
+  submitResult(status: 'PENDING' | 'ERROR', hash: string): MockSorobanServer;
   /** Scenario: `sendTransaction` resolves with an ERROR payload. */
   submitError(hash: string): MockSorobanServer;
   /** Scenario: every poll returns NOT_FOUND (stalled transaction). */
@@ -189,7 +189,7 @@ export function createMockSorobanServer(
   overrides: MockSorobanServerOverrides = {}
 ): MockSorobanServer {
   const DEFAULT_ACCOUNT = makeMockAccount(
-    "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+    'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5'
   );
   const DEFAULT_PREPARED = { tx: makeMockPreparedTx(), events: [] };
 
@@ -214,9 +214,14 @@ export function createMockSorobanServer(
         ? { tx: makeMockPreparedTx(), events: [], ...overrides.prepared }
         : DEFAULT_PREPARED,
     simulationError: overrides.simulationError,
-    submitResult: overrides.submitResult !== undefined ? overrides.submitResult : { status: "PENDING", hash: "mock_tx_hash" },
+    submitResult:
+      overrides.submitResult !== undefined
+        ? overrides.submitResult
+        : { status: 'PENDING', hash: 'mock_tx_hash' },
     transactionResult:
-      overrides.transactionResult !== undefined ? overrides.transactionResult : { status: "SUCCESS" },
+      overrides.transactionResult !== undefined
+        ? overrides.transactionResult
+        : { status: 'SUCCESS' },
     simulateTransaction: overrides.simulateTransaction,
     getLatestLedger: overrides.getLatestLedger,
     getLedgerEntries: overrides.getLedgerEntries,
@@ -230,8 +235,8 @@ export function createMockSorobanServer(
     prepareSorobanTx,
     prepareSorobanTxWithEvents,
     resolveNetworkPassphrase: (network: string): string => {
-      if (network === "mainnet") return Networks.PUBLIC;
-      if (network === "futurenet") return Networks.FUTURENET;
+      if (network === 'mainnet') return Networks.PUBLIC;
+      if (network === 'futurenet') return Networks.FUTURENET;
       return Networks.TESTNET;
     },
     horizonServer: {},
@@ -293,22 +298,22 @@ export function createMockSorobanServer(
     },
     submitResult(status, hash): MockSorobanServer {
       sendTransaction.mockResolvedValue(
-        status === "ERROR"
-          ? { status, errorResult: { toXDR: () => "base64_error_xdr" }, hash }
+        status === 'ERROR'
+          ? { status, errorResult: { toXDR: () => 'base64_error_xdr' }, hash }
           : { status, hash }
       );
       return server;
     },
     submitError(hash): MockSorobanServer {
       sendTransaction.mockResolvedValue({
-        status: "ERROR",
-        errorResult: { toXDR: () => "base64_error_xdr" },
+        status: 'ERROR',
+        errorResult: { toXDR: () => 'base64_error_xdr' },
         hash,
       });
       return server;
     },
     stallPolling(): MockSorobanServer {
-      getTransaction.mockResolvedValue({ status: "NOT_FOUND" });
+      getTransaction.mockResolvedValue({ status: 'NOT_FOUND' });
       return server;
     },
     signNoOp(): MockSorobanServer {

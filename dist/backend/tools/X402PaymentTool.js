@@ -15,18 +15,43 @@ const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
 const config_1 = require("../config");
 const rpc_client_1 = require("../rpc_client");
 const StellarPaymentTool_1 = require("./StellarPaymentTool");
+const MemoAttachmentTool_1 = require("./MemoAttachmentTool");
 const logger_1 = require("../logger");
 const nonce_store_1 = require("../nonce_store");
+const errors_1 = require("../errors");
+/**
+ * Best-effort recovery of a transaction hash from a submission error.
+ *
+ * A hash is only present when the transaction actually reached Horizon and was
+ * rejected — a failure during building, signing, or a network timeout has none.
+ * `TransactionFailureError.txHash` is therefore optional, and this returns
+ * `undefined` rather than inventing a value.
+ */
+function extractTxHash(err) {
+    if (err === null || typeof err !== 'object')
+        return undefined;
+    const candidate = err;
+    for (const value of [candidate.txHash, candidate.hash, candidate.response?.data?.hash]) {
+        if (typeof value === 'string' && value.length > 0)
+            return value;
+    }
+    return undefined;
+}
 // ─── x402 schemas ────────────────────────────────────────────────────────────
-exports.X402ChallengeSchema = zod_1.z.object({
-    resource: zod_1.z.string().url("Must be a valid resource URL"),
+exports.X402ChallengeSchema = zod_1.z
+    .object({
+    resource: zod_1.z.string().url('Must be a valid resource URL'),
     amount: zod_1.z.string(),
     assetCode: zod_1.z.string().default(config_1.config.X402_ASSET_CODE),
     assetIssuer: zod_1.z.string().default(config_1.config.X402_ASSET_ISSUER),
-    payTo: zod_1.z.string().length(56, "Invalid payTo Stellar address"),
-    nonce: zod_1.z.string().uuid("Nonce must be a UUID v4"),
+    payTo: zod_1.z.string().length(56, 'Invalid payTo Stellar address'),
+    nonce: zod_1.z.string().uuid('Nonce must be a UUID v4'),
     expiresAt: zod_1.z.string().datetime(),
-}).refine((data) => data.assetCode === "XLM" || !!data.assetIssuer, { message: "assetIssuer is required for non-XLM payments", path: ["assetIssuer"] });
+})
+    .refine((data) => data.assetCode === 'XLM' || !!data.assetIssuer, {
+    message: 'assetIssuer is required for non-XLM payments',
+    path: ['assetIssuer'],
+});
 // ─── Tool implementation ──────────────────────────────────────────────────────
 const RATE_LIMIT_WINDOW_MS = 60_000;
 class X402PaymentTool {
@@ -48,9 +73,7 @@ class X402PaymentTool {
         this.keypair = stellar_sdk_1.Keypair.fromSecret(secretKey);
         this.paymentTool = new StellarPaymentTool_1.StellarPaymentTool(secretKey);
         this.horizonServer = rpc_client_1.horizonServer;
-        this.nonceStore =
-            nonceStore ??
-                new nonce_store_1.SqliteNonceStore(new better_sqlite3_1.default(config_1.config.DB_PATH));
+        this.nonceStore = nonceStore ?? new nonce_store_1.SqliteNonceStore(new better_sqlite3_1.default(config_1.config.DB_PATH));
     }
     /**
      * Respond to an x402 `402 Payment Required` challenge by executing a
@@ -83,7 +106,7 @@ class X402PaymentTool {
             this.windowStart = now;
         }
         if (this.paymentCount >= config_1.config.MAX_X402_PAYMENTS_PER_MINUTE) {
-            throw new Error("x402: rate limit exceeded");
+            throw new Error('x402: rate limit exceeded');
         }
         this.paymentCount++;
         const challenge = exports.X402ChallengeSchema.parse(rawChallenge);
@@ -91,46 +114,59 @@ class X402PaymentTool {
             throw new Error("Payment destination cannot be the agent's own address");
         }
         if (config_1.config.ALLOWED_X402_ORIGINS) {
-            const allowedOrigins = config_1.config.ALLOWED_X402_ORIGINS.split(",").map(o => o.trim());
+            const allowedOrigins = config_1.config.ALLOWED_X402_ORIGINS.split(',').map((o) => o.trim());
             const hostname = new URL(challenge.resource).hostname;
             if (!allowedOrigins.includes(hostname)) {
-                throw new Error("x402: untrusted resource origin");
+                throw new Error('x402: untrusted resource origin');
             }
         }
         else {
-            logger_1.logger.warn("ALLOWED_X402_ORIGINS is not set. All origins accepted.");
+            logger_1.logger.warn('ALLOWED_X402_ORIGINS is not set. All origins accepted.');
         }
         if (new Date(challenge.expiresAt) < new Date()) {
             throw new Error(`x402 challenge expired at ${challenge.expiresAt}`);
         }
         if (await this.nonceStore.has(challenge.nonce)) {
-            throw new Error("x402: nonce already used");
+            throw new Error('x402: nonce already used');
         }
-        const { txHash, ledger } = await this.paymentTool.execute({
-            destination: challenge.payTo,
-            amount: challenge.amount,
-            assetCode: challenge.assetCode,
-            assetIssuer: challenge.assetCode === "XLM" ? undefined : challenge.assetIssuer,
-            // SPEC: memo = SHA-256(nonce)[0:28 hex chars]; resource server must apply the same derivation to verify.
-            memo: (0, crypto_1.createHash)("sha256").update(challenge.nonce).digest("hex").slice(0, 28),
-        });
+        let txHash;
+        let ledger;
+        try {
+            ({ txHash, ledger } = await this.paymentTool.execute({
+                destination: challenge.payTo,
+                amount: challenge.amount,
+                assetCode: challenge.assetCode,
+                assetIssuer: challenge.assetCode === 'XLM' ? undefined : challenge.assetIssuer,
+                // SPEC: memo = SHA-256(nonce)[0:28 hex chars]; resource server must apply the same derivation to verify.
+                memo: (0, MemoAttachmentTool_1.buildMemo)({
+                    type: 'MEMO_TEXT',
+                    value: (0, crypto_1.createHash)('sha256').update(challenge.nonce).digest('hex').slice(0, 28),
+                }).value,
+            }));
+        }
+        catch (err) {
+            // #371: preserve the Horizon result code (e.g. op_underfunded, op_no_trust)
+            // and the tx hash (when the failure happened after submission) as a
+            // structured error, instead of losing that detail to a generic rejection.
+            const message = err instanceof Error ? err.message : String(err);
+            throw new errors_1.TransactionFailureError(message, extractTxHash(err), err);
+        }
         await this.nonceStore.add(challenge.nonce);
         // Opportunistic pruning: evict nonces older than the max challenge TTL.
         // Fire-and-forget — a pruning failure must not abort a successful payment.
-        this.nonceStore.prune(nonce_store_1.MAX_NONCE_TTL_MS).catch((err) => logger_1.logger.warn("x402: nonce pruning failed (non-fatal)", { error: String(err) }));
+        this.nonceStore
+            .prune(nonce_store_1.MAX_NONCE_TTL_MS)
+            .catch((err) => logger_1.logger.warn('x402: nonce pruning failed (non-fatal)', { error: String(err) }));
         let signedAt;
         try {
-            const ledgerRecord = await this.horizonServer
-                .ledgers()
-                .ledger(ledger)
-                .call();
+            const ledgerRecord = await this.horizonServer.ledgers().ledger(ledger).call();
             signedAt = ledgerRecord.closed_at;
         }
         catch {
             signedAt = new Date().toISOString();
         }
         return {
-            protocol: "x402",
+            protocol: 'x402',
             network: config_1.config.STELLAR_NETWORK,
             txHash,
             nonce: challenge.nonce,
@@ -158,41 +194,41 @@ class X402PaymentTool {
      *   checks (destination, amount, asset, memo, payer) fail.
      */
     async verify(proof, originalChallenge) {
-        const tx = await this.horizonServer
-            .transactions()
-            .transaction(proof.txHash)
-            .call();
-        const ops = await this.horizonServer
-            .operations()
-            .forTransaction(proof.txHash)
-            .call();
+        const tx = await this.horizonServer.transactions().transaction(proof.txHash).call();
+        const ops = await this.horizonServer.operations().forTransaction(proof.txHash).call();
         const op = ops.records?.[0];
         if (!op) {
-            throw new Error("x402 verification failed: missing operation");
+            throw new Error('x402 verification failed: missing operation');
         }
         const parsed = this.extractOp(op);
         if (parsed.to !== originalChallenge.payTo) {
-            throw new Error("x402 verification failed: destination mismatch");
+            throw new Error('x402 verification failed: destination mismatch');
         }
         if (parsed.amount !== originalChallenge.amount) {
-            throw new Error("x402 verification failed: amount mismatch");
+            throw new Error('x402 verification failed: amount mismatch');
         }
         if (parsed.assetCode !== originalChallenge.assetCode) {
-            throw new Error("x402 verification failed: asset mismatch");
+            throw new Error('x402 verification failed: asset mismatch');
         }
-        const expectedMemo = (0, crypto_1.createHash)("sha256").update(originalChallenge.nonce).digest("hex").slice(0, 28);
+        const expectedMemo = (0, crypto_1.createHash)('sha256')
+            .update(originalChallenge.nonce)
+            .digest('hex')
+            .slice(0, 28);
         if (tx.memo !== expectedMemo) {
-            throw new Error("x402 verification failed: nonce mismatch");
+            throw new Error('x402 verification failed: nonce mismatch');
         }
         if (parsed.from !== proof.payer) {
-            throw new Error("x402 verification failed: payer mismatch");
+            throw new Error('x402 verification failed: payer mismatch');
         }
     }
     extractOp(op) {
         return {
             to: op.to || op.destination,
             amount: op.amount,
-            assetCode: op.asset_code || op.asset?.code,
+            // Horizon payment ops for native XLM carry `asset_type: "native"` and no
+            // asset_code field at all — without this, every legitimate XLM payment
+            // would fail verification with a spurious asset mismatch.
+            assetCode: op.asset_type === 'native' ? 'XLM' : op.asset_code || op.asset?.code,
             from: op.from || op.source_account,
         };
     }

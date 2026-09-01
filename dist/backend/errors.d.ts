@@ -48,6 +48,15 @@ export declare class TransactionFailureError extends StructuredError {
 export declare class ConfigError extends StructuredError {
     constructor(message: string, cause?: unknown);
 }
+export declare class SimulationBudgetError extends StructuredError {
+    constructor(message: string, cause?: unknown);
+}
 declare function getErrorType(error: unknown): ErrorType;
 export { getErrorType };
+/**
+ * Recursively strips keys that may carry Stellar signing material (secretKey,
+ * privateKey, seed, _secretKey) from an error cause before it is attached to
+ * a thrown error, so it can't be exfiltrated via JSON-serialised logs/webhooks.
+ */
+export declare function sanitizeCause(cause: unknown): unknown;
 //# sourceMappingURL=errors.d.ts.map

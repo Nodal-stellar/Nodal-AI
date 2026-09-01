@@ -18,9 +18,18 @@ const { mockStopStream, mockStream, mockForAccount, mockPayments } = vi.hoisted(
 vi.mock('../backend/tools/StellarPaymentTool', () => ({
   StellarPaymentTool: vi.fn().mockImplementation(() => ({ execute: vi.fn() })),
 }));
-vi.mock('../backend/tools/SorobanInvokeTool', () => ({
-  SorobanInvokeTool: vi.fn().mockImplementation(() => ({ execute: vi.fn() })),
-}));
+vi.mock('../backend/tools/SorobanInvokeTool', async () => {
+  // Keep the real SorobanInvokeInputSchema — SorobanQueryTool.ts derives its
+  // own schema from it at module-load time via `.omit({...})` — while mocking
+  // only the SorobanInvokeTool class.
+  const actual = await vi.importActual<typeof import('../backend/tools/SorobanInvokeTool')>(
+    '../backend/tools/SorobanInvokeTool'
+  );
+  return {
+    ...actual,
+    SorobanInvokeTool: vi.fn().mockImplementation(() => ({ execute: vi.fn() })),
+  };
+});
 vi.mock('../backend/tools/X402PaymentTool', async () => {
   // Keep the real X402ChallengeSchema (agent.ts's stream handler validates
   // against it, issue #237) while mocking only the X402PaymentTool class.

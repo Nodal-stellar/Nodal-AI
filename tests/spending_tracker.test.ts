@@ -24,53 +24,53 @@ const WINDOW_MS = 60_000; // 1 minute — passed explicitly to each tracker
 
 // ─── Basic record / limit checks ─────────────────────────────────────────────
 
-describe("SpendingTracker — basic record and limit checks", () => {
+describe('SpendingTracker — basic record and limit checks', () => {
   let tracker: SpendingTracker;
 
   beforeEach(() => {
     tracker = new SpendingTracker(WINDOW_MS);
   });
 
-  it("starts with a zero total", () => {
+  it('starts with a zero total', () => {
     expect(tracker.total()).toBe(0);
   });
 
-  it("accumulates amounts correctly", () => {
-    tracker.record("10");
-    tracker.record("25.5");
+  it('accumulates amounts correctly', () => {
+    tracker.record('10');
+    tracker.record('25.5');
     expect(tracker.total()).toBeCloseTo(35.5);
   });
 
-  it("throws when cumulative total exceeds the spending limit", () => {
+  it('throws when cumulative total exceeds the spending limit', () => {
     // limit = '100' from mocked config
-    tracker.record("90");
-    expect(() => tracker.record("20")).toThrow(/Cumulative spending.*exceeds limit/);
+    tracker.record('90');
+    expect(() => tracker.record('20')).toThrow(/Cumulative spending.*exceeds limit/);
   });
 
-  it("does not throw when cumulative total equals the limit exactly", () => {
-    expect(() => tracker.record("100")).not.toThrow();
+  it('does not throw when cumulative total equals the limit exactly', () => {
+    expect(() => tracker.record('100')).not.toThrow();
   });
 
-  it("ignores NaN / non-numeric strings gracefully", () => {
-    expect(() => tracker.record("not-a-number")).not.toThrow();
+  it('ignores NaN / non-numeric strings gracefully', () => {
+    expect(() => tracker.record('not-a-number')).not.toThrow();
     expect(tracker.total()).toBe(0);
   });
 
-  it("ignores empty string without throwing", () => {
-    expect(() => tracker.record("")).not.toThrow();
+  it('ignores empty string without throwing', () => {
+    expect(() => tracker.record('')).not.toThrow();
   });
 });
 
 // ─── getWindowStatus ─────────────────────────────────────────────────────────
 
-describe("SpendingTracker — getWindowStatus()", () => {
+describe('SpendingTracker — getWindowStatus()', () => {
   let tracker: SpendingTracker;
 
   beforeEach(() => {
     tracker = new SpendingTracker(WINDOW_MS);
   });
 
-  it("returns zero total and null oldestTimestamp when no records exist", () => {
+  it('returns zero total and null oldestTimestamp when no records exist', () => {
     const status = tracker.getWindowStatus();
     expect(status.total).toBe(0);
     expect(status.recordCount).toBe(0);
@@ -78,20 +78,20 @@ describe("SpendingTracker — getWindowStatus()", () => {
     expect(status.oldestTimestamp).toBeNull();
   });
 
-  it("reflects recorded amounts in total and recordCount", () => {
-    tracker.record("30");
-    tracker.record("20");
+  it('reflects recorded amounts in total and recordCount', () => {
+    tracker.record('30');
+    tracker.record('20');
     const status = tracker.getWindowStatus();
     expect(status.total).toBeCloseTo(50);
     expect(status.recordCount).toBe(2);
   });
 
-  it("oldestTimestamp matches the timestamp of the first record", () => {
+  it('oldestTimestamp matches the timestamp of the first record', () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000_000);
-    tracker.record("10");
+    tracker.record('10');
     vi.setSystemTime(1_001_000);
-    tracker.record("5");
+    tracker.record('5');
 
     const status = tracker.getWindowStatus();
     expect(status.oldestTimestamp).toBe(1_000_000);
@@ -101,15 +101,7 @@ describe("SpendingTracker — getWindowStatus()", () => {
 
 // ─── Rolling window expiry with fake timers ───────────────────────────────────
 
-describe("SpendingTracker — rolling window expiry (fake timers)", () => {
-  let tracker: SpendingTracker;
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    tracker = new SpendingTracker(WINDOW_MS);
-const WINDOW_MS = 60_000;
-
-describe('SpendingTracker window boundary', () => {
+describe('SpendingTracker — rolling window expiry (fake timers)', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));

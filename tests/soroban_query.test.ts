@@ -1,17 +1,11 @@
 ﻿import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Keypair, xdr } from '@stellar/stellar-sdk';
+import { Keypair, nativeToScVal, xdr } from '@stellar/stellar-sdk';
 import { SorobanQueryTool } from '../backend/tools/SorobanQueryTool';
 import * as rpcClient from '../backend/rpc_client';
 
 vi.mock('../backend/rpc_client', () => ({
   loadAccount: vi.fn(),
   prepareSorobanTx: vi.fn(),
-  resolveNetworkPassphrase: vi.fn(() => "Test SDF Network ; September 2015"),
-  horizonServer: {},
-  sorobanServer: {
-    sendTransaction: vi.fn(),
-    getTransaction: vi.fn(),
-  },
   resolveNetworkPassphrase: vi.fn(() => 'Test SDF Network ; September 2015'),
   horizonServer: { sendTransaction: vi.fn(), getTransaction: vi.fn() },
   sorobanServer: { sendTransaction: vi.fn(), getTransaction: vi.fn() },
@@ -60,19 +54,19 @@ describe('SorobanQueryTool', () => {
     );
   });
 
-  describe("Successful query", () => {
-    it("returns parsed ScVal from simulation result", async () => {
+  describe('Successful query', () => {
+    it('returns parsed ScVal from simulation result', async () => {
       vi.mocked(rpcClient.loadAccount).mockResolvedValue(
-        makeMockAccount("GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5") as any,
+        makeMockAccount('GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5') as any
       );
 
-      const expectedScVal = nativeToScVal(42, { type: "u32" });
+      const expectedScVal = nativeToScVal(42, { type: 'u32' });
 
       vi.mocked(rpcClient.prepareSorobanTx as any).mockResolvedValue(expectedScVal);
 
       const result = await tool.query({
         contractId: VALID_CONTRACT,
-        method: "balance",
+        method: 'balance',
         args: [],
       });
 
@@ -80,24 +74,26 @@ describe('SorobanQueryTool', () => {
     });
   });
 
-  describe("Simulation failure", () => {
-    it("propagates simulation error", async () => {
+  describe('Simulation failure', () => {
+    it('propagates simulation error', async () => {
       vi.mocked(rpcClient.loadAccount).mockResolvedValue(
-        makeMockAccount("GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5") as any,
+        makeMockAccount('GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5') as any
       );
 
       vi.mocked(rpcClient.prepareSorobanTx as any).mockRejectedValue(
-        new Error("Soroban query failed: Contract error: insufficient balance"),
+        new Error('Soroban query failed: Contract error: insufficient balance')
       );
 
       await expect(
         tool.query({
           contractId: VALID_CONTRACT,
-          method: "balance",
+          method: 'balance',
           args: [],
-        }),
+        })
       ).rejects.toThrow(/Soroban query failed/);
     });
+  });
+
   it('calls prepareSorobanTx for valid input', async () => {
     vi.mocked(rpcClient.prepareSorobanTx).mockResolvedValue({} as any);
 

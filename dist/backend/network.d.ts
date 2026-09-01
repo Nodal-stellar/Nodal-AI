@@ -9,6 +9,7 @@ export interface BackoffState {
     until: number;
     retryAfterSeconds: number;
     queue: Array<() => void>;
+    generation: number;
 }
 /**
  * Check whether the network is currently throttled.

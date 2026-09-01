@@ -12,27 +12,27 @@
  * Uses Math.random() only — no external property-based libraries required.
  */
 
-import { describe, it, expect } from "vitest";
-import { PaymentInputSchema } from "../../backend/tools/StellarPaymentTool";
+import { describe, it, expect } from 'vitest';
+import { PaymentInputSchema } from '../../backend/tools/StellarPaymentTool';
 
 // ─── Config mock ──────────────────────────────────────────────────────────────
 // PaymentInputSchema itself does not import config, but StellarPaymentTool.ts
 // does at the module level. Mock it so the module resolves cleanly.
-import { vi } from "vitest";
-vi.mock("../../backend/config", () => ({
+import { vi } from 'vitest';
+vi.mock('../../backend/config', () => ({
   config: {
-    STELLAR_NETWORK: "testnet",
-    HORIZON_URL: "https://horizon-testnet.stellar.org",
-    SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org",
-    AGENT_PUBLIC_KEY: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
-    X402_ASSET_CODE: "USDC",
-    X402_ASSET_ISSUER: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
-    AGENT_SPENDING_LIMIT: "100",
+    STELLAR_NETWORK: 'testnet',
+    HORIZON_URL: 'https://horizon-testnet.stellar.org',
+    SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org',
+    AGENT_PUBLIC_KEY: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
+    X402_ASSET_CODE: 'USDC',
+    X402_ASSET_ISSUER: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+    AGENT_SPENDING_LIMIT: '100',
     MAX_RETRIES: 3,
     RETRY_DELAY_MS: 100,
     agentKeypair: () => ({
-      publicKey: () => "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
-      secret: () => "SBZ7EYXHNB4WPPIWC5YAMH2U4L4QU6DKYXQWG4I55G6O4CLE4BBHCE73",
+      publicKey: () => 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
+      secret: () => 'SBZ7EYXHNB4WPPIWC5YAMH2U4L4QU6DKYXQWG4I55G6O4CLE4BBHCE73',
     }),
   },
   MAINNET_SPENDING_CAP: 10000,
@@ -44,10 +44,8 @@ const AGENT_SPENDING_LIMIT = 100;
 const RUNS = 500;
 
 // Valid destination and issuer — schema requires these fields alongside amount
-const VALID_DEST =
-  "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
-const VALID_ISSUER =
-  "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+const VALID_DEST = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
+const VALID_ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
 
 // ─── Generator helpers ────────────────────────────────────────────────────────
 
@@ -74,7 +72,7 @@ function randomValidAmount(): string {
   const dp = randInt(0, 7);
   const fixed = toStellarDecimal(value, dp);
   // Ensure we didn't accidentally round to zero
-  return parseFloat(fixed) > 0 ? fixed : "0.0000001";
+  return parseFloat(fixed) > 0 ? fixed : '0.0000001';
 }
 
 /** Negative amount string, e.g. "-5.25" */
@@ -86,16 +84,9 @@ function randomNegativeAmount(): string {
 
 /** Zero or zero-equivalent string, e.g. "0", "0.0", "0.0000000" */
 function randomZeroAmount(): string {
-  const forms = [
-    "0",
-    "0.0",
-    "0.00",
-    "0.0000000",
-    "0.000",
-    () => `0.${"0".repeat(randInt(1, 7))}`,
-  ];
-  const pick = forms[randInt(0, forms.length - 1)];
-  return typeof pick === "function" ? pick() : pick;
+  const forms = ['0', '0.0', '0.00', '0.0000000', '0.000', () => `0.${'0'.repeat(randInt(1, 7))}`];
+  const pick = forms[randInt(0, forms.length - 1)]!;
+  return typeof pick === 'function' ? pick() : pick;
 }
 
 /** Amount above AGENT_SPENDING_LIMIT */
@@ -104,14 +95,12 @@ function randomOverLimitAmount(): string {
   const dp = randInt(0, 7);
   const fixed = toStellarDecimal(value, dp);
   // Make sure rounding didn't push it under the limit
-  return parseFloat(fixed) > AGENT_SPENDING_LIMIT
-    ? fixed
-    : String(AGENT_SPENDING_LIMIT + 1);
+  return parseFloat(fixed) > AGENT_SPENDING_LIMIT ? fixed : String(AGENT_SPENDING_LIMIT + 1);
 }
 
 /** Scientific notation string, e.g. "1e10", "-3.2e-5" */
 function randomScientificNotation(): string {
-  const sign = Math.random() < 0.5 ? "-" : "";
+  const sign = Math.random() < 0.5 ? '-' : '';
   const mantissa = randFloat(1, 9.99).toFixed(randInt(0, 4));
   const exponent = randInt(-15, 15);
   return `${sign}${mantissa}e${exponent}`;
@@ -120,23 +109,23 @@ function randomScientificNotation(): string {
 /** Completely non-numeric junk */
 function randomNonNumeric(): string {
   const pool = [
-    "abc",
-    "1.2.3",
-    "",
-    " ",
-    "NaN",
-    "Infinity",
-    "-Infinity",
-    "1 0",
-    "1,000",
-    "$100",
-    "1_000",
-    "0x1A",
-    "1e",
-    "e5",
-    ".",
-    "--1",
-    "++1",
+    'abc',
+    '1.2.3',
+    '',
+    ' ',
+    'NaN',
+    'Infinity',
+    '-Infinity',
+    '1 0',
+    '1,000',
+    '$100',
+    '1_000',
+    '0x1A',
+    '1e',
+    'e5',
+    '.',
+    '--1',
+    '++1',
   ];
   return pool[randInt(0, pool.length - 1)]!;
 }
@@ -151,15 +140,15 @@ function validateAmount(amount: string) {
   return PaymentInputSchema.safeParse({
     destination: VALID_DEST,
     amount,
-    assetCode: "XLM",
+    assetCode: 'XLM',
     // XLM needs no issuer; keeps the fixture minimal
   });
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-describe("PaymentInputSchema — amount fuzz (property-based, 500 cases each)", () => {
-  it("rejects all negative amounts", () => {
+describe('PaymentInputSchema — amount fuzz (property-based, 500 cases each)', () => {
+  it('rejects all negative amounts', () => {
     const failures: string[] = [];
     for (let i = 0; i < RUNS; i++) {
       const amount = randomNegativeAmount();
@@ -169,7 +158,7 @@ describe("PaymentInputSchema — amount fuzz (property-based, 500 cases each)", 
     expect(failures).toHaveLength(0);
   });
 
-  it("rejects all zero / zero-equivalent amounts", () => {
+  it('rejects all zero / zero-equivalent amounts', () => {
     const failures: string[] = [];
     for (let i = 0; i < RUNS; i++) {
       const amount = randomZeroAmount();
@@ -179,7 +168,7 @@ describe("PaymentInputSchema — amount fuzz (property-based, 500 cases each)", 
     expect(failures).toHaveLength(0);
   });
 
-  it("accepts all valid positive amounts within the spending limit", () => {
+  it('accepts all valid positive amounts within the spending limit', () => {
     const failures: string[] = [];
     for (let i = 0; i < RUNS; i++) {
       const amount = randomValidAmount();
@@ -189,7 +178,7 @@ describe("PaymentInputSchema — amount fuzz (property-based, 500 cases each)", 
     expect(failures).toHaveLength(0);
   });
 
-  it("rejects amounts with more than 7 decimal places", () => {
+  it('rejects amounts with more than 7 decimal places', () => {
     const failures: string[] = [];
     for (let i = 0; i < RUNS; i++) {
       const base = randFloat(0.000000001, 9.9999999).toFixed(8); // always 8 dp
@@ -199,7 +188,7 @@ describe("PaymentInputSchema — amount fuzz (property-based, 500 cases each)", 
     expect(failures).toHaveLength(0);
   });
 
-  it("rejects scientific notation amounts", () => {
+  it('rejects scientific notation amounts', () => {
     const failures: string[] = [];
     for (let i = 0; i < RUNS; i++) {
       const amount = randomScientificNotation();
@@ -210,7 +199,7 @@ describe("PaymentInputSchema — amount fuzz (property-based, 500 cases each)", 
     expect(failures).toHaveLength(0);
   });
 
-  it("rejects non-numeric / garbage strings", () => {
+  it('rejects non-numeric / garbage strings', () => {
     const failures: string[] = [];
     // Run each junk string many times to hit all variants
     for (let i = 0; i < RUNS; i++) {
@@ -221,7 +210,7 @@ describe("PaymentInputSchema — amount fuzz (property-based, 500 cases each)", 
     expect(failures).toHaveLength(0);
   });
 
-  it("amounts above AGENT_SPENDING_LIMIT pass schema but are flagged as over-limit", () => {
+  it('amounts above AGENT_SPENDING_LIMIT pass schema but are flagged as over-limit', () => {
     // The Zod schema itself does not enforce the spending limit — that is the
     // agent guard's job. This test verifies that over-limit values are valid
     // Stellar decimals (schema accepts them) AND that their numeric value
@@ -251,7 +240,7 @@ describe("PaymentInputSchema — amount fuzz (property-based, 500 cases each)", 
     expect(correctlyOverLimit).toBe(schemaAccepted);
   });
 
-  it("invariant: safeParse never throws — always returns a result object", () => {
+  it('invariant: safeParse never throws — always returns a result object', () => {
     // Mix all generators to stress the schema's error-handling path
     const generators = [
       randomValidAmount,
@@ -271,20 +260,20 @@ describe("PaymentInputSchema — amount fuzz (property-based, 500 cases each)", 
         result = validateAmount(amount);
       }).not.toThrow();
       expect(result).toBeDefined();
-      expect(typeof result!.success).toBe("boolean");
+      expect(typeof result!.success).toBe('boolean');
     }
+  });
+});
+
+/**
  * Property-based fuzz tests for PaymentInputSchema (issue #242).
  * Runs 1000+ generated inputs per property via fast-check to ensure no
  * edge case (arbitrary strings, Unicode memo content, zero-value amount
  * formatting) bypasses validation.
  */
 
-import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
 import { z } from 'zod';
-import { PaymentInputSchema } from '../../backend/tools/StellarPaymentTool';
-
-const VALID_DEST = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
 
 describe('PaymentInputSchema fuzz', () => {
   it('amount: any random string either parses or throws a ZodError -- never anything else', () => {

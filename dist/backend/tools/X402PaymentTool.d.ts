@@ -2,8 +2,8 @@
  * backend/tools/X402PaymentTool.ts
  * x402 machine-to-machine PayFi payment tool.
  */
-import { z } from "zod";
-import { INonceStore } from "../nonce_store";
+import { z } from 'zod';
+import { INonceStore } from '../nonce_store';
 export declare const X402ChallengeSchema: z.ZodEffects<z.ZodObject<{
     resource: z.ZodString;
     amount: z.ZodString;
@@ -47,7 +47,7 @@ export declare const X402ChallengeSchema: z.ZodEffects<z.ZodObject<{
 }>;
 export type X402Challenge = z.infer<typeof X402ChallengeSchema>;
 export interface X402PaymentProof {
-    protocol: "x402";
+    protocol: 'x402';
     network: string;
     txHash: string;
     nonce: string;

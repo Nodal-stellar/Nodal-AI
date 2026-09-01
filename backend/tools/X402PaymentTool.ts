@@ -153,17 +153,27 @@ export class X402PaymentTool {
       throw new Error('x402: nonce already used');
     }
 
-    const { txHash, ledger } = await this.paymentTool.execute({
-      destination: challenge.payTo,
-      amount: challenge.amount,
-      assetCode: challenge.assetCode,
-      assetIssuer: challenge.assetCode === 'XLM' ? undefined : challenge.assetIssuer,
-      // SPEC: memo = SHA-256(nonce)[0:28 hex chars]; resource server must apply the same derivation to verify.
-      memo: buildMemo({
-        type: 'MEMO_TEXT',
-        value: createHash('sha256').update(challenge.nonce).digest('hex').slice(0, 28),
-      }).value as string,
-    });
+    let txHash: string;
+    let ledger: number;
+    try {
+      ({ txHash, ledger } = await this.paymentTool.execute({
+        destination: challenge.payTo,
+        amount: challenge.amount,
+        assetCode: challenge.assetCode,
+        assetIssuer: challenge.assetCode === 'XLM' ? undefined : challenge.assetIssuer,
+        // SPEC: memo = SHA-256(nonce)[0:28 hex chars]; resource server must apply the same derivation to verify.
+        memo: buildMemo({
+          type: 'MEMO_TEXT',
+          value: createHash('sha256').update(challenge.nonce).digest('hex').slice(0, 28),
+        }).value as string,
+      }));
+    } catch (err) {
+      // #371: preserve the Horizon result code (e.g. op_underfunded, op_no_trust)
+      // and the tx hash (when the failure happened after submission) as a
+      // structured error, instead of losing that detail to a generic rejection.
+      const message = err instanceof Error ? err.message : String(err);
+      throw new TransactionFailureError(message, extractTxHash(err), err);
+    }
 
     await this.nonceStore.add(challenge.nonce);
     // Opportunistic pruning: evict nonces older than the max challenge TTL.
@@ -181,8 +191,6 @@ export class X402PaymentTool {
     } catch {
       signedAt = new Date().toISOString();
     }
-
-    const signedAt = new Date().toISOString();
 
     return {
       protocol: 'x402',
@@ -256,7 +264,10 @@ export class X402PaymentTool {
     return {
       to: op.to || op.destination,
       amount: op.amount,
-      assetCode: op.asset_code || op.asset?.code,
+      // Horizon payment ops for native XLM carry `asset_type: "native"` and no
+      // asset_code field at all — without this, every legitimate XLM payment
+      // would fail verification with a spurious asset mismatch.
+      assetCode: op.asset_type === 'native' ? 'XLM' : op.asset_code || op.asset?.code,
       from: op.from || op.source_account,
     };
   }

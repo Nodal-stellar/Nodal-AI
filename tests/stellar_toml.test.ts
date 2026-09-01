@@ -58,8 +58,8 @@ EMAIL = "alice@example.com"
 
     expect(res.DOCUMENTATION?.ORG_NAME).toBe('Example Org');
     expect(res.CURRENCIES).toHaveLength(1);
-    expect(res.CURRENCIES?.[0].CODE).toBe('USDC');
-    expect(res.PRINCIPALS?.[0].NAME).toBe('Alice');
+    expect(res.CURRENCIES?.[0]!.CODE).toBe('USDC');
+    expect(res.PRINCIPALS?.[0]!.NAME).toBe('Alice');
     expect(res.ACCOUNTS).toEqual(['GABCD1234567890ACCOUNT1', 'GABCD1234567890ACCOUNT2']);
   });
 

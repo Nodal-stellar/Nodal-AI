@@ -95,15 +95,23 @@ export class SorobanStorageTool {
 
     const contractAddress = new Address(input.contractId).toScAddress();
 
+    // Soroban's XDR only defines `temporary`/`persistent` durability — there is
+    // no separate "instance" variant. A contract's instance storage physically
+    // lives under `persistent` durability, addressed by the fixed
+    // scvLedgerKeyContractInstance() sentinel key rather than a caller-supplied
+    // one, so "instance" maps to that combination instead.
     const durabilityVal =
       input.durability === 'temporary'
         ? xdr.ContractDataDurability.temporary()
-        : input.durability === 'instance'
-          ? xdr.ContractDataDurability.instance()
-          : xdr.ContractDataDurability.persistent();
+        : xdr.ContractDataDurability.persistent();
 
     const ledgerKeys: xdr.LedgerKey[] = input.keys.map((key) => {
-      const scVal = key instanceof xdr.ScVal ? key : nativeToScVal(key);
+      const scVal =
+        input.durability === 'instance'
+          ? xdr.ScVal.scvLedgerKeyContractInstance()
+          : key instanceof xdr.ScVal
+            ? key
+            : nativeToScVal(key);
       return xdr.LedgerKey.contractData(
         new xdr.LedgerKeyContractData({
           contract: contractAddress,

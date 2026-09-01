@@ -2,17 +2,35 @@
  * backend/tools/MultiSigPaymentTool.ts
  * Build M-of-N multi-signature payment transactions for high-value PayFi operations.
  */
-import { z } from "zod";
-export declare const MultiSigInputSchema: z.ZodObject<{
+import { z } from 'zod';
+export declare const MultiSigInputSchema: z.ZodEffects<z.ZodObject<{
     destination: z.ZodString;
     amount: z.ZodEffects<z.ZodString, string, string>;
     assetCode: z.ZodDefault<z.ZodString>;
     assetIssuer: z.ZodOptional<z.ZodString>;
     memo: z.ZodOptional<z.ZodEffects<z.ZodString, string, string>>;
-    additionalSigners: z.ZodArray<z.ZodString, "many">;
+    additionalSigners: z.ZodArray<z.ZodEffects<z.ZodString, string, string>, "many">;
     minSignatures: z.ZodNumber;
     signatures: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
 }, "strip", z.ZodTypeAny, {
+    destination: string;
+    amount: string;
+    assetCode: string;
+    additionalSigners: string[];
+    minSignatures: number;
+    assetIssuer?: string | undefined;
+    memo?: string | undefined;
+    signatures?: string[] | undefined;
+}, {
+    destination: string;
+    amount: string;
+    additionalSigners: string[];
+    minSignatures: number;
+    assetCode?: string | undefined;
+    assetIssuer?: string | undefined;
+    memo?: string | undefined;
+    signatures?: string[] | undefined;
+}>, {
     destination: string;
     amount: string;
     assetCode: string;

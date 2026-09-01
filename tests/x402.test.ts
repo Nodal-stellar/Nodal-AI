@@ -207,8 +207,6 @@ describe('X402PaymentTool', () => {
     it('allows up to MAX_X402_PAYMENTS_PER_MINUTE calls within the window', async () => {
       for (let i = 0; i < 10; i++) {
         // Each call must use a unique nonce — nonce replay protection fires before rate-limit
-        const nonce = `550e8400-e29b-41d4-a716-${String(i).padStart(12, "0")}`;
-        const proof = await tool.respond({ ...VALID_CHALLENGE, nonce });
         const proof = await tool.respond({ ...VALID_CHALLENGE, nonce: uniqueNonce(i) });
         expect(proof.txHash).toBe('x402_mock_tx_hash');
       }
@@ -217,14 +215,9 @@ describe('X402PaymentTool', () => {
 
     it('throws on the 11th call within the same 60s window', async () => {
       for (let i = 0; i < 10; i++) {
-        const nonce = `550e8400-e29b-41d4-a716-${String(i).padStart(12, "0")}`;
-        await tool.respond({ ...VALID_CHALLENGE, nonce });
-      }
-      // 11th call — unique nonce but rate limit already hit
-      await expect(
-        tool.respond({ ...VALID_CHALLENGE, nonce: "660e8400-e29b-41d4-a716-000000000010" })
         await tool.respond({ ...VALID_CHALLENGE, nonce: uniqueNonce(i) });
       }
+      // 11th call — unique nonce but rate limit already hit
       await expect(tool.respond({ ...VALID_CHALLENGE, nonce: uniqueNonce(10) })).rejects.toThrow(
         'x402: rate limit exceeded'
       );
@@ -236,17 +229,16 @@ describe('X402PaymentTool', () => {
       const farFutureExpiry = new Date(startTime + 180_000).toISOString();
 
       for (let i = 0; i < 10; i++) {
-        const nonce = `550e8400-e29b-41d4-a716-${String(i).padStart(12, "0")}`;
-        await tool.respond({ ...VALID_CHALLENGE, nonce, expiresAt: farFutureExpiry });
+        await tool.respond({
+          ...VALID_CHALLENGE,
+          nonce: uniqueNonce(i),
+          expiresAt: farFutureExpiry,
+        });
       }
       // 11th call within same window — should hit rate limit
       await expect(
-        tool.respond({ ...VALID_CHALLENGE, nonce: "660e8400-e29b-41d4-a716-000000000010", expiresAt: farFutureExpiry })
-        await tool.respond({ ...challenge, nonce: uniqueNonce(i) });
-      }
-      await expect(tool.respond({ ...challenge, nonce: uniqueNonce(10) })).rejects.toThrow(
-        'rate limit exceeded'
-      );
+        tool.respond({ ...VALID_CHALLENGE, nonce: uniqueNonce(10), expiresAt: farFutureExpiry })
+      ).rejects.toThrow('rate limit exceeded');
 
       // Advance past the 60s rate-limit window
       vi.setSystemTime(startTime + 60_001);
@@ -254,10 +246,9 @@ describe('X402PaymentTool', () => {
       // First call in new window with new nonce
       const proof = await tool.respond({
         ...VALID_CHALLENGE,
-        nonce: "770e8400-e29b-41d4-a716-000000000011",
+        nonce: uniqueNonce(11),
         expiresAt: farFutureExpiry,
       });
-      const proof = await tool.respond({ ...challenge, nonce: uniqueNonce(11) });
       expect(proof.txHash).toBe('x402_mock_tx_hash');
       vi.useRealTimers();
     });

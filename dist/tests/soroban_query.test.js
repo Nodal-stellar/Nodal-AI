@@ -34,6 +34,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 const vitest_1 = require("vitest");
+const stellar_sdk_1 = require("@stellar/stellar-sdk");
 const SorobanQueryTool_1 = require("../backend/tools/SorobanQueryTool");
 const rpcClient = __importStar(require("../backend/rpc_client"));
 vitest_1.vi.mock('../backend/rpc_client', () => ({
@@ -45,7 +46,7 @@ vitest_1.vi.mock('../backend/rpc_client', () => ({
 }));
 vitest_1.vi.mock('../backend/config', () => {
     const { Keypair } = require('@stellar/stellar-sdk');
-    const secret = 'SBZ7EYXHNB4WPPIWC5YAMH2' + 'U4L4QU6DKYXQWG4I55G6O4CLE4BBHCE73';
+    const secret = 'SBZ7EYXHNB4WPPIWC5YAMH2U4L4QU6DKYXQWG4I55G6O4CLE4BBHCE73';
     return {
         config: {
             STELLAR_NETWORK: 'testnet',
@@ -78,6 +79,30 @@ function makeMockAccount(publicKey) {
         vitest_1.vi.clearAllMocks();
         tool = new SorobanQueryTool_1.SorobanQueryTool();
         vitest_1.vi.mocked(rpcClient.loadAccount).mockResolvedValue(makeMockAccount('GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5'));
+    });
+    (0, vitest_1.describe)('Successful query', () => {
+        (0, vitest_1.it)('returns parsed ScVal from simulation result', async () => {
+            vitest_1.vi.mocked(rpcClient.loadAccount).mockResolvedValue(makeMockAccount('GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5'));
+            const expectedScVal = (0, stellar_sdk_1.nativeToScVal)(42, { type: 'u32' });
+            vitest_1.vi.mocked(rpcClient.prepareSorobanTx).mockResolvedValue(expectedScVal);
+            const result = await tool.query({
+                contractId: VALID_CONTRACT,
+                method: 'balance',
+                args: [],
+            });
+            (0, vitest_1.expect)(result.simulationResult).toBe(expectedScVal);
+        });
+    });
+    (0, vitest_1.describe)('Simulation failure', () => {
+        (0, vitest_1.it)('propagates simulation error', async () => {
+            vitest_1.vi.mocked(rpcClient.loadAccount).mockResolvedValue(makeMockAccount('GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5'));
+            vitest_1.vi.mocked(rpcClient.prepareSorobanTx).mockRejectedValue(new Error('Soroban query failed: Contract error: insufficient balance'));
+            await (0, vitest_1.expect)(tool.query({
+                contractId: VALID_CONTRACT,
+                method: 'balance',
+                args: [],
+            })).rejects.toThrow(/Soroban query failed/);
+        });
     });
     (0, vitest_1.it)('calls prepareSorobanTx for valid input', async () => {
         vitest_1.vi.mocked(rpcClient.prepareSorobanTx).mockResolvedValue({});

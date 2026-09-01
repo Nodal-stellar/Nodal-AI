@@ -16,15 +16,15 @@
  *   config.AGENT_PUBLIC_KEY     // derived G-address, safe to log
  *   config.agentKeypair()       // call-site requests the Keypair explicitly
  */
-import { z } from "zod";
-import { Keypair } from "@stellar/stellar-sdk";
+import { z } from 'zod';
+import { Keypair } from '@stellar/stellar-sdk';
 export interface AgentConfig {
     /**
      * The Stellar network to target.
      * Enforced by EnvSchema to be one of: "testnet" | "mainnet" | "futurenet".
      * Defaults to "testnet".
      */
-    readonly STELLAR_NETWORK: "testnet" | "mainnet" | "futurenet";
+    readonly STELLAR_NETWORK: 'testnet' | 'mainnet' | 'futurenet';
     /**
      * The Stellar Horizon server URL.
      * Validated by EnvSchema to be a valid URL string (e.g. "https://horizon-testnet.stellar.org").
@@ -116,15 +116,32 @@ export interface AgentConfig {
      */
     readonly SPENDING_WINDOW_MS: number;
     /**
+     * Time-to-live, in milliseconds, for a cached Horizon account record.
+     * Defaults to 30,000. Set to 0 to disable caching entirely.
+     */
+    readonly ACCOUNT_CACHE_TTL_MS: number;
+    /**
      * Per-call RPC timeout in milliseconds.
      * Defaults to RETRY_DELAY_MS * MAX_RETRIES * 2 when RPC_TIMEOUT_MS env var is absent.
      */
     readonly RPC_TIMEOUT_MS: number;
     /**
+     * Cache TTL in milliseconds for Stellar TOML requests.
+     * Defaults to 300,000 (5 minutes).
+     */
+    readonly TOML_CACHE_TTL_MS: number;
+    /**
      * Maximum number of x402 payments allowed per 60-second sliding window.
      * Defaults to 10. Prevents rapid-fire calls from exhausting the agent balance.
      */
     readonly MAX_X402_PAYMENTS_PER_MINUTE: number;
+    /**
+     * How long (ms) a used x402 nonce is kept for replay protection before it can
+     * be evicted. Defaults to 86_400_000 (24 hours). A used nonce only needs to
+     * outlive its challenge, so anything past this window is dead weight that
+     * would otherwise grow the store without bound.
+     */
+    readonly X402_NONCE_TTL_MS: number;
     /**
      * Maximum Soroban transaction fee in stroops (1 stroop = 0.0000001 XLM).
      * Defaults to 1_000_000 (0.1 XLM). Prevents resource-inflated fee attacks.

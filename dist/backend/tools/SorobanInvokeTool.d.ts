@@ -4,9 +4,46 @@
  *
  * MANDATORY simulation step enforced before any broadcast.
  */
-import { Transaction, xdr } from "@stellar/stellar-sdk";
-import { z } from "zod";
+import { Transaction, xdr } from '@stellar/stellar-sdk';
+import { z } from 'zod';
 export declare const SOROBAN_TX_TIMEOUT = 30;
+/**
+ * Alias for SOROBAN_TX_TIMEOUT — exported under both names so that callers
+ * importing either identifier resolve to the same value.
+ */
+export declare const SOROBAN_TX_TIMEOUT_SECONDS = 30;
+/**
+ * Decimal places of Stellar Asset Contract (SAC) token amounts.
+ *
+ * A SAC is the tokenized form of a classic Stellar asset, and like the
+ * underlying asset it denominates amounts in 7-decimal base units. The
+ * spending limit (`AGENT_SPENDING_LIMIT`) is expressed in the same decimal
+ * units as classic payment amounts, so simulated SAC transfer amounts are
+ * converted with this scale before being compared.
+ */
+export declare const SAC_TOKEN_DECIMALS = 7;
+/**
+ * Convert a raw SAC token amount (integer base units) to the 7-decimal string
+ * used for payment amounts and spending-limit comparisons.
+ *
+ * @example `sacRawToDecimal(1000000000n)` → `"100.0000000"`
+ */
+export declare function sacRawToDecimal(raw: bigint): string;
+/**
+ * Sum the simulated SAC transfers that debit `agentAddress`.
+ *
+ * Contract invocations can move funds internally via the Stellar Asset
+ * Contract (e.g. `transfer`, `transfer_from`, `burn`). Those moves are visible
+ * in the simulation's diagnostic events: the topic starts with the function
+ * name symbol, followed by the involved addresses, and the data carries the
+ * amount as an i128. Only events that debit the agent are counted, so incoming
+ * transfers and transfers between third parties do not consume the cap.
+ *
+ * @param events - Diagnostic events returned by the Soroban simulation.
+ * @param agentAddress - Public key of the agent account (the debited party to match).
+ * @returns Total amount in raw SAC base units, or `0n` when nothing matches.
+ */
+export declare function extractSacTransferTotal(events: readonly xdr.DiagnosticEvent[], agentAddress: string): bigint;
 /**
  * Zod schema for {@link SorobanInvokeTool.execute} inputs.
  *
@@ -134,6 +171,19 @@ export declare class SorobanInvokeTool {
      *   within the polling window.
      */
     execute(rawInput: unknown): Promise<SorobanInvokeResult>;
+    /**
+     * Enforce the spending cap against the simulated internal SAC transfers.
+     *
+     * Mirrors `assertWithinSpendingLimit` in agent.ts: rejects the invocation
+     * when the simulated transfers that debit the agent exceed the configured
+     * `AGENT_SPENDING_LIMIT`, or the hardcoded `MAINNET_SPENDING_CAP` on
+     * mainnet. When `record` is true (i.e. the transaction will be broadcast)
+     * the total is also recorded into the rolling spending window so contract
+     * spends count toward the cumulative cap alongside regular payments.
+     *
+     * Invocations that move nothing (total `0n`) skip the checks entirely.
+     */
+    private assertSacTransfersWithinSpendingLimit;
     /**
      * Poll Soroban RPC until the transaction reaches a terminal state.
      *
