@@ -9,16 +9,24 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.logger = void 0;
+exports.logger = exports.REDACT_PATHS = void 0;
 exports.createLogger = createLogger;
 exports.generateCorrelationId = generateCorrelationId;
 const pino_1 = __importDefault(require("pino"));
-const isDev = process.env.NODE_ENV !== "production";
+const isDev = process.env.NODE_ENV !== 'production';
+// Transaction memos (e.g. the nonce slices X402PaymentTool writes) can carry
+// caller-supplied, potentially user-identifiable strings, so they're stripped
+// from structured log output regardless of nesting depth.
+exports.REDACT_PATHS = ['*.memo', 'payload.memo', 'data.memo'];
 exports.logger = (0, pino_1.default)({
-    level: process.env.LOG_LEVEL ?? "info",
+    level: process.env.LOG_LEVEL ?? 'info',
+    redact: {
+        paths: exports.REDACT_PATHS,
+        remove: true,
+    },
     ...(isDev && {
         transport: {
-            target: "pino-pretty",
+            target: 'pino-pretty',
             options: { colorize: true },
         },
     }),

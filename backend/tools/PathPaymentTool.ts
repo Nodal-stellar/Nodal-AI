@@ -78,7 +78,7 @@ function buildMemo(memoType: string, memoValue: string | number | undefined): Me
   }
 
   switch (memoType) {
-    case 'id':
+    case 'id': {
       if (typeof memoValue !== 'number') {
         throw new Error('Memo ID must be a number');
       }
@@ -88,7 +88,8 @@ function buildMemo(memoType: string, memoValue: string | number | undefined): Me
         throw new Error('Memo ID must be a 64-bit unsigned integer (0 to 2^64-1)');
       }
       return Memo.id(id.toString());
-    case 'hash':
+    }
+    case 'hash': {
       if (typeof memoValue !== 'string') {
         throw new Error('Memo hash must be a string');
       }
@@ -101,7 +102,8 @@ function buildMemo(memoType: string, memoValue: string | number | undefined): Me
         throw new Error('Memo hash must contain only valid hex characters');
       }
       return Memo.hash(hashHex);
-    case 'return':
+    }
+    case 'return': {
       if (typeof memoValue !== 'string') {
         throw new Error('Memo return must be a string');
       }
@@ -114,6 +116,7 @@ function buildMemo(memoType: string, memoValue: string | number | undefined): Me
         throw new Error('Memo return must contain only valid hex characters');
       }
       return Memo.return(returnHex);
+    }
     case 'text':
     default:
       if (typeof memoValue !== 'string') {

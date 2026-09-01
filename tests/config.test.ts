@@ -13,9 +13,13 @@ class MockSecretsManagerClient {
   send = mockSend;
 }
 
+// The implementation is passed directly to vi.fn() (its "original"), not
+// chained on afterward via .mockImplementation() — vitest.config.ts sets
+// restoreMocks: true, which wipes a chained .mockImplementation() override
+// between tests but leaves vi.fn()'s own baseline implementation intact.
 vi.mock('@aws-sdk/client-secrets-manager', () => ({
-  SecretsManagerClient: vi.fn().mockImplementation(() => new MockSecretsManagerClient()),
-  GetSecretValueCommand: vi.fn().mockImplementation((args: any) => args),
+  SecretsManagerClient: vi.fn(() => new MockSecretsManagerClient()),
+  GetSecretValueCommand: vi.fn((args: any) => args),
 }));
 
 describe('config.ts startup validation', () => {

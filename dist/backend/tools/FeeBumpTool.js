@@ -11,13 +11,15 @@ const zod_1 = require("zod");
 const config_1 = require("../config");
 const logger_1 = require("../logger");
 const rpc_client_1 = require("../rpc_client");
+const errors_1 = require("../errors");
+const xdr_1 = require("../types/xdr");
 const logger_2 = require("../utils/logger");
 const StellarPaymentTool_1 = require("./StellarPaymentTool");
-const log = (0, logger_2.createLogger)("fee-bump");
+const log = (0, logger_2.createLogger)('fee-bump');
 // ─── Input schema ─────────────────────────────────────────────────────────────
 exports.FeeBumpInputSchema = zod_1.z.object({
-    innerTxXdr: zod_1.z.string().min(1, "innerTxXdr must be a non-empty base64 XDR string"),
-    feeAccount: zod_1.z.string().length(56, "Invalid Stellar public key").optional(),
+    innerTxXdr: zod_1.z.string().min(1, 'innerTxXdr must be a non-empty base64 XDR string'),
+    feeAccount: zod_1.z.string().length(56, 'Invalid Stellar public key').optional(),
     baseFeeMultiplier: zod_1.z.number().int().min(2).default(2),
 });
 // ─── Tool implementation ──────────────────────────────────────────────────────
@@ -33,17 +35,23 @@ class FeeBumpTool {
     }
     async execute(rawInput) {
         const input = exports.FeeBumpInputSchema.parse(rawInput);
+        try {
+            (0, xdr_1.validateXDR)(input.innerTxXdr);
+        }
+        catch (err) {
+            throw new errors_1.ValidationError(err instanceof Error ? err.message : 'Invalid inner transaction XDR', err);
+        }
         const feeAccount = input.feeAccount ?? this.keypair.publicKey();
         // Deserialize the inner transaction from XDR
         let innerTx;
         try {
             innerTx = stellar_sdk_1.TransactionBuilder.fromXDR(input.innerTxXdr, this.networkPassphrase);
         }
-        catch {
-            throw new Error(`Invalid inner transaction XDR: unable to deserialize`);
+        catch (err) {
+            throw new errors_1.ValidationError(`Invalid inner transaction XDR: unable to deserialize`, err);
         }
         if (innerTx instanceof stellar_sdk_1.FeeBumpTransaction) {
-            throw new Error("Inner transaction must not itself be a fee-bump transaction");
+            throw new Error('Inner transaction must not itself be a fee-bump transaction');
         }
         // ── Network passphrase guard ──────────────────────────────────────────────
         // XDR does not embed the network passphrase, so TransactionBuilder.fromXDR()
@@ -60,8 +68,8 @@ class FeeBumpTool {
             if (sourceSig) {
                 const sigValid = sourceKeypair.verify(innerTx.hash(), sourceSig.signature());
                 if (!sigValid) {
-                    throw new Error("Inner transaction was signed for a different network passphrase. " +
-                        "Ensure the inner XDR originates from the same network as the agent " +
+                    throw new Error('Inner transaction was signed for a different network passphrase. ' +
+                        'Ensure the inner XDR originates from the same network as the agent ' +
                         `(${this.networkPassphrase}).`);
                 }
             }
@@ -74,9 +82,9 @@ class FeeBumpTool {
         const newFeePerOp = Math.max(feePerOp * input.baseFeeMultiplier, parseInt(stellar_sdk_1.BASE_FEE, 10));
         // Fee-bump fee must be at least (inner ops + 1) * newFeePerOp per Stellar protocol
         const feeBumpFee = String((operationCount + 1) * newFeePerOp);
-        logger_1.logger.info("Building fee-bump transaction", {
+        logger_1.logger.info('Building fee-bump transaction', {
             feeAccount,
-            innerTxHash: innerTx.hash().toString("hex"),
+            innerTxHash: innerTx.hash().toString('hex'),
             baseFeeMultiplier: input.baseFeeMultiplier,
             feeBumpFee,
         });

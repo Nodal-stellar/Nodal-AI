@@ -37,6 +37,8 @@ import { InflationTool } from './tools/InflationTool';
 import { SponsoredAccountTool } from './tools/SponsoredAccountTool';
 import { AnchorQuoteTool } from './tools/AnchorQuoteTool';
 import { SorobanDeployTool } from './tools/SorobanDeployTool';
+import { SwapTool } from './tools/SwapTool';
+import { AccountHistoryTool } from './tools/AccountHistoryTool';
 import { listen as listenContractEvents } from './tools/ContractEventListener';
 
 import { horizonServer } from './rpc_client';
@@ -102,7 +104,9 @@ export type TaskType =
   | 'sponsored_account'
   | 'anchor_quote'
   | 'inflation'
-  | 'soroban_deploy';
+  | 'soroban_deploy'
+  | 'swap'
+  | 'account_history';
 
 export interface AgentTask {
   type: TaskType;
@@ -249,6 +253,8 @@ export class PayFiAgent extends EventEmitter {
   private anchorQuoteTool: AnchorQuoteTool;
   private inflationTool: InflationTool;
   private sorobanDeployTool: SorobanDeployTool;
+  private swapTool: SwapTool;
+  private accountHistoryTool: AccountHistoryTool;
 
   private activeTasks = 0;
   private isDraining = false;
@@ -293,6 +299,8 @@ export class PayFiAgent extends EventEmitter {
     this.anchorQuoteTool = new AnchorQuoteTool();
     this.inflationTool = new InflationTool(config.agentKeypair().secret());
     this.sorobanDeployTool = new SorobanDeployTool();
+    this.swapTool = new SwapTool(config.agentKeypair().secret());
+    this.accountHistoryTool = new AccountHistoryTool();
 
     // ── Register event listeners — every registration is mirrored in destroy() ──
     const onError = (err: Error) => {
@@ -355,6 +363,11 @@ export class PayFiAgent extends EventEmitter {
         },
         onerror: (event: MessageEvent) => {
           logger.warn('Payment stream error', { error: String(event) });
+          // The underlying connection is dead — tear it down so `_streamStop`
+          // doesn't keep pointing at a broken stream forever, which would
+          // otherwise permanently block a future startListening() call (its
+          // early-return guard only checks whether `_streamStop` is set).
+          this.stopListening();
         },
       });
 

@@ -58,7 +58,7 @@ const client_1 = require("./db/client");
 const error_handler_1 = require("./middleware/error_handler");
 const logger_1 = require("./utils/logger");
 const agent_1 = require("./agent");
-const log = (0, logger_1.createLogger)("health-server");
+const log = (0, logger_1.createLogger)('health-server');
 /**
  * Bound on a single probe.
  *
@@ -71,7 +71,7 @@ const PROBE_TIMEOUT_MS = 3_000;
 async function withTimeout(work) {
     let timer;
     const timeout = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error("probe timed out")), PROBE_TIMEOUT_MS);
+        timer = setTimeout(() => reject(new Error('probe timed out')), PROBE_TIMEOUT_MS);
     });
     try {
         return await Promise.race([work, timeout]);
@@ -84,11 +84,11 @@ async function withTimeout(work) {
 async function checkHorizon() {
     try {
         await withTimeout(rpc_client_1.horizonServer.fetchBaseFee());
-        return "up";
+        return 'up';
     }
     catch (err) {
-        log.warn({ msg: "Horizon health probe failed", err: String(err) });
-        return "down";
+        log.warn({ msg: 'Horizon health probe failed', err: String(err) });
+        return 'down';
     }
 }
 /**
@@ -102,20 +102,20 @@ async function checkHorizon() {
 async function checkSoroban() {
     try {
         await withTimeout(rpc_client_1.sorobanServer.getNetwork());
-        return "up";
+        return 'up';
     }
     catch (err) {
-        log.warn({ msg: "Soroban RPC health probe failed", err: String(err) });
-        return "down";
+        log.warn({ msg: 'Soroban RPC health probe failed', err: String(err) });
+        return 'down';
     }
 }
 async function checkDatabase() {
     try {
-        return (await withTimeout(client_1.db.healthCheck())) ? "up" : "down";
+        return (await withTimeout(client_1.db.healthCheck())) ? 'up' : 'down';
     }
     catch (err) {
-        log.warn({ msg: "Database health probe failed", err: String(err) });
-        return "down";
+        log.warn({ msg: 'Database health probe failed', err: String(err) });
+        return 'down';
     }
 }
 // ─── Auth helper ──────────────────────────────────────────────────────────────
@@ -127,15 +127,15 @@ const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 function isAuthenticated(req) {
     if (!WEBHOOK_SECRET)
         return true;
-    const auth = req.headers["authorization"];
+    const auth = req.headers['authorization'];
     if (!auth)
         return false;
-    const [scheme, token] = auth.split(" ");
-    return scheme?.toLowerCase() === "bearer" && token === WEBHOOK_SECRET;
+    const [scheme, token] = auth.split(' ');
+    return scheme?.toLowerCase() === 'bearer' && token === WEBHOOK_SECRET;
 }
-const HEALTH_PATH = "/health";
-const STATUS_PATH = "/status";
-const SPENDING_PATH = "/spending";
+const HEALTH_PATH = '/health';
+const STATUS_PATH = '/status';
+const SPENDING_PATH = '/spending';
 /**
  * Creates and returns the health-check HTTP server.
  * Does NOT call `.listen()` — the caller (typically `index.ts`) is responsible
@@ -144,46 +144,50 @@ const SPENDING_PATH = "/spending";
 function createHealthServer() {
     const server = http.createServer((req, res) => {
         // ── GET /health ────────────────────────────────────────────────────────
-        if (req.method === "GET" && req.url === HEALTH_PATH) {
+        if (req.method === 'GET' && req.url === HEALTH_PATH) {
             const body = JSON.stringify({
-                status: "ok",
+                status: 'ok',
                 network: config_1.config.STELLAR_NETWORK,
                 publicKey: config_1.config.AGENT_PUBLIC_KEY,
             });
             res.writeHead(200, {
-                "Content-Type": "application/json",
-                "Content-Length": Buffer.byteLength(body),
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body),
             });
             res.end(body);
             return;
         }
         // ── GET /status ────────────────────────────────────────────────────────
-        if (req.method === "GET" && req.url === STATUS_PATH) {
+        if (req.method === 'GET' && req.url === STATUS_PATH) {
             try {
                 const results = (0, persistence_1.getResults)(10);
                 const body = JSON.stringify({ results });
                 res.writeHead(200, {
-                    "Content-Type": "application/json",
-                    "Content-Length": Buffer.byteLength(body),
+                    'Content-Type': 'application/json',
+                    'Content-Length': Buffer.byteLength(body),
                 });
                 res.end(body);
             }
             catch (err) {
-                const message = err instanceof Error ? err.message : String(err);
-                const body = JSON.stringify({ error: message });
-                res.writeHead(500, {
-                    "Content-Type": "application/json",
-                    "Content-Length": Buffer.byteLength(body),
+                // Route through the shared handler so a StructuredError gets the status
+                // code that describes it instead of a blanket 500 - and so an internal
+                // fault's message is not echoed to an unauthenticated caller.
+                const errorResponse = (0, error_handler_1.handleError)(err);
+                const body = JSON.stringify(errorResponse);
+                res.writeHead(errorResponse.status, {
+                    'Content-Type': 'application/json',
+                    'Content-Length': Buffer.byteLength(body),
+                    ...errorResponse.headers,
                 });
                 res.end(body);
             }
             return;
         }
         // ── GET /spending ──────────────────────────────────────────────────────
-        if (req.method === "GET" && req.url === SPENDING_PATH) {
+        if (req.method === 'GET' && req.url === SPENDING_PATH) {
             if (!isAuthenticated(req)) {
-                res.writeHead(401, { "Content-Type": "application/json" });
-                res.end(JSON.stringify({ error: "Unauthorized" }));
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Unauthorized' }));
                 return;
             }
             const total = agent_1.spendingTracker.total();
@@ -192,18 +196,18 @@ function createHealthServer() {
                 total,
                 limit,
                 windowMs: config_1.config.SPENDING_WINDOW_MS,
-                percentUsed: total / limit * 100,
+                percentUsed: (total / limit) * 100,
             });
             res.writeHead(200, {
-                "Content-Type": "application/json",
-                "Content-Length": Buffer.byteLength(body),
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body),
             });
             res.end(body);
             return;
         }
         // ── 404 for everything else ────────────────────────────────────────────
-        res.writeHead(404, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Not Found" }));
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not Found' }));
     });
     return server;
 }
@@ -231,26 +235,32 @@ async function handleHealth(_req, res) {
             checkSoroban(),
             checkDatabase(),
         ]);
-        const allUp = horizon === "up" && soroban === "up" && database === "up";
+        const allUp = horizon === 'up' && soroban === 'up' && database === 'up';
         const statusCode = allUp ? 200 : 503;
         const body = {
-            status: allUp ? "ok" : "degraded",
+            status: allUp ? 'ok' : 'degraded',
             components: { horizon, soroban, database },
         };
         const payload = JSON.stringify(body);
         res.writeHead(statusCode, {
-            "Content-Type": "application/json",
-            "Content-Length": Buffer.byteLength(payload),
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
         });
         res.end(payload);
     }
     catch (err) {
         const errorResponse = (0, error_handler_1.handleError)(err);
-        log.error({ msg: "Unhandled request error", status: errorResponse.status, type: errorResponse.type });
+        log.error({
+            msg: 'Unhandled request error',
+            status: errorResponse.status,
+            type: errorResponse.type,
+        });
         const payload = JSON.stringify(errorResponse);
         res.writeHead(errorResponse.status, {
-            "Content-Type": "application/json",
-            "Content-Length": Buffer.byteLength(payload),
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
+            // e.g. Retry-After on a 429 from RateLimitError
+            ...errorResponse.headers,
         });
         res.end(payload);
     }
@@ -258,30 +268,36 @@ async function handleHealth(_req, res) {
 async function handleResults(req, res, parsedUrl) {
     // Auth guard — skipped when WEBHOOK_SECRET is not configured
     if (!isAuthenticated(req)) {
-        res.writeHead(401, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Unauthorized" }));
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized' }));
         return;
     }
     try {
-        const limitParam = parsedUrl.searchParams.get("limit");
-        const offsetParam = parsedUrl.searchParams.get("offset");
+        const limitParam = parsedUrl.searchParams.get('limit');
+        const offsetParam = parsedUrl.searchParams.get('offset');
         const limit = limitParam ? Math.max(1, Math.min(1000, parseInt(limitParam, 10) || 100)) : 100;
         const offset = offsetParam ? Math.max(0, parseInt(offsetParam, 10) || 0) : 0;
         const results = (0, persistence_1.getResults)(limit, offset);
         const payload = JSON.stringify(results);
         res.writeHead(200, {
-            "Content-Type": "application/json",
-            "Content-Length": Buffer.byteLength(payload),
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
         });
         res.end(payload);
     }
     catch (err) {
         const errorResponse = (0, error_handler_1.handleError)(err);
-        log.error({ msg: "Results endpoint error", status: errorResponse.status, type: errorResponse.type });
+        log.error({
+            msg: 'Results endpoint error',
+            status: errorResponse.status,
+            type: errorResponse.type,
+        });
         const payload = JSON.stringify(errorResponse);
         res.writeHead(errorResponse.status, {
-            "Content-Type": "application/json",
-            "Content-Length": Buffer.byteLength(payload),
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
+            // e.g. Retry-After on a 429 from RateLimitError
+            ...errorResponse.headers,
         });
         res.end(payload);
     }

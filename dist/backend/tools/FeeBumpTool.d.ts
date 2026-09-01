@@ -3,7 +3,7 @@
  * Wraps any failed transaction in a fee-bump envelope for sponsored retry.
  * Allows the agent to pay fees on behalf of a transaction signed by a different account.
  */
-import { z } from "zod";
+import { z } from 'zod';
 export declare const FeeBumpInputSchema: z.ZodObject<{
     innerTxXdr: z.ZodString;
     feeAccount: z.ZodOptional<z.ZodString>;

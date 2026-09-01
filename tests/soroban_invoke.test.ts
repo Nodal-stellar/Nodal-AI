@@ -37,6 +37,7 @@ import {
   SOROBAN_TX_TIMEOUT,
 } from '../backend/tools/SorobanInvokeTool';
 import * as rpcClient from '../backend/rpc_client';
+import type { MockSorobanServer } from './fixtures/MockSorobanServer';
 import { ContractError } from '../backend/errors';
 import { spendingTracker } from '../backend/spending_tracker';
 
@@ -50,22 +51,13 @@ import { spendingTracker } from '../backend/spending_tracker';
  */
 
 vi.mock('../backend/rpc_client', async () => {
-  const { Networks } = await import('@stellar/stellar-sdk');
-  return {
-    loadAccount: vi.fn(),
-    submitTransaction: vi.fn(),
-    simulateSorobanTx: vi.fn(),
-    prepareSorobanTx: vi.fn(),
-    prepareSorobanTxWithEvents: vi.fn(),
-    resolveNetworkPassphrase: (_network: string) => Networks.TESTNET,
-    horizonServer: {},
-    sorobanServer: {
-      sendTransaction: vi.fn(),
-      getTransaction: vi.fn(),
-    },
-  };
+  const { createMockSorobanServer } = await import('./fixtures/MockSorobanServer');
+  return createMockSorobanServer();
 });
 
+// The mocked `rpc_client` module IS the MockSorobanServer instance, so this
+// cast exposes the fixture's convenience API (reset, setPrepared, ...) to the
+// suite below — matching the pattern in tests/payment.test.ts.
 const mockSorobanServer = rpcClient as unknown as MockSorobanServer;
 
 // The tool records simulated SAC transfers into the shared spending window.
@@ -174,12 +166,6 @@ function makeMockAccount(publicKey: string) {
  * Creates a mock prepared transaction that satisfies the post-sign signature guard.
  * sign() mutates `signatures` in place (matching real Stellar SDK behaviour).
  */
-function makeMockPreparedTx(): any {
-  const obj: any = {
-    signatures: [],
-    timeBounds: { minTime: 0, maxTime: Math.floor(Date.now() / 1000) + 300 },
-    fee: "100",
-  };
 function makeMockPreparedTx(fee = 500_000): any {
   const obj: any = { signatures: [], fee, timeBounds: {} };
   obj.sign = vi.fn().mockImplementation(() => {
@@ -656,12 +642,6 @@ describe('SorobanInvokeTool', () => {
       // Mock prepareSorobanTx to return a transaction whose sign() does nothing,
       // leaving the signatures array empty. timeBounds is set so the time-bounds
       // guard passes and the signature guard fires.
-      vi.mocked(rpcClient.prepareSorobanTx).mockResolvedValue({
-        sign: vi.fn(), // no-op — does NOT push to signatures
-        signatures: [], // empty signatures list — guard must catch this
-        timeBounds: { minTime: 0, maxTime: Math.floor(Date.now() / 1000) + 300 },
-        fee: "100",
-      // leaving the signatures array empty.
       vi.mocked(rpcClient.prepareSorobanTxWithEvents).mockResolvedValue({
         tx: {
           sign: vi.fn(), // no-op — does NOT push to signatures

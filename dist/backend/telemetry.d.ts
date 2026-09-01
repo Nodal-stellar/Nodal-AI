@@ -8,7 +8,7 @@
  *
  * Called once from backend/index.ts at startup.
  */
-import { Tracer } from "@opentelemetry/api";
+import { Tracer } from '@opentelemetry/api';
 /**
  * Initialise the OpenTelemetry SDK with OTLP HTTP exporters if
  * config.OTLP_ENDPOINT is defined.  Idempotent — subsequent calls

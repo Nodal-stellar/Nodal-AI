@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Keypair } from '@stellar/stellar-sdk';
 import { MultiSigPaymentTool, MultiSigInputSchema } from '../backend/tools/MultiSigPaymentTool';
 import * as rpcClient from '../backend/rpc_client';
 import { ValidationError } from '../backend/errors';

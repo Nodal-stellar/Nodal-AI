@@ -9,22 +9,31 @@ const stellar_sdk_1 = require("@stellar/stellar-sdk");
 const zod_1 = require("zod");
 const config_1 = require("../config");
 const rpc_client_1 = require("../rpc_client");
+const errors_1 = require("../errors");
 const StellarPaymentTool_1 = require("./StellarPaymentTool");
-exports.MultiSigInputSchema = zod_1.z.object({
-    destination: zod_1.z.string().length(56, "Invalid Stellar public key"),
+exports.MultiSigInputSchema = zod_1.z
+    .object({
+    destination: zod_1.z.string().length(56, 'Invalid Stellar public key'),
     amount: zod_1.z
         .string()
-        .regex(/^(?!0(\.0+)?$)\d+(\.\d{1,7})?$/, "Amount must be a valid Stellar decimal")
-        .refine((v) => parseFloat(v) > 0, "Amount must be greater than zero"),
-    assetCode: zod_1.z.string().default("XLM"),
+        .regex(/^(?!0(\.0+)?$)\d+(\.\d{1,7})?$/, 'Amount must be a valid Stellar decimal')
+        .refine((v) => parseFloat(v) > 0, 'Amount must be greater than zero'),
+    assetCode: zod_1.z.string().default('XLM'),
     assetIssuer: zod_1.z.string().optional(),
     memo: zod_1.z
         .string()
-        .refine((v) => Buffer.byteLength(v, "utf8") <= 28, "Memo must be at most 28 bytes")
+        .refine((v) => Buffer.byteLength(v, 'utf8') <= 28, 'Memo must be at most 28 bytes')
         .optional(),
-    additionalSigners: zod_1.z.array(zod_1.z.string().length(56, "Invalid signer public key")),
+    additionalSigners: zod_1.z.array(zod_1.z
+        .string()
+        .length(56, 'Invalid signer public key')
+        .refine((value) => stellar_sdk_1.StrKey.isValidEd25519PublicKey(value), 'Invalid signer public key')),
     minSignatures: zod_1.z.number().int().min(1),
     signatures: zod_1.z.array(zod_1.z.string()).optional(),
+})
+    .refine((data) => data.minSignatures <= data.additionalSigners.length + 1, {
+    message: 'minSignatures exceeds total available signers (additionalSigners + 1)',
+    path: ['minSignatures'],
 });
 class MultiSigPaymentTool {
     keypair;
@@ -34,16 +43,19 @@ class MultiSigPaymentTool {
         this.networkPassphrase = (0, rpc_client_1.resolveNetworkPassphrase)(config_1.config.STELLAR_NETWORK);
     }
     async execute(rawInput) {
-        const input = exports.MultiSigInputSchema.parse(rawInput);
-        if (input.minSignatures > input.additionalSigners.length + 1) {
-            throw new Error(`minSignatures (${input.minSignatures}) exceeds total available signers (${input.additionalSigners.length + 1})`);
+        const parsed = exports.MultiSigInputSchema.safeParse(rawInput);
+        if (!parsed.success) {
+            const issue = parsed.error.issues[0];
+            throw new errors_1.ValidationError(issue ? issue.message : parsed.error.message);
         }
-        if (input.assetCode !== "XLM" && !input.assetIssuer) {
+        const input = parsed.data;
+        if (input.minSignatures > input.additionalSigners.length + 1) {
+            throw new errors_1.ValidationError(`minSignatures (${input.minSignatures}) exceeds total available signers (${input.additionalSigners.length + 1})`);
+        }
+        if (input.assetCode !== 'XLM' && !input.assetIssuer) {
             throw new Error(`Asset issuer is required for non-native asset ${input.assetCode}`);
         }
-        const asset = input.assetCode === "XLM"
-            ? stellar_sdk_1.Asset.native()
-            : new stellar_sdk_1.Asset(input.assetCode, input.assetIssuer);
+        const asset = input.assetCode === 'XLM' ? stellar_sdk_1.Asset.native() : new stellar_sdk_1.Asset(input.assetCode, input.assetIssuer);
         const account = await (0, rpc_client_1.loadAccount)(this.keypair.publicKey());
         const builder = new stellar_sdk_1.TransactionBuilder(account, {
             fee: stellar_sdk_1.BASE_FEE,
@@ -60,7 +72,7 @@ class MultiSigPaymentTool {
             // Apply additional signatures from provided decorated signatures (XDR-encoded)
             for (const sigXdr of input.signatures) {
                 try {
-                    const decoratedSig = stellar_sdk_1.xdr.DecoratedSignature.fromXDR(sigXdr, "base64");
+                    const decoratedSig = stellar_sdk_1.xdr.DecoratedSignature.fromXDR(sigXdr, 'base64');
                     tx.addDecoratedSignature(decoratedSig);
                 }
                 catch (err) {

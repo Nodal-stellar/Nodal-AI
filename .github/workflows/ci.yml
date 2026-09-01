@@ -66,10 +66,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # dtolnay/rust-toolchain has no "file" toolchain mode (that value was
+      # passed straight through to `rustup toolchain install file`, which
+      # always failed). rustup's own override resolution already reads
+      # ./rust-toolchain.toml — installing it explicitly here just makes
+      # that install happen up front instead of lazily on first `cargo`.
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: file
+        run: rustup show
 
       - name: Run Rust tests
         run: cargo test --manifest-path contracts/escrow/Cargo.toml
@@ -80,11 +83,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # See test-rust's "Install Rust" step: dtolnay/rust-toolchain has no
+      # "file" mode. rustfmt/clippy come from rust-toolchain.toml's
+      # `components` list, so no need to name them again here.
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: file
-          components: clippy, rustfmt
+        run: rustup show
 
       - name: Run Clippy
         run: cargo clippy --manifest-path contracts/escrow/Cargo.toml -- -D warnings
@@ -98,13 +101,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # See test-rust's "Install Rust" step for why this isn't the action.
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: file
+        run: rustup show
 
+      # Pinned: cargo-tarpaulin >=0.36 requires the edition2024 Cargo
+      # feature, which isn't stable until Cargo 1.85 — newer than this
+      # repo's pinned 1.78 toolchain — so `cargo install` without a version
+      # fails to even parse the crate's manifest. 0.31.5 is the newest
+      # release confirmed to install and run under 1.78.
       - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin --locked
+        run: cargo install cargo-tarpaulin --locked --version 0.31.5
 
       - name: Run cargo-tarpaulin
         run: cargo tarpaulin --manifest-path contracts/escrow/Cargo.toml --out Html --output-dir coverage/rust
@@ -115,10 +122,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # See test-rust's "Install Rust" step for why this isn't the action.
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: file
+        run: rustup show
 
       - name: Add wasm32 target
         run: rustup target add wasm32-unknown-unknown
@@ -145,7 +151,10 @@ jobs:
       - name: Secret scanning with trufflehog
         uses: trufflesecurity/trufflehog@v3.95.7
         with:
-          extra_args: --config .trufflehog.yml --results=verified,unknown
+          extra_args: >-
+            --config .trufflehog.yml
+            --results=verified,unknown
+            --exclude-paths=.trufflehog-exclude-paths.txt
 
   audit-npm:
     runs-on: ubuntu-latest
@@ -206,16 +215,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: file
+      # cargo-audit itself (installed below) needs a newer rustc than the
+      # 1.78 pin in rust-toolchain.toml — recent releases require 1.81+,
+      # and the advisory database's own dependency (rustsec) needs a rustc
+      # new enough to parse CVSS 4.0 vectors, which now appear in current
+      # advisories and make older cargo-audit builds fail to even load the
+      # database. Installing a second, non-overriding toolchain and running
+      # cargo-audit under it (`+stable`) sidesteps both problems without
+      # touching the toolchain the contract itself builds/tests under.
+      - name: Install a toolchain for cargo-audit
+        run: rustup toolchain install stable --profile minimal
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        run: cargo +stable install cargo-audit --locked
 
+      # -f/--file, not --manifest-path: cargo-audit reads a Cargo.lock
+      # directly, it doesn't resolve a package graph from a Cargo.toml.
+      #
+      # RUSTSEC-2024-0344 (curve25519-dalek) and RUSTSEC-2026-0009 (time)
+      # are both pinned transitively by soroban-env-host/soroban-sdk 20.x's
+      # exact-version dependency pins — `cargo update -p` for either is
+      # rejected by the resolver, so fixing them here means waiting on an
+      # upstream soroban-sdk release, not a change this repo can make.
+      # Re-check this ignore list whenever soroban-sdk is upgraded.
       - name: Run cargo audit
-        run: cargo audit --manifest-path contracts/escrow/Cargo.toml
+        run: |
+          cargo +stable audit -f contracts/escrow/Cargo.lock \
+            --ignore RUSTSEC-2024-0344 \
+            --ignore RUSTSEC-2026-0009
 
   docs:
     runs-on: ubuntu-latest
@@ -229,7 +256,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci --legacy-peer-deps
+        run: npm ci
 
       - name: Generate API docs (TypeDoc)
         run: npm run docs:generate
@@ -250,6 +277,12 @@ jobs:
       # Validates every relative and external Markdown link across the repo's
       # root docs and the escrow contract docs, so stale references (renamed
       # files, dead external URLs) fail CI instead of rotting silently.
+      #
+      # The stellar.org/wave exclude below is a link, not a comment — `#`
+      # inside this `args: >-` block scalar is literal text, not YAML syntax,
+      # so any explanation has to live up here instead: CONTRIBUTING.md's
+      # Stellar Wave programme link 404s upstream (stellar.org has
+      # retired/moved the page); this isn't something the repo can fix.
       - name: Check Markdown links
         uses: lycheeverse/lychee-action@v2
         with:
@@ -257,6 +290,7 @@ jobs:
             --no-progress
             --exclude "^https?://localhost(:[0-9]+)?"
             --exclude "^#"
+            --exclude "^https://stellar\.org/wave$"
             ./*.md
             ./contracts/escrow/*.md
           fail: true

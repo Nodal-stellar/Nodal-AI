@@ -9,14 +9,32 @@ const opossum_1 = __importDefault(require("opossum"));
 // process.exit(1) when required env vars are absent — so importing the module
 // under test would kill the run before a single assertion. Mocked with valid
 // values; the breaker logic under test never touches the network.
-vitest_1.vi.mock("../backend/config", () => ({
+vitest_1.vi.mock('../backend/config', () => ({
     config: {
-        HORIZON_URL: "https://horizon-testnet.stellar.org",
-        SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org",
-        STELLAR_NETWORK: "testnet",
+        HORIZON_URL: 'https://horizon-testnet.stellar.org',
+        SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org',
+        STELLAR_NETWORK: 'testnet',
         MAX_RETRIES: 1,
         RETRY_DELAY_MS: 1,
     },
+}));
+// attachBreakerTelemetry logs through the module-level `log` (a
+// createLogger("rpc-client") child logger) in backend/rpc_client.ts. Mock
+// utils/logger the same way tests/rpc_client.test.ts does, so `createLogger`
+// always hands back this one shared mock and its warn/info calls can be
+// asserted directly (#453).
+const { rpcClientLog } = vitest_1.vi.hoisted(() => ({
+    rpcClientLog: {
+        info: vitest_1.vi.fn(),
+        warn: vitest_1.vi.fn(),
+        error: vitest_1.vi.fn(),
+        debug: vitest_1.vi.fn(),
+    },
+}));
+vitest_1.vi.mock('../backend/utils/logger', () => ({
+    logger: { info: vitest_1.vi.fn(), warn: vitest_1.vi.fn(), error: vitest_1.vi.fn(), debug: vitest_1.vi.fn() },
+    createLogger: vitest_1.vi.fn(() => rpcClientLog),
+    generateCorrelationId: vitest_1.vi.fn(() => 'mock-id'),
 }));
 const rpc_client_1 = require("../backend/rpc_client");
 /**
@@ -35,8 +53,8 @@ async function driveToOpen(breaker) {
         await breaker.fire().catch(() => undefined);
     }
 }
-(0, vitest_1.describe)("RPC circuit breaker", () => {
-    (0, vitest_1.it)("uses thresholds that can actually trip", () => {
+(0, vitest_1.describe)('RPC circuit breaker', () => {
+    (0, vitest_1.it)('uses thresholds that can actually trip', () => {
         // A volumeThreshold at or below zero, or a 100% error threshold, would
         // mean the breaker never opens in practice.
         (0, vitest_1.expect)(rpc_client_1.RPC_BREAKER_OPTIONS.volumeThreshold).toBeGreaterThan(0);
@@ -44,20 +62,20 @@ async function driveToOpen(breaker) {
         (0, vitest_1.expect)(rpc_client_1.RPC_BREAKER_OPTIONS.errorThresholdPercentage).toBeLessThanOrEqual(100);
         (0, vitest_1.expect)(rpc_client_1.RPC_BREAKER_OPTIONS.resetTimeout).toBeGreaterThan(0);
     });
-    (0, vitest_1.it)("opens after the failure threshold is exceeded", async () => {
-        const breaker = (0, rpc_client_1.createRpcBreaker)("test-open", async () => {
-            throw new Error("upstream down");
+    (0, vitest_1.it)('opens after the failure threshold is exceeded', async () => {
+        const breaker = (0, rpc_client_1.createRpcBreaker)('test-open', async () => {
+            throw new Error('upstream down');
         });
         (0, vitest_1.expect)(breaker.opened).toBe(false);
         await driveToOpen(breaker);
         (0, vitest_1.expect)(breaker.opened).toBe(true);
         breaker.shutdown();
     });
-    (0, vitest_1.it)("rejects immediately while open instead of calling through", async () => {
+    (0, vitest_1.it)('rejects immediately while open instead of calling through', async () => {
         let calls = 0;
-        const breaker = (0, rpc_client_1.createRpcBreaker)("test-shortcircuit", async () => {
+        const breaker = (0, rpc_client_1.createRpcBreaker)('test-shortcircuit', async () => {
             calls++;
-            throw new Error("upstream down");
+            throw new Error('upstream down');
         });
         await driveToOpen(breaker);
         const callsWhenOpened = calls;
@@ -67,11 +85,11 @@ async function driveToOpen(breaker) {
         (0, vitest_1.expect)(calls).toBe(callsWhenOpened);
         breaker.shutdown();
     });
-    (0, vitest_1.it)("transitions to half-open after resetTimeout", async () => {
+    (0, vitest_1.it)('transitions to half-open after resetTimeout', async () => {
         vitest_1.vi.useFakeTimers();
         try {
-            const breaker = (0, rpc_client_1.createRpcBreaker)("test-halfopen", async () => {
-                throw new Error("upstream down");
+            const breaker = (0, rpc_client_1.createRpcBreaker)('test-halfopen', async () => {
+                throw new Error('upstream down');
             });
             await driveToOpen(breaker);
             (0, vitest_1.expect)(breaker.opened).toBe(true);
@@ -83,21 +101,21 @@ async function driveToOpen(breaker) {
             vitest_1.vi.useRealTimers();
         }
     });
-    (0, vitest_1.it)("closes on a successful call in the half-open state", async () => {
+    (0, vitest_1.it)('closes on a successful call in the half-open state', async () => {
         vitest_1.vi.useFakeTimers();
         let shouldFail = true;
         try {
-            const breaker = (0, rpc_client_1.createRpcBreaker)("test-close", async () => {
+            const breaker = (0, rpc_client_1.createRpcBreaker)('test-close', async () => {
                 if (shouldFail)
-                    throw new Error("upstream down");
-                return "ok";
+                    throw new Error('upstream down');
+                return 'ok';
             });
             await driveToOpen(breaker);
             vitest_1.vi.advanceTimersByTime(rpc_client_1.RPC_BREAKER_OPTIONS.resetTimeout + 1);
             (0, vitest_1.expect)(breaker.halfOpen).toBe(true);
             shouldFail = false;
             vitest_1.vi.useRealTimers();
-            await (0, vitest_1.expect)(breaker.fire()).resolves.toBe("ok");
+            await (0, vitest_1.expect)(breaker.fire()).resolves.toBe('ok');
             // Recovery must actually close the circuit, or traffic never resumes.
             (0, vitest_1.expect)(breaker.closed).toBe(true);
             breaker.shutdown();
@@ -106,28 +124,60 @@ async function driveToOpen(breaker) {
             vitest_1.vi.useRealTimers();
         }
     });
-    (0, vitest_1.it)("emits open, halfOpen and close events for telemetry", async () => {
+    (0, vitest_1.it)('emits open, halfOpen and close events for telemetry', async () => {
         vitest_1.vi.useFakeTimers();
         let shouldFail = true;
         try {
             const breaker = new opossum_1.default(async () => {
                 if (shouldFail)
-                    throw new Error("upstream down");
-                return "ok";
-            }, { ...rpc_client_1.RPC_BREAKER_OPTIONS, name: "test-telemetry" });
-            (0, rpc_client_1.attachBreakerTelemetry)(breaker, "test-telemetry");
+                    throw new Error('upstream down');
+                return 'ok';
+            }, { ...rpc_client_1.RPC_BREAKER_OPTIONS, name: 'test-telemetry' });
+            (0, rpc_client_1.attachBreakerTelemetry)(breaker, 'test-telemetry');
             const seen = [];
-            breaker.on("open", () => seen.push("open"));
-            breaker.on("halfOpen", () => seen.push("halfOpen"));
-            breaker.on("close", () => seen.push("close"));
+            breaker.on('open', () => seen.push('open'));
+            breaker.on('halfOpen', () => seen.push('halfOpen'));
+            breaker.on('close', () => seen.push('close'));
             await driveToOpen(breaker);
-            (0, vitest_1.expect)(seen).toContain("open");
+            (0, vitest_1.expect)(seen).toContain('open');
             vitest_1.vi.advanceTimersByTime(rpc_client_1.RPC_BREAKER_OPTIONS.resetTimeout + 1);
-            (0, vitest_1.expect)(seen).toContain("halfOpen");
+            (0, vitest_1.expect)(seen).toContain('halfOpen');
             shouldFail = false;
             vitest_1.vi.useRealTimers();
             await breaker.fire();
-            (0, vitest_1.expect)(seen).toContain("close");
+            (0, vitest_1.expect)(seen).toContain('close');
+            breaker.shutdown();
+        }
+        finally {
+            vitest_1.vi.useRealTimers();
+        }
+    });
+    // #453 — assert the actual log fields attachBreakerTelemetry emits on each
+    // state change, so a regression there (wrong field name, dropped circuit
+    // name, etc.) fails a test instead of only showing up in production logs.
+    (0, vitest_1.it)('logs structured warn/info telemetry with the correct fields on each state change', async () => {
+        vitest_1.vi.useFakeTimers();
+        let shouldFail = true;
+        try {
+            const breaker = new opossum_1.default(async () => {
+                if (shouldFail)
+                    throw new Error('upstream down');
+                return 'ok';
+            }, { ...rpc_client_1.RPC_BREAKER_OPTIONS, name: 'test-breaker' });
+            (0, rpc_client_1.attachBreakerTelemetry)(breaker, 'test-breaker');
+            await driveToOpen(breaker);
+            (0, vitest_1.expect)(rpcClientLog.warn).toHaveBeenCalledWith(vitest_1.expect.objectContaining({
+                circuit: 'test-breaker',
+                failures: vitest_1.expect.any(Number),
+            }), 'RPC circuit opened');
+            vitest_1.vi.advanceTimersByTime(rpc_client_1.RPC_BREAKER_OPTIONS.resetTimeout + 1);
+            (0, vitest_1.expect)(breaker.halfOpen).toBe(true);
+            (0, vitest_1.expect)(rpcClientLog.info).toHaveBeenCalledWith({ circuit: 'test-breaker' }, 'RPC circuit half-open');
+            shouldFail = false;
+            vitest_1.vi.useRealTimers();
+            await breaker.fire();
+            (0, vitest_1.expect)(breaker.closed).toBe(true);
+            (0, vitest_1.expect)(rpcClientLog.info).toHaveBeenCalledWith(vitest_1.expect.objectContaining({ circuit: 'test-breaker' }), 'RPC circuit closed');
             breaker.shutdown();
         }
         finally {

@@ -9,7 +9,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.db = exports.DatabaseManager = void 0;
 const logger_1 = require("../utils/logger");
 const persistence_1 = require("../persistence");
-const log = (0, logger_1.createLogger)("database");
+const log = (0, logger_1.createLogger)('database');
 class DatabaseManager {
     static instance = null;
     _isOpen = true;
@@ -41,14 +41,14 @@ class DatabaseManager {
             return true;
         }
         catch (err) {
-            log.error({ msg: "Database health probe failed", err: String(err) });
+            log.error({ msg: 'Database health probe failed', err: String(err) });
             return false;
         }
     }
     /** Flush pending writes and release the connection. */
     async close() {
         this._isOpen = false;
-        log.info({ msg: "Database connection closed" });
+        log.info({ msg: 'Database connection closed' });
     }
 }
 exports.DatabaseManager = DatabaseManager;

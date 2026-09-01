@@ -7,8 +7,9 @@
  * rather than relying on brittle string matching.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ConfigError = exports.TransactionFailureError = exports.ContractError = exports.UnauthorizedError = exports.RateLimitError = exports.ValidationError = exports.NetworkTimeoutError = exports.InsufficientFundsError = exports.StructuredError = exports.ErrorType = void 0;
+exports.SimulationBudgetError = exports.ConfigError = exports.TransactionFailureError = exports.ContractError = exports.UnauthorizedError = exports.RateLimitError = exports.ValidationError = exports.NetworkTimeoutError = exports.InsufficientFundsError = exports.StructuredError = exports.ErrorType = void 0;
 exports.getErrorType = getErrorType;
+exports.sanitizeCause = sanitizeCause;
 var ErrorType;
 (function (ErrorType) {
     ErrorType["InsufficientFunds"] = "INSUFFICIENT_FUNDS";
@@ -73,8 +74,15 @@ exports.UnauthorizedError = UnauthorizedError;
 class ContractError extends StructuredError {
     contractId;
     constructor(message, contractId, cause) {
-        super(message, ErrorType.ContractError, cause);
-        this.contractId = contractId;
+        const isContractId = typeof contractId === 'string' && contractId.length === 56 && contractId.startsWith('C');
+        const actualContractId = isContractId
+            ? contractId
+            : cause !== undefined
+                ? contractId
+                : undefined;
+        const actualCause = cause !== undefined ? cause : isContractId ? undefined : contractId;
+        super(message, ErrorType.ContractError, actualCause);
+        this.contractId = actualContractId;
         Object.setPrototypeOf(this, ContractError.prototype);
     }
 }
@@ -95,10 +103,38 @@ class ConfigError extends StructuredError {
     }
 }
 exports.ConfigError = ConfigError;
+class SimulationBudgetError extends StructuredError {
+    constructor(message, cause) {
+        super(message, ErrorType.ContractError, cause);
+        Object.setPrototypeOf(this, SimulationBudgetError.prototype);
+    }
+}
+exports.SimulationBudgetError = SimulationBudgetError;
 function getErrorType(error) {
     if (error instanceof StructuredError) {
         return error.errorType;
     }
     return ErrorType.UnknownError;
+}
+const SENSITIVE_CAUSE_KEYS = new Set(['secretKey', 'privateKey', 'seed', '_secretKey']);
+/**
+ * Recursively strips keys that may carry Stellar signing material (secretKey,
+ * privateKey, seed, _secretKey) from an error cause before it is attached to
+ * a thrown error, so it can't be exfiltrated via JSON-serialised logs/webhooks.
+ */
+function sanitizeCause(cause) {
+    if (Array.isArray(cause)) {
+        return cause.map(sanitizeCause);
+    }
+    if (cause !== null && typeof cause === 'object') {
+        const sanitized = {};
+        for (const [key, value] of Object.entries(cause)) {
+            if (SENSITIVE_CAUSE_KEYS.has(key))
+                continue;
+            sanitized[key] = sanitizeCause(value);
+        }
+        return sanitized;
+    }
+    return cause;
 }
 //# sourceMappingURL=errors.js.map

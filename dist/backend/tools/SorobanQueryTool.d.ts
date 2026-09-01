@@ -5,8 +5,8 @@
  * Always runs simulation via prepareSorobanTx and never broadcasts.
  * This is the safe default for AI-agent read operations.
  */
-import { xdr } from "@stellar/stellar-sdk";
-import { z } from "zod";
+import { xdr } from '@stellar/stellar-sdk';
+import { z } from 'zod';
 /**
  * Reuses the Soroban invoke input schema but omits `simulateOnly` because this
  * tool is always read-only.

@@ -96,10 +96,15 @@ describe('withBackoffGuard queuing behaviour', () => {
     const error = new Error('queued callback failed');
     const fn = vi.fn().mockRejectedValue(error);
     const resultPromise = withBackoffGuard(fn);
+    // Attach the rejection assertion before advancing timers — the queued
+    // callback settles resultPromise as soon as the timer fires, and leaving
+    // it unhandled until the next statement is enough for Node to flag it as
+    // an unhandled rejection even though this test does go on to handle it.
+    const assertion = expect(resultPromise).rejects.toThrow('queued callback failed');
 
     await vi.advanceTimersByTimeAsync(5000);
 
-    await expect(resultPromise).rejects.toThrow('queued callback failed');
+    await assertion;
   });
 
   it('does not strand a queued callback when a stale auto-clear timer fires mid-enqueue (concurrent enqueue + expiry race)', async () => {

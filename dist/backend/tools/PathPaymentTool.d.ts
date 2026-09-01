@@ -4,7 +4,7 @@
  * Enables sending one asset and having the recipient receive a different asset
  * through the Stellar DEX (e.g., send XLM, recipient receives USDC).
  */
-import { z } from "zod";
+import { z } from 'zod';
 export declare const PathPaymentInputSchema: z.ZodObject<{
     destination: z.ZodString;
     sendAsset: z.ZodObject<{
@@ -39,6 +39,7 @@ export declare const PathPaymentInputSchema: z.ZodObject<{
         code: string;
         issuer?: string | undefined;
     }>, "many">>>;
+    allowSelfPayment: z.ZodDefault<z.ZodOptional<z.ZodBoolean>>;
     memoType: z.ZodDefault<z.ZodOptional<z.ZodEnum<["text", "id", "hash", "return"]>>>;
     memo: z.ZodOptional<z.ZodUnion<[z.ZodString, z.ZodNumber]>>;
 }, "strip", z.ZodTypeAny, {
@@ -58,6 +59,7 @@ export declare const PathPaymentInputSchema: z.ZodObject<{
         issuer?: string | undefined;
     };
     destMinAmount: string;
+    allowSelfPayment: boolean;
     memo?: string | number | undefined;
 }, {
     destination: string;
@@ -77,6 +79,7 @@ export declare const PathPaymentInputSchema: z.ZodObject<{
     }[] | undefined;
     memoType?: "id" | "text" | "hash" | "return" | undefined;
     memo?: string | number | undefined;
+    allowSelfPayment?: boolean | undefined;
 }>;
 export type PathPaymentInput = z.infer<typeof PathPaymentInputSchema>;
 export declare class PathPaymentTool {

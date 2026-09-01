@@ -9,12 +9,12 @@
  *     the secret never lives on the config object itself.
  *   - The spending limit is enforced here before delegating to tools.
  */
-import { EventEmitter } from "events";
-import { rpc } from "@stellar/stellar-sdk";
-import { X402Challenge } from "./tools/X402PaymentTool";
-import { SpendingTracker } from "./spending_tracker";
-export declare const spendingTracker: SpendingTracker;
-export type TaskType = "stellar_payment" | "soroban_invoke" | "soroban_query" | "x402_respond" | "account_info" | "change_trust" | "multisig_payment" | "batch_payment" | "balance_check" | "path_payment" | "fee_bump" | "dex_offer";
+import { EventEmitter } from 'events';
+import { rpc } from '@stellar/stellar-sdk';
+import { X402Challenge } from './tools/X402PaymentTool';
+import { spendingTracker } from './spending_tracker';
+export { spendingTracker };
+export type TaskType = 'stellar_payment' | 'soroban_invoke' | 'soroban_query' | 'x402_respond' | 'account_info' | 'change_trust' | 'multisig_payment' | 'batch_payment' | 'balance_check' | 'path_payment' | 'fee_bump' | 'dex_offer' | 'liquidity_pool' | 'stellar_toml' | 'data_entry' | 'sequence_number' | 'sponsored_account' | 'anchor_quote' | 'inflation' | 'soroban_deploy' | 'swap' | 'account_history';
 export interface AgentTask {
     type: TaskType;
     payload: unknown;
@@ -51,6 +51,18 @@ export interface AgentResult {
      * unless the caller supplies one on the task.
      */
     correlationId?: string;
+    /** Wall-clock time in milliseconds spent executing the task (from dispatch to completion/failure). */
+    durationMs?: number;
+    /**
+     * Zero-based position of the task within the {@link PayFiAgent.runSequence}
+     * call that produced this result. Because `runSequence` stops at the first
+     * failure, the last entry's `sequenceIndex` is the index of the task that
+     * failed — callers no longer have to infer it from array position, which
+     * breaks as soon as results are filtered, sorted, or merged.
+     *
+     * Absent on results from {@link PayFiAgent.run}, which has no sequence.
+     */
+    sequenceIndex?: number;
 }
 /**
  * Task middleware function type.
@@ -79,6 +91,16 @@ export declare class PayFiAgent extends EventEmitter {
     private pathPaymentTool;
     private feeBumpTool;
     private dexOfferTool;
+    private liquidityPoolTool;
+    private stellarTomlTool;
+    private dataEntryTool;
+    private sequenceNumberTool;
+    private sponsoredAccountTool;
+    private anchorQuoteTool;
+    private inflationTool;
+    private sorobanDeployTool;
+    private swapTool;
+    private accountHistoryTool;
     private activeTasks;
     private isDraining;
     private readonly taskQueue;

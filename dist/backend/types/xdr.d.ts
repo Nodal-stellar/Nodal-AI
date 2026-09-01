@@ -3,7 +3,7 @@
  * Zod schema validation for Stellar XDR payloads.
  * Validates structure before any network call is initiated.
  */
-import { z } from "zod";
+import { z } from 'zod';
 export declare class InvalidXDRFormat extends Error {
     constructor(message: string);
 }

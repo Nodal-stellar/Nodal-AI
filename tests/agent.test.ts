@@ -19,6 +19,13 @@ import { SequenceNumberTool } from '../backend/tools/SequenceNumberTool';
 import { SponsoredAccountTool } from '../backend/tools/SponsoredAccountTool';
 import { AnchorQuoteTool } from '../backend/tools/AnchorQuoteTool';
 import { InflationTool } from '../backend/tools/InflationTool';
+import { SorobanInvokeTool } from '../backend/tools/SorobanInvokeTool';
+import { SorobanQueryTool } from '../backend/tools/SorobanQueryTool';
+import { X402PaymentTool } from '../backend/tools/X402PaymentTool';
+import { AccountInfoTool } from '../backend/tools/AccountInfoTool';
+import { TrustlineTool } from '../backend/tools/TrustlineTool';
+import { MultiSigPaymentTool } from '../backend/tools/MultiSigPaymentTool';
+import { BatchPaymentTool } from '../backend/tools/BatchPaymentTool';
 import { ValidationError, UnauthorizedError, ErrorType } from '../backend/errors';
 
 vi.mock('../backend/tools/StellarPaymentTool', () => ({
@@ -151,12 +158,33 @@ vi.mock('../backend/persistence', () => ({
   saveResult: vi.fn(),
 }));
 
+// Named so `instanceof rpcClient.StellarRPCError` checks in agent.ts's error
+// handling work against real thrown errors, matching the real class shape.
+// Declared via vi.hoisted() because vi.mock() factories are hoisted above
+// regular statements — a plain `class` declared here would be in its temporal
+// dead zone by the time the factory below actually runs.
+const { MockStellarRPCError } = vi.hoisted(() => {
+  class MockStellarRPCError extends Error {
+    readonly cause: unknown;
+    constructor(message: string, cause?: unknown) {
+      super(message);
+      this.name = 'StellarRPCError';
+      this.cause = cause;
+    }
+  }
+  return { MockStellarRPCError };
+});
+
 vi.mock('../backend/rpc_client', () => ({
   loadAccount: vi.fn(),
   submitTransaction: vi.fn(),
+  prepareSorobanTx: vi.fn(),
+  prepareSorobanTxWithEvents: vi.fn(),
+  simulateSorobanTx: vi.fn(),
   horizonServer: { payments: vi.fn(() => ({ forAccount: vi.fn(() => ({ stream: vi.fn() })) })) },
   sorobanServer: {},
   resolveNetworkPassphrase: vi.fn(() => 'Public Global Stellar Network ; September 2015'),
+  StellarRPCError: MockStellarRPCError,
 }));
 
 vi.mock('../backend/config', () => ({
@@ -1258,6 +1286,61 @@ describe('PayFiAgent — task dispatch matrix (#450)', () => {
       () =>
         ({
           execute: vi.fn().mockResolvedValue({ txHash: 'inflation_dispatch_hash', ledger: 1 }),
+        }) as any
+    );
+
+    // The remaining 7 dispatch types (soroban_invoke, soroban_query, x402_respond,
+    // account_info, change_trust, multisig_payment, batch_payment) are declared
+    // in the top-level vi.mock() factories, but — unlike the tools mocked above —
+    // their classes were never also `import`ed by name into this file. Without a
+    // live binding to hang a `vi.mocked(...).mockImplementation(...)` call on,
+    // `new SorobanInvokeTool(...)` (etc.) inside agent.ts's constructor resolved
+    // to the bare mock spy misbehaving as a constructor instead of the factory's
+    // `{ execute: vi.fn() }` object, so `this.sorobanTool.execute` (etc.) was
+    // undefined at call time. Importing the classes here (see imports above) and
+    // giving each an explicit resolved value fixes both problems at once.
+    vi.mocked(SorobanInvokeTool).mockImplementation(
+      () =>
+        ({
+          execute: vi.fn().mockResolvedValue({ status: 'SUCCESS', ledger: 1 }),
+        }) as any
+    );
+    vi.mocked(SorobanQueryTool).mockImplementation(
+      () =>
+        ({
+          query: vi.fn().mockResolvedValue({ result: 'dispatch_state_value' }),
+        }) as any
+    );
+    vi.mocked(X402PaymentTool).mockImplementation(
+      () =>
+        ({
+          respond: vi.fn().mockResolvedValue({ txHash: 'x402_dispatch_hash', ledger: 1 }),
+        }) as any
+    );
+    vi.mocked(AccountInfoTool).mockImplementation(
+      () =>
+        ({
+          fetch: vi.fn().mockResolvedValue({ publicKey: DEST, balances: [] }),
+        }) as any
+    );
+    vi.mocked(TrustlineTool).mockImplementation(
+      () =>
+        ({
+          execute: vi.fn().mockResolvedValue({ txHash: 'trustline_dispatch_hash', ledger: 1 }),
+        }) as any
+    );
+    vi.mocked(MultiSigPaymentTool).mockImplementation(
+      () =>
+        ({
+          execute: vi.fn().mockResolvedValue({ txHash: 'multisig_dispatch_hash', ledger: 1 }),
+        }) as any
+    );
+    vi.mocked(BatchPaymentTool).mockImplementation(
+      () =>
+        ({
+          execute: vi
+            .fn()
+            .mockResolvedValue({ results: [{ txHash: 'batch_dispatch_hash', ledger: 1 }] }),
         }) as any
     );
 

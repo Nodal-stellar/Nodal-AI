@@ -45,25 +45,44 @@ export type SubmitResult = z.infer<typeof SubmitResultSchema>;
  * @property memoType - Type of memo: "text", "id", "hash", or "return" (default: "text")
  * @property memo - Optional memo value (string for text/return/hash, number for id)
  */
-export const PaymentInputSchema = z.object({
-  destination: z
-    .string()
-    .length(56, 'Invalid Stellar public key')
-    .refine(
-      (val) => StrKey.isValidEd25519PublicKey(val),
-      'Destination must be a valid Stellar public key (G...)'
-    ),
-  amount: z
-    .string()
-    // Negative-lookahead rejects "0" and all zero-value decimals ("0.0", "0.0000000")
-    .regex(/^(?!0(\.0+)?$)\d+(\.\d{1,7})?$/, 'Amount must be a valid Stellar decimal')
-    // Belt-and-suspenders guard: parseFloat catches any edge cases the regex misses
-    .refine((v) => parseFloat(v) > 0, 'Amount must be greater than zero'),
-  assetCode: z.string().default('XLM'),
-  assetIssuer: z.string().optional(),
-  memoType: z.enum(['text', 'id', 'hash', 'return']).optional().default('text'),
-  memo: z.union([z.string(), z.number()]).optional(),
-});
+export const PaymentInputSchema = z
+  .object({
+    destination: z
+      .string()
+      .length(56, 'Invalid Stellar public key')
+      .refine(
+        (val) => StrKey.isValidEd25519PublicKey(val),
+        'Destination must be a valid Stellar public key (G...)'
+      ),
+    amount: z
+      .string()
+      // Negative-lookahead rejects "0" and all zero-value decimals ("0.0", "0.0000000")
+      .regex(/^(?!0(\.0+)?$)\d+(\.\d{1,7})?$/, 'Amount must be a valid Stellar decimal')
+      // Belt-and-suspenders guard: parseFloat catches any edge cases the regex misses
+      .refine((v) => parseFloat(v) > 0, 'Amount must be greater than zero'),
+    assetCode: z.string().default('XLM'),
+    assetIssuer: z.string().optional(),
+    memoType: z.enum(['text', 'id', 'hash', 'return']).optional().default('text'),
+    memo: z.union([z.string(), z.number()]).optional(),
+  })
+  // MEMO_TEXT is limited to 28 bytes on the wire (Stellar counts UTF-8 bytes,
+  // not JS string length, so a handful of multi-byte characters can exceed it
+  // well before 28 *characters*). Enforced here — not just in buildMemo() —
+  // so any caller validating with this schema directly gets the same guarantee
+  // as execute().
+  .superRefine((input, ctx) => {
+    if (
+      (input.memoType === undefined || input.memoType === 'text') &&
+      typeof input.memo === 'string' &&
+      Buffer.byteLength(input.memo, 'utf8') > 28
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['memo'],
+        message: 'MEMO_TEXT must not exceed 28 bytes (UTF-8 encoded)',
+      });
+    }
+  });
 
 export type PaymentInput = z.infer<typeof PaymentInputSchema>;
 

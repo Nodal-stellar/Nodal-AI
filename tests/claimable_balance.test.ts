@@ -76,7 +76,7 @@ describe('ClaimableBalanceTool', () => {
 
     expect(result.txHash).toBe('cb_hash');
     const submittedTx = vi.mocked(rpcClient.submitTransaction).mock.calls[0]![0];
-    expect(submittedTx.operations[0].type).toBe('createClaimableBalance');
+    expect(submittedTx.operations[0]!.type).toBe('createClaimableBalance');
   });
 
   it('claims a balance after verifying claimant on Horizon', async () => {
@@ -90,7 +90,7 @@ describe('ClaimableBalanceTool', () => {
 
     expect(result.txHash).toBe('cb_hash');
     const submittedTx = vi.mocked(rpcClient.submitTransaction).mock.calls[0]![0];
-    expect(submittedTx.operations[0].type).toBe('claimClaimableBalance');
+    expect(submittedTx.operations[0]!.type).toBe('claimClaimableBalance');
   });
 
   it('rejects claim when agent is not a claimant', async () => {

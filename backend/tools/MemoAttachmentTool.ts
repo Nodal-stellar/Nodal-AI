@@ -81,7 +81,9 @@ export function buildMemo(options: MemoOptions): Memo {
       if (buffer.length !== 32) {
         throw new ValidationError('MEMO_RETURN must be exactly 32 bytes');
       }
-      return Memo.return(buffer);
+      // Memo.return() takes the hex string form, not the decoded Buffer —
+      // the buffer above exists only to validate the byte length.
+      return Memo.return(value);
     }
     default: {
       throw new ValidationError(`Unsupported memo type: ${(options as any).type}`);

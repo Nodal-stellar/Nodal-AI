@@ -17,12 +17,15 @@
  * Nonce TTL
  * ---------
  * X402 challenges carry an `expiresAt` field.  Once a challenge has expired
- * it can never be replayed legitimately, so nonces older than
- * MAX_NONCE_TTL_MS can be pruned.  The default TTL is 24 hours — well above
- * the expected maximum challenge lifetime — so no valid nonce is discarded
- * prematurely.
+ * it can never be replayed legitimately, so nonces older than the configured
+ * TTL can be pruned.  The TTL comes from `X402_NONCE_TTL_MS` and defaults to
+ * 24 hours — well above the expected maximum challenge lifetime — so no valid
+ * nonce is discarded prematurely.
+ *
+ * Eviction runs on every has()/add() call, so a long-running agent's store stays
+ * bounded by the TTL window without any caller having to schedule pruning.
  */
-import Database from "better-sqlite3";
+import Database from 'better-sqlite3';
 export declare const MAX_NONCE_TTL_MS: number;
 /**
  * Pluggable nonce-persistence contract for X402PaymentTool.
@@ -85,6 +88,8 @@ export declare class InMemoryNonceStore implements INonceStore {
     private nonces;
     has(nonce: string): Promise<boolean>;
     add(nonce: string): Promise<void>;
+    /** Number of nonces currently retained. Exposed so tests can assert bounding. */
+    get size(): number;
     prune(ttlMs?: number): Promise<void>;
 }
 //# sourceMappingURL=nonce_store.d.ts.map
