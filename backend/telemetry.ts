@@ -9,21 +9,17 @@
  * Called once from backend/index.ts at startup.
  */
 
-import { NodeSDK } from "@opentelemetry/sdk-node";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
-import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
-import { trace, Tracer, Span, SpanStatusCode } from "@opentelemetry/api";
-import { config } from "./config";
-import { createLogger } from "./utils/logger";
+import { NodeSDK } from '@opentelemetry/sdk-node';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
+import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
+import { trace, Tracer, Span, SpanStatusCode } from '@opentelemetry/api';
+import { config } from './config';
+import { createLogger } from './utils/logger';
 
-const log = createLogger("telemetry");
+const log = createLogger('telemetry');
 
-// OTLP_ENDPOINT is validated in the Zod schema but not yet declared on the
-// AgentConfig interface — access it via a narrow type assertion.
-const otlpEndpoint: string | undefined = (config as unknown as Record<string, unknown>).OTLP_ENDPOINT as string | undefined;
-
-let tracer: Tracer = trace.getTracer("stellar-agent-kit");
+let tracer: Tracer = trace.getTracer('stellar-agent-kit');
 let sdk: NodeSDK | null = null;
 
 /**
@@ -32,13 +28,15 @@ let sdk: NodeSDK | null = null;
  * are no-ops.
  */
 export function initTelemetry(): void {
+  const otlpEndpoint: string | undefined = (config as unknown as Record<string, unknown>)
+    .OTLP_ENDPOINT as string | undefined;
   if (!otlpEndpoint) {
-    log.info("OTLP_ENDPOINT not configured, skipping OpenTelemetry initialisation");
+    log.info('OTLP_ENDPOINT not configured, skipping OpenTelemetry initialisation');
     return;
   }
 
   if (sdk) {
-    log.warn("initTelemetry called but SDK is already running");
+    log.warn('initTelemetry called but SDK is already running');
     return;
   }
 
@@ -56,11 +54,11 @@ export function initTelemetry(): void {
   sdk = new NodeSDK({
     traceExporter,
     metricReaders: [metricReader],
-    serviceName: "stellar-agent-kit",
+    serviceName: 'stellar-agent-kit',
   });
 
   sdk.start();
-  log.info({ endpoint: otlpEndpoint }, "OpenTelemetry initialised");
+  log.info({ endpoint: otlpEndpoint }, 'OpenTelemetry initialised');
 }
 
 /**
@@ -111,6 +109,6 @@ export async function shutdownTelemetry(): Promise<void> {
   if (sdk) {
     await sdk.shutdown();
     sdk = null;
-    log.info("OpenTelemetry shut down");
+    log.info('OpenTelemetry shut down');
   }
 }

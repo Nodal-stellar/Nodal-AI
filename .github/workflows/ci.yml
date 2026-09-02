@@ -25,6 +25,9 @@ jobs:
       - name: Build TypeScript
         run: npm run build
 
+      - name: Type-check test files
+        run: npx tsc --project tsconfig.test.json --noEmit
+
   lint:
     runs-on: ubuntu-latest
 
@@ -38,6 +41,7 @@ jobs:
 
       - run: npm ci
       - run: npm run lint
+      - run: npm run format:check
 
   test:
     runs-on: ubuntu-latest
@@ -62,13 +66,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # dtolnay/rust-toolchain has no "file" toolchain mode (that value was
+      # passed straight through to `rustup toolchain install file`, which
+      # always failed). rustup's own override resolution already reads
+      # ./rust-toolchain.toml — installing it explicitly here just makes
+      # that install happen up front instead of lazily on first `cargo`.
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: file
+        run: rustup show
 
+      # --locked: fail loudly if Cargo.lock is missing/out of date instead of
+      # silently re-resolving to whatever crates.io serves that day (see the
+      # comment above contracts/escrow/Cargo.lock's .gitignore exemption).
       - name: Run Rust tests
-        run: cargo test --manifest-path contracts/escrow/Cargo.toml
+        run: cargo test --locked --manifest-path contracts/escrow/Cargo.toml
 
   lint-rust:
     runs-on: ubuntu-latest
@@ -76,14 +86,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # See test-rust's "Install Rust" step: dtolnay/rust-toolchain has no
+      # "file" mode. rustfmt/clippy come from rust-toolchain.toml's
+      # `components` list, so no need to name them again here.
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: file
-          components: clippy, rustfmt
+        run: rustup show
 
       - name: Run Clippy
-        run: cargo clippy --manifest-path contracts/escrow/Cargo.toml -- -D warnings
+        run: cargo clippy --locked --manifest-path contracts/escrow/Cargo.toml -- -D warnings
 
       - name: Run rustfmt Check
         run: cargo fmt --manifest-path contracts/escrow/Cargo.toml -- --check
@@ -94,16 +104,44 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # See test-rust's "Install Rust" step for why this isn't the action.
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: file
+        run: rustup show
 
+      # Pinned: cargo-tarpaulin >=0.36 requires the edition2024 Cargo
+      # feature, which isn't stable until Cargo 1.85 — newer than this
+      # repo's pinned 1.78 toolchain — so `cargo install` without a version
+      # fails to even parse the crate's manifest. 0.31.5 is the newest
+      # release confirmed to install and run under 1.78.
       - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin --locked
+        run: cargo install cargo-tarpaulin --locked --version 0.31.5
 
       - name: Run cargo-tarpaulin
-        run: cargo tarpaulin --manifest-path contracts/escrow/Cargo.toml --out Html --output-dir coverage/rust
+        run: cargo tarpaulin --locked --manifest-path contracts/escrow/Cargo.toml --out Html --output-dir coverage/rust
+
+  wasm-size-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # See test-rust's "Install Rust" step for why this isn't the action.
+      - name: Install Rust
+        run: rustup show
+
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Build contract WASM
+        run: cargo build --locked --manifest-path contracts/escrow/Cargo.toml --target wasm32-unknown-unknown --release
+
+      # Fails if the compiled WASM exceeds the size budget, detecting
+      # supply-chain bloat (e.g. injected data segments) before deployment.
+      # See contracts/escrow/WASM_SIZE_BUDGET.md for the rationale.
+      - name: Enforce WASM size budget
+        run: bash scripts/check_wasm_size.sh
+        env:
+          MAX_WASM_SIZE_BYTES: 200000
 
   secret-scan:
     runs-on: ubuntu-latest
@@ -116,7 +154,10 @@ jobs:
       - name: Secret scanning with trufflehog
         uses: trufflesecurity/trufflehog@v3.95.7
         with:
-          extra_args: --config .trufflehog.yml --results=verified,unknown
+          extra_args: >-
+            --config .trufflehog.yml
+            --results=verified,unknown
+            --exclude-paths=.trufflehog-exclude-paths.txt
 
   audit-npm:
     runs-on: ubuntu-latest
@@ -130,7 +171,46 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm run audit
+      - name: Audit npm dependencies
+        run: npm audit --audit-level=high
+
+  snyk:
+    runs-on: ubuntu-latest
+    env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+    steps:
+      - name: Check Snyk configuration
+        id: snyk-config
+        shell: bash
+        run: |
+          if [[ -n "$SNYK_TOKEN" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Snyk is skipped because SNYK_TOKEN is not configured."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.snyk-config.outputs.enabled == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.snyk-config.outputs.enabled == 'true'
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.snyk-config.outputs.enabled == 'true'
+        run: npm ci
+
+      - name: Install Snyk CLI
+        if: steps.snyk-config.outputs.enabled == 'true'
+        run: npm install --global snyk
+
+      - name: Test dependencies with Snyk
+        if: steps.snyk-config.outputs.enabled == 'true'
+        run: snyk test --severity-threshold=high
 
   audit-rust:
     runs-on: ubuntu-latest
@@ -138,13 +218,82 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: file
+      # cargo-audit itself (installed below) needs a newer rustc than the
+      # 1.78 pin in rust-toolchain.toml — recent releases require 1.81+,
+      # and the advisory database's own dependency (rustsec) needs a rustc
+      # new enough to parse CVSS 4.0 vectors, which now appear in current
+      # advisories and make older cargo-audit builds fail to even load the
+      # database. Installing a second, non-overriding toolchain and running
+      # cargo-audit under it (`+stable`) sidesteps both problems without
+      # touching the toolchain the contract itself builds/tests under.
+      - name: Install a toolchain for cargo-audit
+        run: rustup toolchain install stable --profile minimal
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        run: cargo +stable install cargo-audit --locked
 
+      # -f/--file, not --manifest-path: cargo-audit reads a Cargo.lock
+      # directly, it doesn't resolve a package graph from a Cargo.toml.
+      #
+      # RUSTSEC-2024-0344 (curve25519-dalek) and RUSTSEC-2026-0009 (time)
+      # are both pinned transitively by soroban-env-host/soroban-sdk 20.x's
+      # exact-version dependency pins — `cargo update -p` for either is
+      # rejected by the resolver, so fixing them here means waiting on an
+      # upstream soroban-sdk release, not a change this repo can make.
+      # Re-check this ignore list whenever soroban-sdk is upgraded.
       - name: Run cargo audit
-        run: cargo audit --manifest-path contracts/escrow/Cargo.toml
+        run: |
+          cargo +stable audit -f contracts/escrow/Cargo.lock \
+            --ignore RUSTSEC-2024-0344 \
+            --ignore RUSTSEC-2026-0009
+
+  docs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate API docs (TypeDoc)
+        run: npm run docs:generate
+
+      - name: Upload API docs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-docs
+          path: docs/api/
+          retention-days: 30
+
+  check-links:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Validates every relative and external Markdown link across the repo's
+      # root docs and the escrow contract docs, so stale references (renamed
+      # files, dead external URLs) fail CI instead of rotting silently.
+      #
+      # The stellar.org/wave exclude below is a link, not a comment — `#`
+      # inside this `args: >-` block scalar is literal text, not YAML syntax,
+      # so any explanation has to live up here instead: CONTRIBUTING.md's
+      # Stellar Wave programme link 404s upstream (stellar.org has
+      # retired/moved the page); this isn't something the repo can fix.
+      - name: Check Markdown links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: >-
+            --no-progress
+            --exclude "^https?://localhost(:[0-9]+)?"
+            --exclude "^#"
+            --exclude "^https://stellar\.org/wave$"
+            ./*.md
+            ./contracts/escrow/*.md
+          fail: true
