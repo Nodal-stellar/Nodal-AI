@@ -74,8 +74,11 @@ jobs:
       - name: Install Rust
         run: rustup show
 
+      # --locked: fail loudly if Cargo.lock is missing/out of date instead of
+      # silently re-resolving to whatever crates.io serves that day (see the
+      # comment above contracts/escrow/Cargo.lock's .gitignore exemption).
       - name: Run Rust tests
-        run: cargo test --manifest-path contracts/escrow/Cargo.toml
+        run: cargo test --locked --manifest-path contracts/escrow/Cargo.toml
 
   lint-rust:
     runs-on: ubuntu-latest
@@ -90,7 +93,7 @@ jobs:
         run: rustup show
 
       - name: Run Clippy
-        run: cargo clippy --manifest-path contracts/escrow/Cargo.toml -- -D warnings
+        run: cargo clippy --locked --manifest-path contracts/escrow/Cargo.toml -- -D warnings
 
       - name: Run rustfmt Check
         run: cargo fmt --manifest-path contracts/escrow/Cargo.toml -- --check
@@ -114,7 +117,7 @@ jobs:
         run: cargo install cargo-tarpaulin --locked --version 0.31.5
 
       - name: Run cargo-tarpaulin
-        run: cargo tarpaulin --manifest-path contracts/escrow/Cargo.toml --out Html --output-dir coverage/rust
+        run: cargo tarpaulin --locked --manifest-path contracts/escrow/Cargo.toml --out Html --output-dir coverage/rust
 
   wasm-size-check:
     runs-on: ubuntu-latest
@@ -130,7 +133,7 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
 
       - name: Build contract WASM
-        run: cargo build --manifest-path contracts/escrow/Cargo.toml --target wasm32-unknown-unknown --release
+        run: cargo build --locked --manifest-path contracts/escrow/Cargo.toml --target wasm32-unknown-unknown --release
 
       # Fails if the compiled WASM exceeds the size budget, detecting
       # supply-chain bloat (e.g. injected data segments) before deployment.
