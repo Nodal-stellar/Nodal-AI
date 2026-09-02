@@ -6,18 +6,115 @@
  * MANDATORY simulation step enforced before any broadcast.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SorobanInvokeTool = exports.SorobanInvokeInputSchema = exports.SOROBAN_TX_TIMEOUT = void 0;
+exports.SorobanInvokeTool = exports.SorobanInvokeInputSchema = exports.SAC_TOKEN_DECIMALS = exports.SOROBAN_TX_TIMEOUT_SECONDS = exports.SOROBAN_TX_TIMEOUT = void 0;
+exports.sacRawToDecimal = sacRawToDecimal;
+exports.extractSacTransferTotal = extractSacTransferTotal;
 exports.isSorobanSimulationResult = isSorobanSimulationResult;
 const stellar_sdk_1 = require("@stellar/stellar-sdk");
 const zod_1 = require("zod");
 const config_1 = require("../config");
 const logger_1 = require("../logger");
 const rpc_client_1 = require("../rpc_client");
+const spending_tracker_1 = require("../spending_tracker");
 // ─── Constants ─────────────────────────────────────────────────────────────────
 // SAFETY: Timeout in seconds for Soroban broadcast transactions.
 // Must ALWAYS be a positive integer. setTimeout(0) produces transactions
 // without time bounds that can be replayed indefinitely on the network.
 exports.SOROBAN_TX_TIMEOUT = 30;
+/**
+ * Alias for SOROBAN_TX_TIMEOUT — exported under both names so that callers
+ * importing either identifier resolve to the same value.
+ */
+exports.SOROBAN_TX_TIMEOUT_SECONDS = exports.SOROBAN_TX_TIMEOUT;
+/**
+ * Decimal places of Stellar Asset Contract (SAC) token amounts.
+ *
+ * A SAC is the tokenized form of a classic Stellar asset, and like the
+ * underlying asset it denominates amounts in 7-decimal base units. The
+ * spending limit (`AGENT_SPENDING_LIMIT`) is expressed in the same decimal
+ * units as classic payment amounts, so simulated SAC transfer amounts are
+ * converted with this scale before being compared.
+ */
+exports.SAC_TOKEN_DECIMALS = 7;
+/**
+ * Convert a raw SAC token amount (integer base units) to the 7-decimal string
+ * used for payment amounts and spending-limit comparisons.
+ *
+ * @example `sacRawToDecimal(1000000000n)` → `"100.0000000"`
+ */
+function sacRawToDecimal(raw) {
+    const divisor = 10n ** BigInt(exports.SAC_TOKEN_DECIMALS);
+    const whole = raw / divisor;
+    const frac = (raw % divisor).toString().padStart(exports.SAC_TOKEN_DECIMALS, '0');
+    return `${whole}.${frac}`;
+}
+/**
+ * Sum the simulated SAC transfers that debit `agentAddress`.
+ *
+ * Contract invocations can move funds internally via the Stellar Asset
+ * Contract (e.g. `transfer`, `transfer_from`, `burn`). Those moves are visible
+ * in the simulation's diagnostic events: the topic starts with the function
+ * name symbol, followed by the involved addresses, and the data carries the
+ * amount as an i128. Only events that debit the agent are counted, so incoming
+ * transfers and transfers between third parties do not consume the cap.
+ *
+ * @param events - Diagnostic events returned by the Soroban simulation.
+ * @param agentAddress - Public key of the agent account (the debited party to match).
+ * @returns Total amount in raw SAC base units, or `0n` when nothing matches.
+ */
+function extractSacTransferTotal(events, agentAddress) {
+    let total = 0n;
+    for (const diagnostic of events) {
+        // Only events from the successful call path represent what will actually
+        // happen on-chain; failed sub-call events are diagnostic noise.
+        if (!diagnostic.inSuccessfulContractCall?.())
+            continue;
+        const contractEvent = diagnostic.event?.();
+        const v0 = contractEvent?.body?.().v0?.();
+        if (!v0)
+            continue;
+        const topics = v0.topics() ?? [];
+        const nameScv = topics[0];
+        if (!nameScv)
+            continue;
+        let name;
+        try {
+            name = (0, stellar_sdk_1.scValToNative)(nameScv);
+        }
+        catch {
+            continue;
+        }
+        if (typeof name !== 'string')
+            continue;
+        // SAC value-out events: the debited party is topic[1] in each layout.
+        if (name !== 'transfer' && name !== 'transfer_from' && name !== 'burn')
+            continue;
+        const fromScv = topics[1];
+        if (!fromScv)
+            continue;
+        let from;
+        try {
+            from = (0, stellar_sdk_1.scValToNative)(fromScv);
+        }
+        catch {
+            continue;
+        }
+        if (from !== agentAddress)
+            continue;
+        let amount;
+        try {
+            amount = (0, stellar_sdk_1.scValToNative)(v0.data());
+        }
+        catch {
+            continue;
+        }
+        if (typeof amount === 'bigint')
+            total += amount;
+        else if (typeof amount === 'number' && Number.isInteger(amount))
+            total += BigInt(amount);
+    }
+    return total;
+}
 // ─── Input schema ─────────────────────────────────────────────────────────────
 /**
  * Zod schema for {@link SorobanInvokeTool.execute} inputs.
@@ -34,7 +131,7 @@ exports.SOROBAN_TX_TIMEOUT = 30;
  */
 exports.SorobanInvokeInputSchema = zod_1.z.object({
     /** 56-character Stellar contract address (strkey C… encoding). */
-    contractId: zod_1.z.string().length(56, "Invalid Stellar contract ID"),
+    contractId: zod_1.z.string().length(56, 'Invalid Stellar contract ID'),
     /** Name of the contract function to invoke (e.g. `"transfer"`, `"mint"`). */
     method: zod_1.z.string().min(1),
     /**
@@ -146,27 +243,27 @@ class SorobanInvokeTool {
                 // Fallback to a harmless manageData operation when the SDK rejects
                 // the contract ID format. Tests only require an operation to be
                 // present; the exact semantics are exercised via mocked RPC.
-                stellar_sdk_1.Operation.manageData({ name: `invoke:${method}`, value: "mock" }),
+                stellar_sdk_1.Operation.manageData({ name: `invoke:${method}`, value: 'mock' }),
             };
         }
         // 2. Load source account
         const sourceAccount = await (0, rpc_client_1.loadAccount)(this.keypair.publicKey());
         // 3. Build invocation transaction
         const tx = new stellar_sdk_1.TransactionBuilder(sourceAccount, {
-            fee: "0", // Fee is overwritten by prepareSorobanTx — initial value is irrelevant
+            fee: '0', // Fee is overwritten by prepareSorobanTx — initial value is irrelevant
             networkPassphrase: this.networkPassphrase,
         })
             .addOperation(contract.call(input.method, ...input.args))
             .setTimeout(exports.SOROBAN_TX_TIMEOUT)
             .build();
-        logger_1.logger.info("Simulating Soroban transaction", {
+        logger_1.logger.info('Simulating Soroban transaction', {
             method: input.method,
             contractId: input.contractId,
         });
         // 4. MANDATORY simulate step — throws on simulation failure
-        const preparedTx = await (0, rpc_client_1.prepareSorobanTx)(tx);
+        const { tx: preparedTx, events } = await (0, rpc_client_1.prepareSorobanTxWithEvents)(tx);
         const feeValue = preparedTx?.fee;
-        const parsedFee = feeValue === undefined || feeValue === null || feeValue === ""
+        const parsedFee = feeValue === undefined || feeValue === null || feeValue === ''
             ? undefined
             : Number.isFinite(feeValue)
                 ? Number(feeValue)
@@ -177,15 +274,21 @@ class SorobanInvokeTool {
         if (parsedFee !== undefined && parsedFee > config_1.config.MAX_SOROBAN_FEE_STROOPS) {
             throw new Error(`Soroban fee ${preparedTx.fee} exceeds MAX_SOROBAN_FEE_STROOPS ${config_1.config.MAX_SOROBAN_FEE_STROOPS}`);
         }
+        // 4b. Spending-limit guard on the simulation's internal SAC transfers.
+        //     The amount a contract invocation moves is only knowable after the
+        //     simulation runs, so the cap is enforced against the simulated events
+        //     rather than the input. The cumulative window is only recorded when
+        //     the transaction will actually be broadcast — a dry-run moves nothing.
+        this.assertSacTransfersWithinSpendingLimit(events, !input.simulateOnly);
         if (input.simulateOnly) {
-            logger_1.logger.info("Simulation passed (dry-run, not broadcasting)");
+            logger_1.logger.info('Simulation passed (dry-run, not broadcasting)');
             return { simulationResult: preparedTx };
         }
         // 5. Timeout safety guard: reject transactions with no time bounds
         //    setTimeout(0) produces transactions replayable indefinitely.
         if (!preparedTx.timeBounds) {
-            throw new Error("Broadcast aborted: transaction has no time bounds (setTimeout(0)). " +
-                "Use a positive timeout to prevent indefinite replay.");
+            throw new Error('Broadcast aborted: transaction has no time bounds (setTimeout(0)). ' +
+                'Use a positive timeout to prevent indefinite replay.');
         }
         // 6. Sign prepared transaction.
         // NOTE: Transaction.sign() mutates the transaction in place — the reference
@@ -201,16 +304,47 @@ class SorobanInvokeTool {
         // `signatures` array still get a meaningful error rather than a
         // TypeError on `.length`.
         if (!signedTx.signatures?.length) {
-            throw new Error("Transaction signing produced no signatures");
+            throw new Error('Transaction signing produced no signatures');
         }
         // 7. Submit
         const result = await rpc_client_1.sorobanServer.sendTransaction(signedTx);
-        if (result.status === "ERROR") {
-            throw new Error(`Soroban submit failed: ${result.errorResult?.toXDR("base64")}`);
+        if (result.status === 'ERROR') {
+            throw new Error(`Soroban submit failed: ${result.errorResult?.toXDR('base64')}`);
         }
         // 8. Poll for confirmation
         const confirmed = await this.pollForConfirmation(result.hash);
         return { txHash: confirmed.txHash };
+    }
+    /**
+     * Enforce the spending cap against the simulated internal SAC transfers.
+     *
+     * Mirrors `assertWithinSpendingLimit` in agent.ts: rejects the invocation
+     * when the simulated transfers that debit the agent exceed the configured
+     * `AGENT_SPENDING_LIMIT`, or the hardcoded `MAINNET_SPENDING_CAP` on
+     * mainnet. When `record` is true (i.e. the transaction will be broadcast)
+     * the total is also recorded into the rolling spending window so contract
+     * spends count toward the cumulative cap alongside regular payments.
+     *
+     * Invocations that move nothing (total `0n`) skip the checks entirely.
+     */
+    assertSacTransfersWithinSpendingLimit(events, record) {
+        const totalRaw = extractSacTransferTotal(events, this.keypair.publicKey());
+        if (totalRaw <= 0n)
+            return;
+        const amountStr = sacRawToDecimal(totalRaw);
+        const parsed = parseFloat(amountStr);
+        const limit = parseFloat(config_1.config.AGENT_SPENDING_LIMIT);
+        if (!isNaN(parsed) && !isNaN(limit) && parsed > limit) {
+            throw new Error(`Contract invocation transfers ${amountStr} ${config_1.config.X402_ASSET_CODE} exceeds ` +
+                `AGENT_SPENDING_LIMIT of ${config_1.config.AGENT_SPENDING_LIMIT}`);
+        }
+        if (!isNaN(parsed) && config_1.config.STELLAR_NETWORK === 'mainnet' && parsed > config_1.MAINNET_SPENDING_CAP) {
+            throw new Error(`Contract invocation transfers ${amountStr} ${config_1.config.X402_ASSET_CODE} exceeds ` +
+                `mainnet spending cap of ${config_1.MAINNET_SPENDING_CAP}`);
+        }
+        if (record) {
+            spending_tracker_1.spendingTracker.record(amountStr);
+        }
     }
     /**
      * Poll Soroban RPC until the transaction reaches a terminal state.
@@ -241,14 +375,14 @@ class SorobanInvokeTool {
         for (let i = 0; i < maxAttempts; i++) {
             await new Promise((r) => setTimeout(r, intervalMs));
             const status = await rpc_client_1.sorobanServer.getTransaction(hash);
-            if (status.status === "SUCCESS") {
-                logger_1.logger.info("Soroban transaction confirmed", { txHash: hash });
+            if (status.status === 'SUCCESS') {
+                logger_1.logger.info('Soroban transaction confirmed', { txHash: hash });
                 return { txHash: hash };
             }
-            if (status.status === "FAILED") {
-                throw new Error(`Soroban transaction failed on-chain: ${hash} — ${status.resultXdr ?? "no XDR"}`);
+            if (status.status === 'FAILED') {
+                throw new Error(`Soroban transaction failed on-chain: ${hash} — ${status.resultXdr ?? 'no XDR'}`);
             }
-            logger_1.logger.debug("Polling for Soroban transaction confirmation", {
+            logger_1.logger.debug('Polling for Soroban transaction confirmation', {
                 txHash: hash,
                 attempt: i + 1,
                 maxAttempts,

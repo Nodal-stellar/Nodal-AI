@@ -10,11 +10,11 @@
  * Uses only the Node.js built-in `http` module — no additional dependencies.
  * Port is read from config.HEALTH_PORT (env var HEALTH_PORT, default 3000).
  */
-import * as http from "http";
+import * as http from 'http';
 /** Reachability of a single dependency. */
-export type ComponentStatus = "up" | "down";
+export type ComponentStatus = 'up' | 'down';
 export interface HealthResponse {
-    status: "ok" | "degraded";
+    status: 'ok' | 'degraded';
     components: {
         horizon: ComponentStatus;
         soroban: ComponentStatus;

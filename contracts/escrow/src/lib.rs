@@ -35,7 +35,7 @@
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error,
-    token::Client as TokenClient, Address, BytesN, Env, Symbol,
+    token::Client as TokenClient, Address, Env, Symbol,
 };
 
 // ─── Security constants ───────────────────────────────────────────────────────
@@ -220,9 +220,7 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Amount, &amount);
         env.storage().instance().set(&DataKey::Expiry, &expiry);
         env.storage().instance().set(&DataKey::Released, &false);
-        env.storage()
-            .instance()
-            .set(&DataKey::InitializedAt, &now);
+        env.storage().instance().set(&DataKey::InitializedAt, &now);
 
         env.events().publish(
             (
@@ -294,10 +292,7 @@ impl EscrowContract {
         );
 
         env.events().publish(
-            (
-                Symbol::new(&env, "escrow"),
-                Symbol::new(&env, "released"),
-            ),
+            (Symbol::new(&env, "escrow"), Symbol::new(&env, "released")),
             (recipient, amount),
         );
     }
@@ -496,9 +491,7 @@ impl EscrowContract {
         let remaining = stored_amount - release_amount;
 
         // Update stored amount to reflect partial release
-        env.storage()
-            .instance()
-            .set(&DataKey::Amount, &remaining);
+        env.storage().instance().set(&DataKey::Amount, &remaining);
 
         // Transfer the partial amount to the recipient
         TokenClient::new(&env, &token).transfer(
@@ -510,8 +503,10 @@ impl EscrowContract {
         if remaining == 0 {
             // All funds distributed — seal the escrow
             env.storage().instance().set(&DataKey::Released, &true);
-            env.events()
-                .publish((Symbol::new(&env, "released"),), (recipient.clone(), release_amount));
+            env.events().publish(
+                (Symbol::new(&env, "released"),),
+                (recipient.clone(), release_amount),
+            );
         } else {
             env.events().publish(
                 (Symbol::new(&env, "partial_released"),),
@@ -586,10 +581,7 @@ impl EscrowContract {
         );
 
         env.events().publish(
-            (
-                Symbol::new(&env, "escrow"),
-                Symbol::new(&env, "cancelled"),
-            ),
+            (Symbol::new(&env, "escrow"), Symbol::new(&env, "cancelled")),
             (stored_depositor, amount),
         );
     }
@@ -682,10 +674,10 @@ impl EscrowContract {
             .get(&DataKey::PendingArbiter)
             .expect("escrow: state corrupted");
 
-        env.storage().instance().set(&DataKey::Arbiter, &new_arbiter);
         env.storage()
             .instance()
-            .remove(&DataKey::PendingArbiter);
+            .set(&DataKey::Arbiter, &new_arbiter);
+        env.storage().instance().remove(&DataKey::PendingArbiter);
         env.storage()
             .instance()
             .remove(&DataKey::PendingArbiterTime);

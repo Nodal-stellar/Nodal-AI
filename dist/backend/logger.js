@@ -27,9 +27,7 @@ const LOG_LEVELS = {
     error: 3,
 };
 // Schema for LOG_LEVEL env var
-const LogLevelSchema = zod_1.z
-    .enum(["debug", "info", "warn", "error"])
-    .default("info");
+const LogLevelSchema = zod_1.z.enum(['debug', 'info', 'warn', 'error']).default('info');
 const LOG_LEVEL = LogLevelSchema.parse(process.env.LOG_LEVEL);
 const CURRENT_LEVEL = LOG_LEVELS[LOG_LEVEL];
 /**
@@ -40,13 +38,13 @@ const CURRENT_LEVEL = LOG_LEVELS[LOG_LEVEL];
  * @returns The redacted value
  */
 function redactSecrets(value) {
-    if (typeof value === "string") {
-        return value.replace(/S[A-Z2-7]{55}/g, "[REDACTED]");
+    if (typeof value === 'string') {
+        return value.replace(/S[A-Z2-7]{55}/g, '[REDACTED]');
     }
     if (Array.isArray(value)) {
         return value.map(redactSecrets);
     }
-    if (value !== null && typeof value === "object") {
+    if (value !== null && typeof value === 'object') {
         const redacted = {};
         for (const [key, val] of Object.entries(value)) {
             redacted[key] = redactSecrets(val);
@@ -73,7 +71,7 @@ function log(level, message, meta = {}) {
         ...redactSecrets(meta),
     };
     const output = JSON.stringify(entry);
-    if (level === "error") {
+    if (level === 'error') {
         console.error(output);
     }
     else {
@@ -81,9 +79,9 @@ function log(level, message, meta = {}) {
     }
 }
 exports.logger = {
-    debug: (message, meta) => log("debug", message, meta),
-    info: (message, meta) => log("info", message, meta),
-    warn: (message, meta) => log("warn", message, meta),
-    error: (message, meta) => log("error", message, meta),
+    debug: (message, meta) => log('debug', message, meta),
+    info: (message, meta) => log('info', message, meta),
+    warn: (message, meta) => log('warn', message, meta),
+    error: (message, meta) => log('error', message, meta),
 };
 //# sourceMappingURL=logger.js.map

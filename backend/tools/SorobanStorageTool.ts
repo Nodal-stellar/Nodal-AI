@@ -3,19 +3,14 @@
  * Tool for inspecting Soroban smart contract persistent storage entries.
  */
 
-import {
-  Address,
-  nativeToScVal,
-  scValToNative,
-  xdr,
-} from "@stellar/stellar-sdk";
-import { z } from "zod";
-import { config } from "../config";
-import { createLogger } from "../utils/logger";
-import { sorobanServer, withRetry } from "../rpc_client";
-import { withBackoffGuard } from "../network";
+import { Address, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
+import { z } from 'zod';
+import { config } from '../config';
+import { createLogger } from '../utils/logger';
+import { sorobanServer, withRetry } from '../rpc_client';
+import { withBackoffGuard } from '../network';
 
-const log = createLogger("soroban-storage");
+const log = createLogger('soroban-storage');
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -27,11 +22,11 @@ export function toJsonSerializable(val: unknown): unknown {
   if (val === null || val === undefined) {
     return val;
   }
-  if (typeof val === "bigint") {
+  if (typeof val === 'bigint') {
     return val.toString();
   }
   if (Buffer.isBuffer(val) || val instanceof Uint8Array) {
-    return Buffer.from(val).toString("hex");
+    return Buffer.from(val).toString('hex');
   }
   if (Array.isArray(val)) {
     return val.map(toJsonSerializable);
@@ -43,7 +38,7 @@ export function toJsonSerializable(val: unknown): unknown {
     }
     return obj;
   }
-  if (typeof val === "object") {
+  if (typeof val === 'object') {
     const obj: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(val)) {
       obj[k] = toJsonSerializable(v);
@@ -57,15 +52,17 @@ export function toJsonSerializable(val: unknown): unknown {
 
 export const SorobanStorageInputSchema = z.object({
   /** 56-character Stellar contract address (strkey C… encoding). */
-  contractId: z.string().length(56, "Invalid Stellar contract ID"),
+  contractId: z.string().length(56, 'Invalid Stellar contract ID'),
 
   /**
    * Keys to query in storage. Can be ScVal instances or native values.
    */
-  keys: z.array(z.union([z.instanceof(xdr.ScVal), z.unknown()])).min(1, "At least one storage key must be specified"),
+  keys: z
+    .array(z.union([z.instanceof(xdr.ScVal), z.unknown()]))
+    .min(1, 'At least one storage key must be specified'),
 
   /** Storage durability type: defaults to persistent. */
-  durability: z.enum(["persistent", "temporary", "instance"]).default("persistent"),
+  durability: z.enum(['persistent', 'temporary', 'instance']).default('persistent'),
 });
 
 export type SorobanStorageInput = z.infer<typeof SorobanStorageInputSchema>;
@@ -93,20 +90,28 @@ export class SorobanStorageTool {
 
     log.info(
       { contractId: input.contractId, keyCount: input.keys.length, durability: input.durability },
-      "Fetching Soroban contract storage entries"
+      'Fetching Soroban contract storage entries'
     );
 
     const contractAddress = new Address(input.contractId).toScAddress();
 
+    // Soroban's XDR only defines `temporary`/`persistent` durability — there is
+    // no separate "instance" variant. A contract's instance storage physically
+    // lives under `persistent` durability, addressed by the fixed
+    // scvLedgerKeyContractInstance() sentinel key rather than a caller-supplied
+    // one, so "instance" maps to that combination instead.
     const durabilityVal =
-      input.durability === "temporary"
+      input.durability === 'temporary'
         ? xdr.ContractDataDurability.temporary()
-        : input.durability === "instance"
-        ? xdr.ContractDataDurability.instance()
         : xdr.ContractDataDurability.persistent();
 
     const ledgerKeys: xdr.LedgerKey[] = input.keys.map((key) => {
-      const scVal = key instanceof xdr.ScVal ? key : nativeToScVal(key);
+      const scVal =
+        input.durability === 'instance'
+          ? xdr.ScVal.scvLedgerKeyContractInstance()
+          : key instanceof xdr.ScVal
+            ? key
+            : nativeToScVal(key);
       return xdr.LedgerKey.contractData(
         new xdr.LedgerKeyContractData({
           contract: contractAddress,
@@ -126,14 +131,14 @@ export class SorobanStorageTool {
 
     const entries: StorageEntryResult[] = (response.entries ?? []).map((entry: any) => {
       let entryData: xdr.LedgerEntryData;
-      if (typeof entry.val === "string") {
-        entryData = xdr.LedgerEntryData.fromXDR(entry.val, "base64");
+      if (typeof entry.val === 'string') {
+        entryData = xdr.LedgerEntryData.fromXDR(entry.val, 'base64');
       } else if (entry.val instanceof xdr.LedgerEntryData) {
         entryData = entry.val;
-      } else if (entry.val && typeof entry.val.contractData === "function") {
+      } else if (entry.val && typeof entry.val.contractData === 'function') {
         entryData = entry.val;
       } else {
-        throw new Error("Unable to parse LedgerEntryData from RPC response");
+        throw new Error('Unable to parse LedgerEntryData from RPC response');
       }
 
       const contractData = entryData.contractData();
@@ -150,7 +155,7 @@ export class SorobanStorageTool {
 
     log.info(
       { contractId: input.contractId, entriesFound: entries.length },
-      "Soroban storage query completed"
+      'Soroban storage query completed'
     );
 
     return {

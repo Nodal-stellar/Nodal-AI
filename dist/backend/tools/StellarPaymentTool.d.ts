@@ -5,7 +5,7 @@
  * Architecture: Tool → simulate → sign → submit
  * Never broadcasts without a prior simulation pass.
  */
-import { z } from "zod";
+import { z } from 'zod';
 declare const SubmitResultSchema: z.ZodObject<{
     hash: z.ZodString;
     ledger: z.ZodNumber;
@@ -28,7 +28,7 @@ export type SubmitResult = z.infer<typeof SubmitResultSchema>;
  * @property memoType - Type of memo: "text", "id", "hash", or "return" (default: "text")
  * @property memo - Optional memo value (string for text/return/hash, number for id)
  */
-export declare const PaymentInputSchema: z.ZodObject<{
+export declare const PaymentInputSchema: z.ZodEffects<z.ZodObject<{
     destination: z.ZodEffects<z.ZodString, string, string>;
     amount: z.ZodEffects<z.ZodString, string, string>;
     assetCode: z.ZodDefault<z.ZodString>;
@@ -36,6 +36,20 @@ export declare const PaymentInputSchema: z.ZodObject<{
     memoType: z.ZodDefault<z.ZodOptional<z.ZodEnum<["text", "id", "hash", "return"]>>>;
     memo: z.ZodOptional<z.ZodUnion<[z.ZodString, z.ZodNumber]>>;
 }, "strip", z.ZodTypeAny, {
+    destination: string;
+    amount: string;
+    assetCode: string;
+    memoType: "id" | "text" | "hash" | "return";
+    assetIssuer?: string | undefined;
+    memo?: string | number | undefined;
+}, {
+    destination: string;
+    amount: string;
+    assetCode?: string | undefined;
+    assetIssuer?: string | undefined;
+    memoType?: "id" | "text" | "hash" | "return" | undefined;
+    memo?: string | number | undefined;
+}>, {
     destination: string;
     amount: string;
     assetCode: string;

@@ -40,54 +40,65 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const vitest_1 = require("vitest");
 const stellar_sdk_1 = require("@stellar/stellar-sdk");
 const DexOfferTool_1 = require("../backend/tools/DexOfferTool");
+const errors_1 = require("../backend/errors");
 const rpcClient = __importStar(require("../backend/rpc_client"));
+const stellar_sdk_2 = require("@stellar/stellar-sdk");
+const { mockOfferCall } = vitest_1.vi.hoisted(() => ({
+    mockOfferCall: vitest_1.vi.fn(),
+}));
 // ─── Mocks ────────────────────────────────────────────────────────────────────
-vitest_1.vi.mock("../backend/rpc_client", () => ({
+vitest_1.vi.mock('../backend/rpc_client', () => ({
     loadAccount: vitest_1.vi.fn(),
     submitTransaction: vitest_1.vi.fn(),
-    horizonServer: {},
+    horizonServer: {
+        offers: () => ({
+            offer: () => ({
+                call: mockOfferCall,
+            }),
+        }),
+    },
     sorobanServer: {},
     simulateSorobanTx: vitest_1.vi.fn(),
     prepareSorobanTx: vitest_1.vi.fn(),
     resolveNetworkPassphrase: (network) => 
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    require("@stellar/stellar-sdk").Networks[network === "mainnet" ? "PUBLIC" : network === "futurenet" ? "FUTURENET" : "TESTNET"],
+    require('@stellar/stellar-sdk').Networks[network === 'mainnet' ? 'PUBLIC' : network === 'futurenet' ? 'FUTURENET' : 'TESTNET'],
 }));
-vitest_1.vi.mock("../backend/config", () => {
+vitest_1.vi.mock('../backend/config', () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { Keypair } = require("@stellar/stellar-sdk");
-    const secret = "process.env.AGENT_SECRET_KEY";
+    const { Keypair } = require('@stellar/stellar-sdk');
+    const secret = 'SADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP54X';
     return {
         config: {
-            STELLAR_NETWORK: "testnet",
-            HORIZON_URL: "https://horizon-testnet.stellar.org",
-            SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org",
-            X402_ASSET_CODE: "USDC",
-            X402_ASSET_ISSUER: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
-            AGENT_SPENDING_LIMIT: "1000",
+            STELLAR_NETWORK: 'testnet',
+            HORIZON_URL: 'https://horizon-testnet.stellar.org',
+            SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org',
+            X402_ASSET_CODE: 'USDC',
+            X402_ASSET_ISSUER: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+            AGENT_SPENDING_LIMIT: '1000',
             AGENT_PUBLIC_KEY: Keypair.fromSecret(secret).publicKey(),
             agentKeypair: () => Keypair.fromSecret(secret),
         },
     };
 });
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
-const TEST_SECRET = "process.env.AGENT_SECRET_KEY";
-const USDC_ISSUER = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+const TEST_SECRET = 'SADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP54X';
+const USDC_ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
 function makeMockAccount(publicKey) {
     return {
         id: publicKey,
         accountId: () => publicKey,
-        sequenceNumber: () => "100",
+        sequenceNumber: () => '100',
         incrementSequenceNumber: vitest_1.vi.fn(),
-        sequence: "100",
-        incrementedSequenceNumber: () => "101",
+        sequence: '100',
+        incrementedSequenceNumber: () => '101',
         thresholds: { low_threshold: 0, med_threshold: 0, high_threshold: 0 },
         flags: { auth_required: false, auth_revocable: false, auth_immutable: false },
         balances: [],
         signers: [],
         data_attr: {},
         subentry_count: 0,
-        home_domain: "",
+        home_domain: '',
         inflation_dest: null,
     };
 }
@@ -113,7 +124,7 @@ function makeMockTxResultXdr(offerId) {
         sellerId: kp.xdrAccountId(),
         offerId: BigInt(offerId),
         selling: stellar_sdk_1.Asset.native().toXDRObject(),
-        buying: new stellar_sdk_1.Asset("USDC", issuer).toXDRObject(),
+        buying: new stellar_sdk_1.Asset('USDC', issuer).toXDRObject(),
         amount: BigInt(1000000000),
         price: new stellar_sdk_1.xdr.Price({ n: 1, d: 1 }),
         flags: 0,
@@ -133,112 +144,138 @@ function makeMockTxResultXdr(offerId) {
         result: txResultResult,
         ext: new TransactionResultExtCtor(0),
     });
-    return txResult.toXDR("base64");
+    return txResult.toXDR('base64');
 }
 const BASE_OFFER = {
-    selling: { code: "XLM" },
-    buying: { code: "USDC", issuer: USDC_ISSUER },
-    amount: "100",
-    price: "0.25",
+    selling: { code: 'XLM' },
+    buying: { code: 'USDC', issuer: USDC_ISSUER },
+    amount: '100',
+    price: '0.25',
 };
 // ─── Tests ────────────────────────────────────────────────────────────────────
-(0, vitest_1.describe)("DexOfferTool", () => {
+(0, vitest_1.describe)('DexOfferTool', () => {
     let tool;
     (0, vitest_1.beforeEach)(() => {
         vitest_1.vi.clearAllMocks();
+        mockOfferCall.mockReset();
+        mockOfferCall.mockResolvedValue({ id: '42' });
         tool = new DexOfferTool_1.DexOfferTool(TEST_SECRET);
         vitest_1.vi.mocked(rpcClient.loadAccount).mockResolvedValue(makeMockAccount(tool.publicKey));
         vitest_1.vi.mocked(rpcClient.submitTransaction).mockResolvedValue({
-            hash: "offer_tx_hash",
+            hash: 'offer_tx_hash',
             ledger: 10,
         });
     });
     // ── Create offer ────────────────────────────────────────────────────────────
-    (0, vitest_1.it)("creates an offer and returns txHash + ledger", async () => {
-        const result = await tool.execute({ action: "create", ...BASE_OFFER });
-        (0, vitest_1.expect)(result.txHash).toBe("offer_tx_hash");
+    (0, vitest_1.it)('creates an offer and returns txHash + ledger', async () => {
+        const result = await tool.execute({ action: 'create', ...BASE_OFFER });
+        (0, vitest_1.expect)(result.txHash).toBe('offer_tx_hash');
         (0, vitest_1.expect)(result.ledger).toBe(10);
         (0, vitest_1.expect)(rpcClient.submitTransaction).toHaveBeenCalledOnce();
     });
-    (0, vitest_1.it)("returns offerId from transaction result metadata for create action", async () => {
-        const networkAssignedOfferId = "12345678";
+    (0, vitest_1.it)('returns offerId from transaction result metadata for create action', async () => {
+        const networkAssignedOfferId = '12345678';
         vitest_1.vi.mocked(rpcClient.submitTransaction).mockResolvedValue({
-            hash: "offer_tx_hash",
+            hash: 'offer_tx_hash',
             ledger: 10,
             result_xdr: makeMockTxResultXdr(networkAssignedOfferId),
         });
-        const result = await tool.execute({ action: "create", ...BASE_OFFER });
-        (0, vitest_1.expect)(result.txHash).toBe("offer_tx_hash");
+        const result = await tool.execute({ action: 'create', ...BASE_OFFER });
+        (0, vitest_1.expect)(result.txHash).toBe('offer_tx_hash');
         (0, vitest_1.expect)(result.ledger).toBe(10);
         (0, vitest_1.expect)(result.offerId).toBe(networkAssignedOfferId);
     });
     // ── Delete offer ────────────────────────────────────────────────────────────
-    (0, vitest_1.it)("deletes an offer by submitting amount=0 with the offerId", async () => {
+    (0, vitest_1.it)('deletes an offer by submitting amount=0 with the offerId', async () => {
         const result = await tool.execute({
-            action: "delete",
+            action: 'delete',
             ...BASE_OFFER,
-            offerId: "42",
+            offerId: '42',
         });
-        (0, vitest_1.expect)(result.txHash).toBe("offer_tx_hash");
-        (0, vitest_1.expect)(result.offerId).toBe("42");
+        (0, vitest_1.expect)(result.txHash).toBe('offer_tx_hash');
+        (0, vitest_1.expect)(result.offerId).toBe('42');
         // Verify submitTransaction was called (amount=0 is set internally for delete)
         (0, vitest_1.expect)(rpcClient.submitTransaction).toHaveBeenCalledOnce();
     });
     // ── Update offer amount ─────────────────────────────────────────────────────
-    (0, vitest_1.it)("updates an existing offer amount", async () => {
+    (0, vitest_1.it)('throws ValidationError when updating a non-existent offer', async () => {
+        mockOfferCall.mockRejectedValueOnce(new stellar_sdk_2.NotFoundError('Offer not found', {}));
+        const promise = tool.execute({
+            action: 'update',
+            ...BASE_OFFER,
+            offerId: '999',
+        });
+        await (0, vitest_1.expect)(promise).rejects.toThrow('Offer 999 not found on Stellar network');
+        (0, vitest_1.expect)(rpcClient.submitTransaction).not.toHaveBeenCalled();
+    });
+    (0, vitest_1.it)('throws ValidationError when deleting a non-existent offer', async () => {
+        mockOfferCall.mockRejectedValueOnce(new stellar_sdk_2.NotFoundError('Offer not found', {}));
+        await (0, vitest_1.expect)(tool.execute({
+            action: 'delete',
+            ...BASE_OFFER,
+            offerId: '404',
+        })).rejects.toThrow(errors_1.ValidationError);
+        (0, vitest_1.expect)(rpcClient.submitTransaction).not.toHaveBeenCalled();
+    });
+    (0, vitest_1.it)('does not verify offer existence for create action', async () => {
+        await tool.execute({ action: 'create', ...BASE_OFFER });
+        (0, vitest_1.expect)(mockOfferCall).not.toHaveBeenCalled();
+        (0, vitest_1.expect)(rpcClient.submitTransaction).toHaveBeenCalledOnce();
+    });
+    (0, vitest_1.it)('updates an existing offer amount', async () => {
         vitest_1.vi.mocked(rpcClient.submitTransaction).mockResolvedValue({
-            hash: "update_tx_hash",
+            hash: 'update_tx_hash',
             ledger: 20,
         });
         const result = await tool.execute({
-            action: "update",
+            action: 'update',
             ...BASE_OFFER,
-            amount: "200",
-            offerId: "99",
+            amount: '200',
+            offerId: '99',
         });
-        (0, vitest_1.expect)(result.txHash).toBe("update_tx_hash");
-        (0, vitest_1.expect)(result.offerId).toBe("99");
+        (0, vitest_1.expect)(result.txHash).toBe('update_tx_hash');
+        (0, vitest_1.expect)(result.offerId).toBe('99');
     });
     // ── Input validation ────────────────────────────────────────────────────────
-    (0, vitest_1.it)("rejects update action without offerId", async () => {
-        await (0, vitest_1.expect)(tool.execute({ action: "update", ...BASE_OFFER })).rejects.toThrow(/offerId is required/);
+    (0, vitest_1.it)('rejects update action without offerId', async () => {
+        await (0, vitest_1.expect)(tool.execute({ action: 'update', ...BASE_OFFER })).rejects.toThrow(/offerId is required/);
     });
-    (0, vitest_1.it)("rejects delete action without offerId", async () => {
-        await (0, vitest_1.expect)(tool.execute({ action: "delete", ...BASE_OFFER })).rejects.toThrow(/offerId is required/);
+    (0, vitest_1.it)('rejects delete action without offerId', async () => {
+        await (0, vitest_1.expect)(tool.execute({ action: 'delete', ...BASE_OFFER })).rejects.toThrow(/offerId is required/);
     });
-    (0, vitest_1.it)("rejects invalid amount (zero)", async () => {
-        await (0, vitest_1.expect)(tool.execute({ action: "create", ...BASE_OFFER, amount: "0" })).rejects.toThrow(/Amount must be/);
+    (0, vitest_1.it)('rejects invalid amount (zero)', async () => {
+        await (0, vitest_1.expect)(tool.execute({ action: 'create', ...BASE_OFFER, amount: '0' })).rejects.toThrow(/Amount must be/);
     });
-    (0, vitest_1.it)("rejects invalid price format", async () => {
-        await (0, vitest_1.expect)(tool.execute({ action: "create", ...BASE_OFFER, price: "abc" })).rejects.toThrow(/Price must be/);
+    (0, vitest_1.it)('rejects invalid price format', async () => {
+        await (0, vitest_1.expect)(tool.execute({ action: 'create', ...BASE_OFFER, price: 'abc' })).rejects.toThrow(/Price must be/);
     });
-    (0, vitest_1.it)("rejects unknown action", async () => {
-        await (0, vitest_1.expect)(tool.execute({ action: "buy", ...BASE_OFFER })).rejects.toThrow();
+    (0, vitest_1.it)('rejects unknown action', async () => {
+        await (0, vitest_1.expect)(tool.execute({ action: 'buy', ...BASE_OFFER })).rejects.toThrow();
     });
-    (0, vitest_1.it)("propagates network errors from submitTransaction", async () => {
-        vitest_1.vi.mocked(rpcClient.submitTransaction).mockRejectedValueOnce(new Error("Network Error"));
-        await (0, vitest_1.expect)(tool.execute({ action: "create", ...BASE_OFFER })).rejects.toThrow("Network Error");
+    (0, vitest_1.it)('propagates network errors from submitTransaction', async () => {
+        vitest_1.vi.mocked(rpcClient.submitTransaction).mockRejectedValueOnce(new Error('Network Error'));
+        await (0, vitest_1.expect)(tool.execute({ action: 'create', ...BASE_OFFER })).rejects.toThrow('Network Error');
     });
 });
 // ─── Schema unit tests ────────────────────────────────────────────────────────
-(0, vitest_1.describe)("DexOfferInputSchema", () => {
-    (0, vitest_1.it)("parses a valid create payload", () => {
+(0, vitest_1.describe)('DexOfferInputSchema', () => {
+    (0, vitest_1.it)('parses a valid create payload', () => {
         const result = DexOfferTool_1.DexOfferInputSchema.parse({
-            action: "create",
-            selling: { code: "XLM" },
-            buying: { code: "USDC", issuer: USDC_ISSUER },
-            amount: "50",
-            price: "0.5",
+            action: 'create',
+            selling: { code: 'XLM' },
+            buying: { code: 'USDC', issuer: USDC_ISSUER },
+            amount: '50',
+            price: '0.5',
         });
-        (0, vitest_1.expect)(result.action).toBe("create");
+        (0, vitest_1.expect)(result.action).toBe('create');
     });
-    (0, vitest_1.it)("parses a valid delete payload with offerId as number", () => {
+    (0, vitest_1.it)('parses a valid delete payload with offerId as number', () => {
         const result = DexOfferTool_1.DexOfferInputSchema.parse({
-            action: "delete",
-            selling: { code: "XLM" },
-            buying: { code: "USDC", issuer: USDC_ISSUER },
-            amount: "1",
-            price: "0.1",
+            action: 'delete',
+            selling: { code: 'XLM' },
+            buying: { code: 'USDC', issuer: USDC_ISSUER },
+            amount: '1',
+            price: '0.1',
             offerId: 7,
         });
         (0, vitest_1.expect)(result.offerId).toBe(7);

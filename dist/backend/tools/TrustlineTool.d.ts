@@ -2,7 +2,7 @@
  * backend/tools/TrustlineTool.ts
  * Manage asset trustlines for the agent account.
  */
-import { z } from "zod";
+import { z } from 'zod';
 export declare const TrustlineInputSchema: z.ZodObject<{
     assetCode: z.ZodString;
     assetIssuer: z.ZodEffects<z.ZodString, string, string>;
@@ -11,18 +11,19 @@ export declare const TrustlineInputSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     assetCode: string;
     assetIssuer: string;
-    action: "add" | "remove";
+    action: "remove" | "add";
     limit?: string | undefined;
 }, {
     assetCode: string;
     assetIssuer: string;
-    action: "add" | "remove";
+    action: "remove" | "add";
     limit?: string | undefined;
 }>;
 export type TrustlineInput = z.infer<typeof TrustlineInputSchema>;
 export declare class TrustlineTool {
     private keypair;
     private networkPassphrase;
+    private balanceCheckTool;
     constructor(secretKey?: string);
     checkTrustline(assetCode: string, assetIssuer: string): Promise<boolean>;
     execute(rawInput: unknown): Promise<{

@@ -11,11 +11,25 @@ Only the latest commit on `main` receives security patches at this stage of the 
 
 ---
 
+## Dependency Vulnerability Policy
+
+Dependency vulnerabilities are checked in CI before changes can merge:
+
+- `npm audit --audit-level=high` fails the `audit-npm` job for High or Critical npm advisories.
+- The optional `snyk` job runs `snyk test --severity-threshold=high` when the `SNYK_TOKEN` repository secret is configured.
+- Rust dependencies are checked with `cargo audit` in the `audit-rust` job.
+- Findings must be remediated by upgrading, replacing, or removing the affected dependency whenever possible.
+- A false positive may be ignored only after maintainer review, with a documented reason and expiry in [`.snyk`](./.snyk). The ignore must be removed when the finding is fixed or the justification expires.
+
+High and Critical findings are not accepted as routine CI noise. If remediation is not immediately available, document the risk, mitigation, owner, and review date in the security discussion before adding a narrowly scoped temporary exception.
+
+---
+
 ## Reporting a Vulnerability
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Use [GitHub Private Security Advisories](https://github.com/Dami24-hub/nodal-ai/security/advisories/new) to report vulnerabilities confidentially. This keeps details private until a fix is released.
+Use [GitHub Private Security Advisories](https://github.com/Nodal-stellar/Nodal-AI/security/advisories/new) to report vulnerabilities confidentially. This keeps details private until a fix is released.
 
 ### Response SLA
 
@@ -40,7 +54,7 @@ The following invariants are enforced throughout the codebase. Any contribution 
 All sensitive credentials — `AGENT_SECRET_KEY`, RPC endpoints, asset issuers — are sourced exclusively from environment variables and validated at startup via Zod schemas (`backend/config.ts`). No secrets appear in source code, committed configuration files, or log output.
 
 **Enforcement:**
-- `.env` is `.gitignore`d; `..env` contains only placeholder values.
+- `.env` is `.gitignore`d; `.env.example` contains only placeholder values.
 - Zod validation error messages strip any value matching a Stellar secret-key pattern (`S[A-Z2-7]{55}`) before writing to stderr (`formatValidationErrors` in `backend/config.ts`).
 - CI pipelines must never inject real secret keys into build logs.
 

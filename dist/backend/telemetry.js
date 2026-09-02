@@ -21,8 +21,8 @@ const sdk_metrics_1 = require("@opentelemetry/sdk-metrics");
 const api_1 = require("@opentelemetry/api");
 const config_1 = require("./config");
 const logger_1 = require("./utils/logger");
-const log = (0, logger_1.createLogger)("telemetry");
-let tracer = api_1.trace.getTracer("stellar-agent-kit");
+const log = (0, logger_1.createLogger)('telemetry');
+let tracer = api_1.trace.getTracer('stellar-agent-kit');
 let sdk = null;
 /**
  * Initialise the OpenTelemetry SDK with OTLP HTTP exporters if
@@ -30,13 +30,14 @@ let sdk = null;
  * are no-ops.
  */
 function initTelemetry() {
-    const otlpEndpoint = config_1.config.OTLP_ENDPOINT;
+    const otlpEndpoint = config_1.config
+        .OTLP_ENDPOINT;
     if (!otlpEndpoint) {
-        log.info("OTLP_ENDPOINT not configured, skipping OpenTelemetry initialisation");
+        log.info('OTLP_ENDPOINT not configured, skipping OpenTelemetry initialisation');
         return;
     }
     if (sdk) {
-        log.warn("initTelemetry called but SDK is already running");
+        log.warn('initTelemetry called but SDK is already running');
         return;
     }
     const traceExporter = new exporter_trace_otlp_http_1.OTLPTraceExporter({
@@ -51,10 +52,10 @@ function initTelemetry() {
     sdk = new sdk_node_1.NodeSDK({
         traceExporter,
         metricReaders: [metricReader],
-        serviceName: "stellar-agent-kit",
+        serviceName: 'stellar-agent-kit',
     });
     sdk.start();
-    log.info({ endpoint: otlpEndpoint }, "OpenTelemetry initialised");
+    log.info({ endpoint: otlpEndpoint }, 'OpenTelemetry initialised');
 }
 /**
  * Return the active tracer (no-op tracer when telemetry is disabled).
@@ -100,7 +101,7 @@ async function shutdownTelemetry() {
     if (sdk) {
         await sdk.shutdown();
         sdk = null;
-        log.info("OpenTelemetry shut down");
+        log.info('OpenTelemetry shut down');
     }
 }
 //# sourceMappingURL=telemetry.js.map

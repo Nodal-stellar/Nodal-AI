@@ -55,10 +55,10 @@ const stellar_sdk_1 = require("@stellar/stellar-sdk");
 const axios_1 = __importDefault(require("axios"));
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
-const SOROBAN_RPC_URL = process.env.SOROBAN_RPC_URL ?? "https://soroban-testnet.stellar.org";
-const HORIZON_URL = process.env.HORIZON_URL ?? "https://horizon-testnet.stellar.org";
+const SOROBAN_RPC_URL = process.env.SOROBAN_RPC_URL ?? 'https://soroban-testnet.stellar.org';
+const HORIZON_URL = process.env.HORIZON_URL ?? 'https://horizon-testnet.stellar.org';
 const NETWORK_PASSPHRASE = stellar_sdk_1.Networks.TESTNET;
-const WASM_PATH = path.resolve(__dirname, "../../contracts/escrow/target/wasm32-unknown-unknown/release/stellar_payfi_escrow.wasm");
+const WASM_PATH = path.resolve(__dirname, '../../contracts/escrow/target/wasm32-unknown-unknown/release/stellar_payfi_escrow.wasm');
 const sorobanServer = new stellar_sdk_1.rpc.Server(SOROBAN_RPC_URL, { allowHttp: false });
 async function friendbot(address) {
     await axios_1.default.get(`https://friendbot.stellar.org?addr=${address}`);
@@ -67,9 +67,9 @@ async function pollTx(server, hash, maxAttempts = 20, intervalMs = 3000) {
     for (let i = 0; i < maxAttempts; i++) {
         await new Promise((r) => setTimeout(r, intervalMs));
         const status = await server.getTransaction(hash);
-        if (status.status === "SUCCESS")
+        if (status.status === 'SUCCESS')
             return status;
-        if (status.status === "FAILED")
+        if (status.status === 'FAILED')
             throw new Error(`Transaction failed: ${hash}`);
     }
     throw new Error(`Transaction not confirmed within polling window: ${hash}`);
@@ -82,8 +82,8 @@ async function sendTx(server, tx) {
     const prepared = stellar_sdk_1.rpc.assembleTransaction(tx, sim).build();
     prepared.sign(deployerKp);
     const result = await server.sendTransaction(prepared);
-    if (result.status === "ERROR") {
-        throw new Error(`Submit error: ${result.errorResult?.toXDR("base64")}`);
+    if (result.status === 'ERROR') {
+        throw new Error(`Submit error: ${result.errorResult?.toXDR('base64')}`);
     }
     return pollTx(server, result.hash);
 }
@@ -91,21 +91,18 @@ async function sendTx(server, tx) {
 let deployerKp;
 let recipientKp;
 let contractId;
-(0, vitest_1.describe)("Escrow E2E — testnet", () => {
+(0, vitest_1.describe)('Escrow E2E — testnet', () => {
     (0, vitest_1.beforeAll)(async () => {
         deployerKp = stellar_sdk_1.Keypair.random();
         recipientKp = stellar_sdk_1.Keypair.random();
         // Fund both keypairs via Friendbot
-        await Promise.all([
-            friendbot(deployerKp.publicKey()),
-            friendbot(recipientKp.publicKey()),
-        ]);
+        await Promise.all([friendbot(deployerKp.publicKey()), friendbot(recipientKp.publicKey())]);
         // Small pause to let Horizon index the funded accounts
         await new Promise((r) => setTimeout(r, 5000));
     }, 60_000);
-    (0, vitest_1.it)("deploys the escrow WASM and creates a contract instance", async () => {
+    (0, vitest_1.it)('deploys the escrow WASM and creates a contract instance', async () => {
         if (!fs.existsSync(WASM_PATH)) {
-            console.warn("WASM not found — skipping deploy (run `cargo build --release --target wasm32-unknown-unknown`)");
+            console.warn('WASM not found — skipping deploy (run `cargo build --release --target wasm32-unknown-unknown`)');
             return;
         }
         const wasm = fs.readFileSync(WASM_PATH);
@@ -147,10 +144,10 @@ let contractId;
             .setTimeout(30)
             .build();
         const deployResult = await sendTx(sorobanServer, deployTx);
-        contractId = deployResult.returnValue?.address()?.contractId().toString("hex");
+        contractId = deployResult.returnValue?.address()?.contractId().toString('hex');
         (0, vitest_1.expect)(contractId).toBeDefined();
     }, 120_000);
-    (0, vitest_1.it)("initializes the escrow contract", async () => {
+    (0, vitest_1.it)('initializes the escrow contract', async () => {
         if (!contractId)
             return;
         const account = await sorobanServer.getAccount(deployerKp.publicKey());
@@ -163,11 +160,11 @@ let contractId;
         stellar_sdk_1.xdr.Operation.invokeHostFunction({
             hostFunction: stellar_sdk_1.xdr.HostFunction.hostFunctionTypeInvokeContract(new stellar_sdk_1.xdr.InvokeContractArgs({
                 contractAddress: stellar_sdk_1.Address.fromString(contractId).toScAddress(),
-                functionName: "initialize",
+                functionName: 'initialize',
                 args: [
-                    (0, stellar_sdk_1.nativeToScVal)(deployerKp.publicKey(), { type: "address" }),
-                    (0, stellar_sdk_1.nativeToScVal)(recipientKp.publicKey(), { type: "address" }),
-                    (0, stellar_sdk_1.nativeToScVal)(10n, { type: "i128" }),
+                    (0, stellar_sdk_1.nativeToScVal)(deployerKp.publicKey(), { type: 'address' }),
+                    (0, stellar_sdk_1.nativeToScVal)(recipientKp.publicKey(), { type: 'address' }),
+                    (0, stellar_sdk_1.nativeToScVal)(10n, { type: 'i128' }),
                 ],
             })),
             auth: [],
@@ -176,14 +173,14 @@ let contractId;
             .build();
         await (0, vitest_1.expect)(sendTx(sorobanServer, tx)).resolves.toBeDefined();
     }, 60_000);
-    (0, vitest_1.it)("releases funds and confirms recipient balance increased", async () => {
+    (0, vitest_1.it)('releases funds and confirms recipient balance increased', async () => {
         if (!contractId)
             return;
         const balanceBefore = await axios_1.default
             .get(`${HORIZON_URL}/accounts/${recipientKp.publicKey()}`)
             .then((r) => {
-            const xlm = r.data.balances.find((b) => b.asset_type === "native");
-            return parseFloat(xlm?.balance ?? "0");
+            const xlm = r.data.balances.find((b) => b.asset_type === 'native');
+            return parseFloat(xlm?.balance ?? '0');
         });
         const account = await sorobanServer.getAccount(deployerKp.publicKey());
         const tx = new stellar_sdk_1.TransactionBuilder(account, {
@@ -195,7 +192,7 @@ let contractId;
         stellar_sdk_1.xdr.Operation.invokeHostFunction({
             hostFunction: stellar_sdk_1.xdr.HostFunction.hostFunctionTypeInvokeContract(new stellar_sdk_1.xdr.InvokeContractArgs({
                 contractAddress: stellar_sdk_1.Address.fromString(contractId).toScAddress(),
-                functionName: "release",
+                functionName: 'release',
                 args: [],
             })),
             auth: [],
@@ -206,12 +203,12 @@ let contractId;
         const balanceAfter = await axios_1.default
             .get(`${HORIZON_URL}/accounts/${recipientKp.publicKey()}`)
             .then((r) => {
-            const xlm = r.data.balances.find((b) => b.asset_type === "native");
-            return parseFloat(xlm?.balance ?? "0");
+            const xlm = r.data.balances.find((b) => b.asset_type === 'native');
+            return parseFloat(xlm?.balance ?? '0');
         });
         (0, vitest_1.expect)(balanceAfter).toBeGreaterThan(balanceBefore);
     }, 60_000);
-    (0, vitest_1.it)("full lifecycle: initialize then release by arbiter", async () => {
+    (0, vitest_1.it)('full lifecycle: initialize then release by arbiter', async () => {
         if (!contractId)
             return;
         const arbiterKp = stellar_sdk_1.Keypair.random();
@@ -220,8 +217,8 @@ let contractId;
         const balanceBefore = await axios_1.default
             .get(`${HORIZON_URL}/accounts/${recipientKp.publicKey()}`)
             .then((r) => {
-            const xlm = r.data.balances.find((b) => b.asset_type === "native");
-            return parseFloat(xlm?.balance ?? "0");
+            const xlm = r.data.balances.find((b) => b.asset_type === 'native');
+            return parseFloat(xlm?.balance ?? '0');
         });
         const account = await sorobanServer.getAccount(deployerKp.publicKey());
         const initTx = new stellar_sdk_1.TransactionBuilder(account, {
@@ -233,11 +230,11 @@ let contractId;
         stellar_sdk_1.xdr.Operation.invokeHostFunction({
             hostFunction: stellar_sdk_1.xdr.HostFunction.hostFunctionTypeInvokeContract(new stellar_sdk_1.xdr.InvokeContractArgs({
                 contractAddress: stellar_sdk_1.Address.fromString(contractId).toScAddress(),
-                functionName: "initialize",
+                functionName: 'initialize',
                 args: [
-                    (0, stellar_sdk_1.nativeToScVal)(arbiterKp.publicKey(), { type: "address" }),
-                    (0, stellar_sdk_1.nativeToScVal)(recipientKp.publicKey(), { type: "address" }),
-                    (0, stellar_sdk_1.nativeToScVal)(5n, { type: "i128" }),
+                    (0, stellar_sdk_1.nativeToScVal)(arbiterKp.publicKey(), { type: 'address' }),
+                    (0, stellar_sdk_1.nativeToScVal)(recipientKp.publicKey(), { type: 'address' }),
+                    (0, stellar_sdk_1.nativeToScVal)(5n, { type: 'i128' }),
                 ],
             })),
             auth: [],
@@ -255,7 +252,7 @@ let contractId;
         stellar_sdk_1.xdr.Operation.invokeHostFunction({
             hostFunction: stellar_sdk_1.xdr.HostFunction.hostFunctionTypeInvokeContract(new stellar_sdk_1.xdr.InvokeContractArgs({
                 contractAddress: stellar_sdk_1.Address.fromString(contractId).toScAddress(),
-                functionName: "release",
+                functionName: 'release',
                 args: [],
             })),
             auth: [],
@@ -266,12 +263,12 @@ let contractId;
         const balanceAfter = await axios_1.default
             .get(`${HORIZON_URL}/accounts/${recipientKp.publicKey()}`)
             .then((r) => {
-            const xlm = r.data.balances.find((b) => b.asset_type === "native");
-            return parseFloat(xlm?.balance ?? "0");
+            const xlm = r.data.balances.find((b) => b.asset_type === 'native');
+            return parseFloat(xlm?.balance ?? '0');
         });
         (0, vitest_1.expect)(balanceAfter).toBeGreaterThan(balanceBefore);
     }, 120_000);
-    (0, vitest_1.it)("full lifecycle: initialize then refund by depositor after expiry", async () => {
+    (0, vitest_1.it)('full lifecycle: initialize then refund by depositor after expiry', async () => {
         if (!contractId)
             return;
         const refundKp = stellar_sdk_1.Keypair.random();
@@ -280,8 +277,8 @@ let contractId;
         const balanceBefore = await axios_1.default
             .get(`${HORIZON_URL}/accounts/${refundKp.publicKey()}`)
             .then((r) => {
-            const xlm = r.data.balances.find((b) => b.asset_type === "native");
-            return parseFloat(xlm?.balance ?? "0");
+            const xlm = r.data.balances.find((b) => b.asset_type === 'native');
+            return parseFloat(xlm?.balance ?? '0');
         });
         const account = await sorobanServer.getAccount(refundKp.publicKey());
         const initTx = new stellar_sdk_1.TransactionBuilder(account, {
@@ -293,11 +290,11 @@ let contractId;
         stellar_sdk_1.xdr.Operation.invokeHostFunction({
             hostFunction: stellar_sdk_1.xdr.HostFunction.hostFunctionTypeInvokeContract(new stellar_sdk_1.xdr.InvokeContractArgs({
                 contractAddress: stellar_sdk_1.Address.fromString(contractId).toScAddress(),
-                functionName: "initialize",
+                functionName: 'initialize',
                 args: [
-                    (0, stellar_sdk_1.nativeToScVal)(refundKp.publicKey(), { type: "address" }),
-                    (0, stellar_sdk_1.nativeToScVal)(recipientKp.publicKey(), { type: "address" }),
-                    (0, stellar_sdk_1.nativeToScVal)(3n, { type: "i128" }),
+                    (0, stellar_sdk_1.nativeToScVal)(refundKp.publicKey(), { type: 'address' }),
+                    (0, stellar_sdk_1.nativeToScVal)(recipientKp.publicKey(), { type: 'address' }),
+                    (0, stellar_sdk_1.nativeToScVal)(3n, { type: 'i128' }),
                 ],
             })),
             auth: [],
@@ -317,7 +314,7 @@ let contractId;
         stellar_sdk_1.xdr.Operation.invokeHostFunction({
             hostFunction: stellar_sdk_1.xdr.HostFunction.hostFunctionTypeInvokeContract(new stellar_sdk_1.xdr.InvokeContractArgs({
                 contractAddress: stellar_sdk_1.Address.fromString(contractId).toScAddress(),
-                functionName: "refund",
+                functionName: 'refund',
                 args: [],
             })),
             auth: [],
@@ -328,12 +325,12 @@ let contractId;
         const balanceAfter = await axios_1.default
             .get(`${HORIZON_URL}/accounts/${refundKp.publicKey()}`)
             .then((r) => {
-            const xlm = r.data.balances.find((b) => b.asset_type === "native");
-            return parseFloat(xlm?.balance ?? "0");
+            const xlm = r.data.balances.find((b) => b.asset_type === 'native');
+            return parseFloat(xlm?.balance ?? '0');
         });
         (0, vitest_1.expect)(balanceAfter).toBeGreaterThan(balanceBefore);
     }, 120_000);
-    (0, vitest_1.it)("release fails when called by non-arbiter", async () => {
+    (0, vitest_1.it)('release fails when called by non-arbiter', async () => {
         if (!contractId)
             return;
         const nonArbiterKp = stellar_sdk_1.Keypair.random();
@@ -349,11 +346,11 @@ let contractId;
         stellar_sdk_1.xdr.Operation.invokeHostFunction({
             hostFunction: stellar_sdk_1.xdr.HostFunction.hostFunctionTypeInvokeContract(new stellar_sdk_1.xdr.InvokeContractArgs({
                 contractAddress: stellar_sdk_1.Address.fromString(contractId).toScAddress(),
-                functionName: "initialize",
+                functionName: 'initialize',
                 args: [
-                    (0, stellar_sdk_1.nativeToScVal)(deployerKp.publicKey(), { type: "address" }),
-                    (0, stellar_sdk_1.nativeToScVal)(recipientKp.publicKey(), { type: "address" }),
-                    (0, stellar_sdk_1.nativeToScVal)(2n, { type: "i128" }),
+                    (0, stellar_sdk_1.nativeToScVal)(deployerKp.publicKey(), { type: 'address' }),
+                    (0, stellar_sdk_1.nativeToScVal)(recipientKp.publicKey(), { type: 'address' }),
+                    (0, stellar_sdk_1.nativeToScVal)(2n, { type: 'i128' }),
                 ],
             })),
             auth: [],
@@ -371,7 +368,7 @@ let contractId;
         stellar_sdk_1.xdr.Operation.invokeHostFunction({
             hostFunction: stellar_sdk_1.xdr.HostFunction.hostFunctionTypeInvokeContract(new stellar_sdk_1.xdr.InvokeContractArgs({
                 contractAddress: stellar_sdk_1.Address.fromString(contractId).toScAddress(),
-                functionName: "release",
+                functionName: 'release',
                 args: [],
             })),
             auth: [],
@@ -380,7 +377,7 @@ let contractId;
             .build();
         await (0, vitest_1.expect)(sendTx(sorobanServer, releaseTx)).rejects.toThrow();
     }, 120_000);
-    (0, vitest_1.it)("refund fails before expiry", async () => {
+    (0, vitest_1.it)('refund fails before expiry', async () => {
         if (!contractId)
             return;
         const depositorKp = stellar_sdk_1.Keypair.random();
@@ -396,11 +393,11 @@ let contractId;
         stellar_sdk_1.xdr.Operation.invokeHostFunction({
             hostFunction: stellar_sdk_1.xdr.HostFunction.hostFunctionTypeInvokeContract(new stellar_sdk_1.xdr.InvokeContractArgs({
                 contractAddress: stellar_sdk_1.Address.fromString(contractId).toScAddress(),
-                functionName: "initialize",
+                functionName: 'initialize',
                 args: [
-                    (0, stellar_sdk_1.nativeToScVal)(depositorKp.publicKey(), { type: "address" }),
-                    (0, stellar_sdk_1.nativeToScVal)(recipientKp.publicKey(), { type: "address" }),
-                    (0, stellar_sdk_1.nativeToScVal)(4n, { type: "i128" }),
+                    (0, stellar_sdk_1.nativeToScVal)(depositorKp.publicKey(), { type: 'address' }),
+                    (0, stellar_sdk_1.nativeToScVal)(recipientKp.publicKey(), { type: 'address' }),
+                    (0, stellar_sdk_1.nativeToScVal)(4n, { type: 'i128' }),
                 ],
             })),
             auth: [],
@@ -419,7 +416,7 @@ let contractId;
         stellar_sdk_1.xdr.Operation.invokeHostFunction({
             hostFunction: stellar_sdk_1.xdr.HostFunction.hostFunctionTypeInvokeContract(new stellar_sdk_1.xdr.InvokeContractArgs({
                 contractAddress: stellar_sdk_1.Address.fromString(contractId).toScAddress(),
-                functionName: "refund",
+                functionName: 'refund',
                 args: [],
             })),
             auth: [],

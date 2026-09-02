@@ -13,16 +13,22 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.probeDb = probeDb;
 exports.saveResult = saveResult;
 exports.getResults = getResults;
+exports.saveSpendingRecord = saveSpendingRecord;
+exports.loadSpendingRecords = loadSpendingRecords;
+exports.pruneSpendingRecords = pruneSpendingRecords;
+exports.clearSpendingRecords = clearSpendingRecords;
 exports._setDb = _setDb;
 const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
 let _db = null;
-function getDb() {
-    if (!_db) {
-        // Lazy import of config so that tests can inject via _setDb() before any DB access
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { config } = require("./config");
-        _db = new better_sqlite3_1.default(config.DB_PATH);
-        _db.exec(`
+/**
+ * Create every table this module owns, plus the idempotent migrations.
+ *
+ * Applied both to the lazily opened connection and to any DB injected through
+ * `_setDb()`, so a test database has the same shape as a real one and the two
+ * cannot drift apart.
+ */
+function applySchema(db) {
+    db.exec(`
       CREATE TABLE IF NOT EXISTS agent_results (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp     TEXT    NOT NULL,
@@ -33,11 +39,32 @@ function getDb() {
         correlationId TEXT
       )
     `);
-        // Idempotent migration for databases created before correlationId existed.
-        const cols = _db.prepare(`PRAGMA table_info(agent_results)`).all();
-        if (!cols.some((c) => c.name === "correlationId")) {
-            _db.exec(`ALTER TABLE agent_results ADD COLUMN correlationId TEXT`);
-        }
+    // Rolling spending window (#372). Kept here so the tracker survives a
+    // restart instead of silently resetting its cumulative total to zero.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS spending_records (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        amount    REAL    NOT NULL,
+        timestamp INTEGER NOT NULL
+      )
+    `);
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_spending_records_timestamp
+        ON spending_records (timestamp)
+    `);
+    // Idempotent migration for databases created before correlationId existed.
+    const cols = db.prepare(`PRAGMA table_info(agent_results)`).all();
+    if (!cols.some((c) => c.name === 'correlationId')) {
+        db.exec(`ALTER TABLE agent_results ADD COLUMN correlationId TEXT`);
+    }
+}
+function getDb() {
+    if (!_db) {
+        // Lazy import of config so that tests can inject via _setDb() before any DB access
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { config } = require('./config');
+        _db = new better_sqlite3_1.default(config.DB_PATH);
+        applySchema(_db);
     }
     return _db;
 }
@@ -52,7 +79,7 @@ function getDb() {
  * which is exactly what an in-memory boolean cannot detect.
  */
 function probeDb() {
-    getDb().prepare("SELECT 1").get();
+    getDb().prepare('SELECT 1').get();
 }
 function saveResult(result) {
     getDb()
@@ -86,8 +113,30 @@ function getResults(limit = 100, offset = 0) {
         return result;
     });
 }
+/** Append a payment to the persisted spending window. */
+function saveSpendingRecord(record) {
+    getDb()
+        .prepare(`INSERT INTO spending_records (amount, timestamp) VALUES (@amount, @timestamp)`)
+        .run({ amount: record.amount, timestamp: record.timestamp });
+}
+/** Records at or after `sinceMs`, oldest first. */
+function loadSpendingRecords(sinceMs) {
+    return getDb()
+        .prepare(`SELECT amount, timestamp FROM spending_records
+       WHERE timestamp >= ? ORDER BY timestamp ASC`)
+        .all(sinceMs);
+}
+/** Drop records that have fallen out of the window. */
+function pruneSpendingRecords(cutoffMs) {
+    getDb().prepare(`DELETE FROM spending_records WHERE timestamp < ?`).run(cutoffMs);
+}
+/** Drop the whole persisted window. */
+function clearSpendingRecords() {
+    getDb().prepare(`DELETE FROM spending_records`).run();
+}
 /** Replace the underlying DB instance — used in tests to inject an in-memory DB. */
 function _setDb(db) {
     _db = db;
+    applySchema(_db);
 }
 //# sourceMappingURL=persistence.js.map

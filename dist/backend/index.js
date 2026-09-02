@@ -12,7 +12,7 @@ const client_1 = require("./db/client");
 const logger_1 = require("./utils/logger");
 const telemetry_1 = require("./telemetry");
 const config_1 = require("./config");
-const log = (0, logger_1.createLogger)("process");
+const log = (0, logger_1.createLogger)('process');
 let agent;
 let healthServer;
 const HARD_KILL_MS = 10_000;
@@ -21,10 +21,10 @@ async function shutdown(signal) {
     if (isShuttingDown)
         return;
     isShuttingDown = true;
-    log.info({ msg: "Graceful shutdown initiated", signal });
+    log.info({ msg: 'Graceful shutdown initiated', signal });
     // Hard kill: force exit if shutdown hangs beyond 10 seconds
     const hardKill = setTimeout(() => {
-        log.error({ msg: "Hard kill: graceful shutdown exceeded 10s, forcing exit" });
+        log.error({ msg: 'Hard kill: graceful shutdown exceeded 10s, forcing exit' });
         process.exit(1);
     }, HARD_KILL_MS);
     try {
@@ -43,11 +43,14 @@ async function shutdown(signal) {
         // 5. Shut down telemetry (flushes pending spans)
         await (0, telemetry_1.shutdownTelemetry)();
         clearTimeout(hardKill);
-        log.info({ msg: "All resources released, exiting cleanly" });
+        log.info({ msg: 'All resources released, exiting cleanly' });
         process.exit(0);
     }
     catch (err) {
-        log.error({ msg: "Error during shutdown sequence", error: err instanceof Error ? err.message : String(err) });
+        log.error({
+            msg: 'Error during shutdown sequence',
+            error: err instanceof Error ? err.message : String(err),
+        });
         clearTimeout(hardKill);
         process.exit(1);
     }
@@ -58,11 +61,14 @@ async function start() {
     (0, telemetry_1.initTelemetry)();
     exports.agent = agent = new agent_1.PayFiAgent();
     healthServer = (0, server_1.startHealthServer)();
-    process.on("SIGTERM", () => shutdown("SIGTERM"));
-    process.on("SIGINT", () => shutdown("SIGINT"));
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
 }
 start().catch((err) => {
-    log.error({ msg: "Failed to start agent process", error: err instanceof Error ? err.message : String(err) });
+    log.error({
+        msg: 'Failed to start agent process',
+        error: err instanceof Error ? err.message : String(err),
+    });
     process.exit(1);
 });
 //# sourceMappingURL=index.js.map

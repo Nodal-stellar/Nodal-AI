@@ -4,7 +4,8 @@
  * Set LOG_LEVEL env var to control verbosity (default: "info").
  * Set NODE_ENV=production to emit raw JSON; otherwise prettified output is used.
  */
-import pino from "pino";
+import pino from 'pino';
+export declare const REDACT_PATHS: string[];
 export declare const logger: pino.Logger<never, boolean>;
 /**
  * Returns a child logger pre-tagged with `component` and an optional `correlationId`.
