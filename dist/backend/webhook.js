@@ -43,40 +43,107 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.signPayload = signPayload;
 exports.verifyWebhookSignature = verifyWebhookSignature;
+exports.isRetryableWebhookError = isRetryableWebhookError;
 exports.dispatchWebhook = dispatchWebhook;
 const crypto_1 = __importStar(require("crypto"));
 const axios_1 = __importDefault(require("axios"));
 const config_1 = require("./config");
-const rpc_client_1 = require("./rpc_client");
 const logger_1 = require("./utils/logger");
-const log = (0, logger_1.createLogger)("webhook");
+const network_1 = require("./network");
+const log = (0, logger_1.createLogger)('webhook');
 function signPayload(payload, secret) {
-    return (0, crypto_1.createHmac)("sha256", secret).update(payload).digest("hex");
+    return (0, crypto_1.createHmac)('sha256', secret).update(payload).digest('hex');
 }
 function verifyWebhookSignature(payload, sig, secret) {
-    const expected = Buffer.from(signPayload(payload, secret), "hex");
-    const received = Buffer.from(sig, "hex");
+    if (typeof sig !== 'string' || !/^[0-9a-fA-F]{64}$/.test(sig))
+        return false;
+    const expected = Buffer.from(signPayload(payload, secret), 'hex');
+    const received = Buffer.from(sig, 'hex');
     if (expected.length !== received.length)
         return false;
     return crypto_1.default.timingSafeEqual(expected, received);
 }
-async function dispatchWebhook(result) {
+function isRetryableWebhookError(errOrStatus) {
+    let status;
+    if (typeof errOrStatus === 'number') {
+        status = errOrStatus;
+    }
+    else if (errOrStatus && typeof errOrStatus === 'object') {
+        const httpErr = errOrStatus;
+        status = httpErr.response?.status ?? httpErr.status;
+    }
+    if (status !== undefined) {
+        if (status >= 200 && status < 300)
+            return false;
+        if (status === 429)
+            return true;
+        if (status >= 400 && status < 500)
+            return false;
+        if (status >= 500 && status < 600)
+            return true;
+    }
+    // Connection errors, network drops, or unclassified errors default to retryable
+    return true;
+}
+async function dispatchWebhook(result, options) {
     if (!config_1.config.WEBHOOK_URL)
         return;
+    const maxAttempts = options?.maxAttempts ?? 3;
+    const initialDelayMs = options?.initialDelayMs ?? 1000;
     const body = JSON.stringify(result);
-    const headers = { "Content-Type": "application/json" };
+    const headers = { 'Content-Type': 'application/json' };
     if (config_1.config.WEBHOOK_SECRET) {
-        headers["X-Nodal-Signature"] = signPayload(body, config_1.config.WEBHOOK_SECRET);
+        headers['X-Nodal-Signature'] = signPayload(body, config_1.config.WEBHOOK_SECRET);
     }
-    try {
-        await (0, rpc_client_1.withRetry)(() => axios_1.default.post(config_1.config.WEBHOOK_URL, body, { headers }), 3, 200);
-        log.info({ taskType: result.taskType }, "Webhook delivered");
+    let lastError;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            const response = await axios_1.default.post(config_1.config.WEBHOOK_URL, body, { headers });
+            const status = response?.status;
+            if (status !== undefined && (status < 200 || status >= 300)) {
+                const error = Object.assign(new Error(`Webhook responded with status ${status}`), {
+                    status,
+                    response,
+                });
+                throw error;
+            }
+            log.info({ taskType: result.taskType }, 'Webhook delivered');
+            return;
+        }
+        catch (err) {
+            lastError = err;
+            const httpErr = (err && typeof err === 'object' ? err : {});
+            const status = httpErr.response?.status ?? httpErr.status;
+            if (status === 429) {
+                const retryAfter = httpErr.response?.headers?.['retry-after'];
+                (0, network_1.handleRateLimitResponse)(retryAfter);
+            }
+            if (!isRetryableWebhookError(err)) {
+                log.warn({
+                    taskType: result.taskType,
+                    status,
+                    attempt,
+                    error: err instanceof Error ? err.message : String(err),
+                }, 'Webhook delivery failed (non-retryable)');
+                return;
+            }
+            log.warn({
+                taskType: result.taskType,
+                status,
+                attempt,
+                maxAttempts,
+                error: err instanceof Error ? err.message : String(err),
+            }, 'Webhook delivery attempt failed');
+            if (attempt < maxAttempts) {
+                const delay = initialDelayMs * Math.pow(2, attempt - 1);
+                await new Promise((resolve) => setTimeout(resolve, delay));
+            }
+        }
     }
-    catch (err) {
-        log.warn({
-            taskType: result.taskType,
-            error: err instanceof Error ? err.message : String(err),
-        }, "Webhook delivery failed");
-    }
+    log.warn({
+        taskType: result.taskType,
+        attempts: maxAttempts,
+        error: lastError instanceof Error ? lastError.message : String(lastError),
+    }, 'Webhook delivery failed after max retries');
 }
 //# sourceMappingURL=webhook.js.map

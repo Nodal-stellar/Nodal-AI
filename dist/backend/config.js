@@ -61,14 +61,24 @@ const client_secrets_manager_1 = require("@aws-sdk/client-secrets-manager");
 // Load .env file (no-op when running in CI / production with real env vars)
 dotenv.config();
 // ─── Custom Zod refinements ───────────────────────────────────────────────────
+function isValidStellarPublicKey(value) {
+    if (!value.startsWith('G')) {
+        return false;
+    }
+    try {
+        stellar_sdk_1.Keypair.fromPublicKey(value);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
 /**
  * Validates a Stellar secret key (S…, 56 chars, base32).
  * The key itself is NEVER surfaced in Zod error messages —
  * we only report structural problems.
  */
-const StellarSecretKeySchema = zod_1.z
-    .string()
-    .refine((val) => {
+const StellarSecretKeySchema = zod_1.z.string().refine((val) => {
     try {
         stellar_sdk_1.Keypair.fromSecret(val);
         return true;
@@ -78,15 +88,20 @@ const StellarSecretKeySchema = zod_1.z
     }
 }, 
 // Generic message — does not echo the value
-{ message: "AGENT_SECRET_KEY is not a valid Stellar secret key (must start with S and be 56 chars)" });
+{
+    message: 'AGENT_SECRET_KEY is not a valid Stellar secret key (must start with S and be 56 chars)',
+});
 /**
  * Stellar public key — 56-char G-address.
  * Optional: when absent it is derived from AGENT_SECRET_KEY.
  */
 const StellarPublicKeySchema = zod_1.z
     .string()
-    .length(56, "Must be a 56-character Stellar public key (G…)")
-    .refine((val) => val.startsWith("G"), { message: "Public key must start with G" })
+    .length(56, 'Must be a 56-character Stellar public key (G…)')
+    .refine((val) => val.startsWith('G'), { message: 'Public key must start with G' })
+    .refine((val) => isValidStellarPublicKey(val), {
+    message: 'AGENT_PUBLIC_KEY must be a valid Stellar public key',
+})
     .optional();
 /**
  * Spending limit: a positive decimal with up to 7 decimal places.
@@ -95,109 +110,83 @@ const StellarPublicKeySchema = zod_1.z
 const SpendingLimitSchema = zod_1.z
     .string()
     .regex(/^[1-9]\d*(\.\d{1,7})?$/, "AGENT_SPENDING_LIMIT must be a positive decimal (e.g. '100' or '50.0000000')")
-    .default("100");
+    .default('100');
 // ─── Raw environment schema ───────────────────────────────────────────────────
 const EnvSchema = zod_1.z.object({
     // Network
     STELLAR_NETWORK: zod_1.z
-        .enum(["testnet", "mainnet", "futurenet"], {
+        .enum(['testnet', 'mainnet', 'futurenet'], {
         errorMap: () => ({
-            message: "STELLAR_NETWORK must be one of: testnet | mainnet | futurenet",
+            message: 'STELLAR_NETWORK must be one of: testnet | mainnet | futurenet',
         }),
     })
-        .default("testnet"),
+        .default('testnet'),
     // RPC endpoints
     HORIZON_URL: zod_1.z
-        .string({ required_error: "HORIZON_URL is required" })
-        .url("HORIZON_URL must be a valid URL (e.g. https://horizon-testnet.stellar.org)"),
+        .string({ required_error: 'HORIZON_URL is required' })
+        .url('HORIZON_URL must be a valid URL (e.g. https://horizon-testnet.stellar.org)'),
     SOROBAN_RPC_URL: zod_1.z
-        .string({ required_error: "SOROBAN_RPC_URL is required" })
-        .url("SOROBAN_RPC_URL must be a valid URL (e.g. https://soroban-testnet.stellar.org)"),
+        .string({ required_error: 'SOROBAN_RPC_URL is required' })
+        .url('SOROBAN_RPC_URL must be a valid URL (e.g. https://soroban-testnet.stellar.org)'),
     // Agent identity
     AGENT_SECRET_KEY: StellarSecretKeySchema,
     AGENT_PUBLIC_KEY: StellarPublicKeySchema,
     AGENT_SECRET_KEY_ARN: zod_1.z.string().optional(),
     // x402 / PayFi asset
-    X402_ASSET_CODE: zod_1.z.string().min(1).max(12).default("USDC"),
+    X402_ASSET_CODE: zod_1.z.string().min(1).max(12).default('USDC'),
     X402_ASSET_ISSUER: zod_1.z
-        .string({ required_error: "X402_ASSET_ISSUER is required" })
-        .length(56, "X402_ASSET_ISSUER must be a 56-character Stellar address")
-        .refine((val) => val.startsWith("G"), {
-        message: "X402_ASSET_ISSUER must start with G",
+        .string({ required_error: 'X402_ASSET_ISSUER is required' })
+        .length(56, 'X402_ASSET_ISSUER must be a 56-character Stellar address')
+        .refine((val) => val.startsWith('G'), {
+        message: 'X402_ASSET_ISSUER must start with G',
     })
-        .refine((val) => {
-        try {
-            stellar_sdk_1.Keypair.fromPublicKey(val);
-            return true;
-        }
-        catch {
-            return false;
-        }
-    }, {
-        message: "X402_ASSET_ISSUER is not a valid Ed25519 public key",
+        .refine((val) => isValidStellarPublicKey(val), {
+        message: 'X402_ASSET_ISSUER is not a valid Ed25519 public key',
     }),
     ALLOWED_X402_ORIGINS: zod_1.z.string().optional(),
     // Spending cap
     AGENT_SPENDING_LIMIT: SpendingLimitSchema,
     // Persistence
-    DB_PATH: zod_1.z.string().default("./agent.db"),
+    DB_PATH: zod_1.z.string().default('./agent.db'),
     // Logging
-    LOG_LEVEL: zod_1.z.enum(["debug", "info", "warn", "error"]).default("info"),
+    LOG_LEVEL: zod_1.z.enum(['debug', 'info', 'warn', 'error']).default('info'),
     // OpenTelemetry
     OTLP_ENDPOINT: zod_1.z.string().url().optional(),
     // Spending window for rate/cap computation
-    SPENDING_WINDOW_MS: zod_1.z.coerce
-        .number()
-        .int()
-        .min(100)
-        .default(86_400_000),
+    SPENDING_WINDOW_MS: zod_1.z.coerce.number().int().min(100).default(86_400_000),
     // Retry behaviour
     // Exponential back-off: delay = RETRY_DELAY_MS * 2^(attempt-1), capped at 30 000 ms,
     // plus ±20% random jitter. Example — MAX_RETRIES=3, RETRY_DELAY_MS=1500 →
     // delays [1500, 3000, 6000] ms (before jitter), not linear [1500, 3000, 4500].
-    MAX_RETRIES: zod_1.z.coerce
-        .number()
-        .int()
-        .min(1)
-        .max(10)
-        .default(3),
-    RETRY_DELAY_MS: zod_1.z.coerce
-        .number()
-        .int()
-        .min(100)
-        .default(1500),
+    MAX_RETRIES: zod_1.z.coerce.number().int().min(1).max(10).default(3),
+    RETRY_DELAY_MS: zod_1.z.coerce.number().int().min(100).default(1500),
+    // How long a cached Horizon account stays fresh. Sequence numbers and
+    // balances change on every transaction the account takes part in, so this is
+    // deliberately short: it exists to collapse bursts of reads, not to avoid
+    // round trips generally.
+    ACCOUNT_CACHE_TTL_MS: zod_1.z.coerce.number().int().min(0).default(30_000),
     // Per-call RPC timeout in milliseconds.
     // Defaults to RETRY_DELAY_MS * MAX_RETRIES * 2, computed post-parse.
-    RPC_TIMEOUT_MS: zod_1.z.coerce
-        .number()
-        .int()
-        .min(100)
-        .optional(),
+    RPC_TIMEOUT_MS: zod_1.z.coerce.number().int().min(100).optional(),
+    // TOML cache TTL in milliseconds (default: 5 minutes = 300,000 ms)
+    TOML_CACHE_TTL_MS: zod_1.z.coerce.number().int().min(0).default(300_000),
     // Rate limiting
-    MAX_X402_PAYMENTS_PER_MINUTE: zod_1.z.coerce
+    MAX_X402_PAYMENTS_PER_MINUTE: zod_1.z.coerce.number().int().min(1).default(10),
+    // How long a used x402 nonce is retained for replay protection before it
+    // becomes eligible for eviction. Defaults to 24h, comfortably above the
+    // longest plausible challenge lifetime.
+    X402_NONCE_TTL_MS: zod_1.z.coerce
         .number()
         .int()
         .min(1)
-        .default(10),
+        .default(24 * 60 * 60 * 1_000),
     // Maximum number of tasks allowed to execute concurrently in agent.run().
     // Excess tasks are queued (bounded by QUEUE_CAPACITY) or rejected.
-    MAX_CONCURRENT_TASKS: zod_1.z.coerce
-        .number()
-        .int()
-        .min(1)
-        .default(10),
+    MAX_CONCURRENT_TASKS: zod_1.z.coerce.number().int().min(1).default(10),
     // Bounded FIFO queue for tasks submitted while at MAX_CONCURRENT_TASKS.
     // 0 (default) disables queuing — excess tasks are rejected immediately.
-    QUEUE_CAPACITY: zod_1.z.coerce
-        .number()
-        .int()
-        .min(0)
-        .default(0),
-    MAX_SOROBAN_FEE_STROOPS: zod_1.z.coerce
-        .number()
-        .int()
-        .min(100)
-        .default(1_000_000),
+    QUEUE_CAPACITY: zod_1.z.coerce.number().int().min(0).default(0),
+    MAX_SOROBAN_FEE_STROOPS: zod_1.z.coerce.number().int().min(100).default(1_000_000),
     // Health check HTTP server
     HEALTH_PORT: zod_1.z.coerce.number().int().min(1).max(65535).default(3000),
     // Contract event listener polling interval in milliseconds.
@@ -210,17 +199,16 @@ const EnvSchema = zod_1.z.object({
 function formatValidationErrors(errors) {
     return errors.issues
         .map((issue) => {
-        const rawField = issue.path.join(".") || "unknown";
+        const rawField = issue.path.join('.') || 'unknown';
         // Redact any path element that looks like a secret key — path may contain
         // raw values (e.g., when a secret key is used as a Zod path segment).
-        const field = issue.path
-            .map((p) => String(p).replace(/S[A-Z2-7]{55}/g, "[REDACTED]"))
-            .join(".") || rawField;
+        const field = issue.path.map((p) => String(p).replace(/S[A-Z2-7]{55}/g, '[REDACTED]')).join('.') ||
+            rawField;
         // Redact any value that looks like a secret key in the human-readable message
-        const message = issue.message.replace(/S[A-Z2-7]{55}/g, "[REDACTED]");
+        const message = issue.message.replace(/S[A-Z2-7]{55}/g, '[REDACTED]');
         return `  • ${field}: ${message}`;
     })
-        .join("\n");
+        .join('\n');
 }
 /**
  * Loads, parses, and validates environment variables against the Zod schema.
@@ -229,12 +217,12 @@ function formatValidationErrors(errors) {
  * @returns The fully validated, read-only configuration instance.
  */
 async function fetchSecretFromArn(arn) {
-    const arnParts = arn.split(":");
-    const region = arnParts.length > 3 && arnParts[3] ? arnParts[3] : "us-east-1";
+    const arnParts = arn.split(':');
+    const region = arnParts.length > 3 && arnParts[3] ? arnParts[3] : 'us-east-1';
     const client = new client_secrets_manager_1.SecretsManagerClient({ region });
     const res = await client.send(new client_secrets_manager_1.GetSecretValueCommand({ SecretId: arn }));
     if (!res.SecretString) {
-        throw new Error("No SecretString found in secret");
+        throw new Error('No SecretString found in secret');
     }
     return res.SecretString;
 }
@@ -254,7 +242,7 @@ function parseConfigAndDerive() {
         keypair = stellar_sdk_1.Keypair.fromSecret(raw.AGENT_SECRET_KEY);
     }
     catch {
-        process.stderr.write("❌ [Config] Failed to derive keypair from AGENT_SECRET_KEY.\n");
+        process.stderr.write('❌ [Config] Failed to derive keypair from AGENT_SECRET_KEY.\n');
         process.exit(1);
     }
     const derivedPublicKey = keypair.publicKey();
@@ -266,7 +254,7 @@ function parseConfigAndDerive() {
         process.exit(1);
     }
     // ── Mainnet safety guard ───────────────────────────────────────────────────
-    if (raw.STELLAR_NETWORK === "mainnet") {
+    if (raw.STELLAR_NETWORK === 'mainnet') {
         const limit = parseFloat(raw.AGENT_SPENDING_LIMIT);
         if (limit > 10_000) {
             process.stderr.write(`❌ [Config] AGENT_SPENDING_LIMIT (${raw.AGENT_SPENDING_LIMIT}) exceeds ` +
@@ -286,13 +274,16 @@ function parseConfigAndDerive() {
         AGENT_PUBLIC_KEY: derivedPublicKey,
         RPC_TIMEOUT_MS: rpcTimeoutMs,
         MAX_X402_PAYMENTS_PER_MINUTE: raw.MAX_X402_PAYMENTS_PER_MINUTE,
+        X402_NONCE_TTL_MS: raw.X402_NONCE_TTL_MS,
         MAX_SOROBAN_FEE_STROOPS: raw.MAX_SOROBAN_FEE_STROOPS,
         ...(ALLOWED_X402_ORIGINS ? { ALLOWED_X402_ORIGINS } : {}),
         ...(AGENT_SECRET_KEY_ARN ? { AGENT_SECRET_KEY_ARN } : {}),
         ...(OTLP_ENDPOINT ? { OTLP_ENDPOINT } : {}),
         ...(WEBHOOK_URL ? { WEBHOOK_URL } : {}),
         ...(WEBHOOK_SECRET ? { WEBHOOK_SECRET } : {}),
-        ...(raw.CONTRACT_EVENT_POLL_MS !== undefined ? { CONTRACT_EVENT_POLL_MS: raw.CONTRACT_EVENT_POLL_MS } : {}),
+        ...(raw.CONTRACT_EVENT_POLL_MS !== undefined
+            ? { CONTRACT_EVENT_POLL_MS: raw.CONTRACT_EVENT_POLL_MS }
+            : {}),
         // Secret is captured in closure; never on the object
         agentKeypair: () => _keypair,
     };
@@ -313,13 +304,13 @@ function parseConfigAndDerive() {
 }
 function loadConfigSync() {
     if (process.env.AGENT_SECRET_KEY_ARN) {
-        throw new Error("Cannot load configuration synchronously when AGENT_SECRET_KEY_ARN is set.");
+        throw new Error('Cannot load configuration synchronously when AGENT_SECRET_KEY_ARN is set.');
     }
     return parseConfigAndDerive();
 }
 async function loadConfig() {
     if (process.env.AGENT_SECRET_KEY && process.env.AGENT_SECRET_KEY_ARN) {
-        process.stderr.write("❌ [Config] Cannot specify both AGENT_SECRET_KEY and AGENT_SECRET_KEY_ARN.\n");
+        process.stderr.write('❌ [Config] Cannot specify both AGENT_SECRET_KEY and AGENT_SECRET_KEY_ARN.\n');
         process.exit(1);
     }
     if (process.env.AGENT_SECRET_KEY_ARN) {
@@ -329,13 +320,13 @@ async function loadConfig() {
             let parsedSecret = secret;
             try {
                 const json = JSON.parse(secret);
-                if (json && typeof json === "object" && !Array.isArray(json)) {
+                if (json && typeof json === 'object' && !Array.isArray(json)) {
                     const candidate = json.AGENT_SECRET_KEY;
-                    if (typeof candidate === "string") {
+                    if (typeof candidate === 'string') {
                         parsedSecret = candidate;
                     }
                     else {
-                        const firstValue = Object.values(json).find((value) => typeof value === "string");
+                        const firstValue = Object.values(json).find((value) => typeof value === 'string');
                         if (firstValue) {
                             parsedSecret = firstValue;
                         }
@@ -360,8 +351,8 @@ let _configError = null;
 if (process.env.AGENT_SECRET_KEY && process.env.AGENT_SECRET_KEY_ARN) {
     // Both set — record as error immediately so configPromise rejects and
     // the proxy throws the right message before awaiting.
-    _configError = new Error("Cannot specify both AGENT_SECRET_KEY and AGENT_SECRET_KEY_ARN.");
-    process.stderr.write("❌ [Config] Cannot specify both AGENT_SECRET_KEY and AGENT_SECRET_KEY_ARN.\n");
+    _configError = new Error('Cannot specify both AGENT_SECRET_KEY and AGENT_SECRET_KEY_ARN.');
+    process.stderr.write('❌ [Config] Cannot specify both AGENT_SECRET_KEY and AGENT_SECRET_KEY_ARN.\n');
 }
 else if (process.env.AGENT_SECRET_KEY && !process.env.AGENT_SECRET_KEY_ARN) {
     try {
@@ -391,10 +382,10 @@ exports.config = new Proxy({}, {
             throw _configError;
         }
         if (!_config) {
-            throw new Error("Configuration has not been initialized yet. Await configPromise first.");
+            throw new Error('Configuration has not been initialized yet. Await configPromise first.');
         }
         return Reflect.get(_config, prop, receiver);
-    }
+    },
 });
 /**
  * Hardcoded spending limit (safety cap) for transactions on Stellar mainnet.
@@ -402,5 +393,5 @@ exports.config = new Proxy({}, {
  * by the spending limit assertion before submission.
  */
 exports.MAINNET_SPENDING_CAP = 10000;
-void _configTypeGuard.AGENT_SECRET_KEY;
+void {};
 //# sourceMappingURL=config.js.map

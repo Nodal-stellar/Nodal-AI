@@ -3,11 +3,11 @@
  * Manage account flags, thresholds, and home domain via SET_OPTIONS.
  */
 
-import { Keypair, TransactionBuilder, Operation, BASE_FEE } from "@stellar/stellar-sdk";
-import { z } from "zod";
-import { config } from "../config";
-import { loadAccount, submitTransaction, resolveNetworkPassphrase } from "../rpc_client";
-import { SubmitResultSchema } from "./StellarPaymentTool";
+import { Keypair, TransactionBuilder, Operation, BASE_FEE, AuthFlag } from '@stellar/stellar-sdk';
+import { z } from 'zod';
+import { config } from '../config';
+import { loadAccount, submitTransaction, resolveNetworkPassphrase } from '../rpc_client';
+import { SubmitResultSchema } from './StellarPaymentTool';
 
 export const SetOptionsInputSchema = z.object({
   homeDomain: z.string().max(32).optional(),
@@ -45,8 +45,11 @@ export class SetOptionsTool {
           ...(input.lowThreshold !== undefined ? { lowThreshold: input.lowThreshold } : {}),
           ...(input.medThreshold !== undefined ? { medThreshold: input.medThreshold } : {}),
           ...(input.highThreshold !== undefined ? { highThreshold: input.highThreshold } : {}),
-          ...(input.setFlags !== undefined ? { setFlags: input.setFlags } : {}),
-          ...(input.clearFlags !== undefined ? { clearFlags: input.clearFlags } : {}),
+          // setFlags/clearFlags are a bitmask combining one or more AuthFlag
+          // bits (e.g. AuthRequiredFlag | AuthRevocableFlag); the SDK's type
+          // only names the individual bits, so the combined value needs a cast.
+          ...(input.setFlags !== undefined ? { setFlags: input.setFlags as AuthFlag } : {}),
+          ...(input.clearFlags !== undefined ? { clearFlags: input.clearFlags as AuthFlag } : {}),
         })
       )
       .setTimeout(30)

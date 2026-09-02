@@ -13,7 +13,7 @@ const config_1 = require("../config");
 const rpc_client_1 = require("../rpc_client");
 const logger_1 = require("../utils/logger");
 const SorobanInvokeTool_1 = require("./SorobanInvokeTool");
-const log = (0, logger_1.createLogger)("soroban-query");
+const log = (0, logger_1.createLogger)('soroban-query');
 /**
  * Reuses the Soroban invoke input schema but omits `simulateOnly` because this
  * tool is always read-only.
@@ -37,11 +37,11 @@ class SorobanQueryTool {
         }
         catch {
             contract = {
-                call: (method, ..._args) => stellar_sdk_1.Operation.manageData({ name: `query:${method}`, value: "mock" }),
+                call: (method, ..._args) => stellar_sdk_1.Operation.manageData({ name: `query:${method}`, value: 'mock' }),
             };
         }
         const sourceAccount = await (0, rpc_client_1.loadAccount)(this.keypair.publicKey());
-        log.info({ method: input.method, contractId: input.contractId }, "Building Soroban query transaction");
+        log.info({ method: input.method, contractId: input.contractId }, 'Building Soroban query transaction');
         const tx = new stellar_sdk_1.TransactionBuilder(sourceAccount, {
             fee: stellar_sdk_1.BASE_FEE,
             networkPassphrase: this.networkPassphrase,
@@ -50,7 +50,7 @@ class SorobanQueryTool {
             .setTimeout(30)
             .build();
         const simulationResult = await (0, rpc_client_1.prepareSorobanTx)(tx);
-        log.info({ method: input.method, contractId: input.contractId }, "Soroban query simulation complete");
+        log.info({ method: input.method, contractId: input.contractId }, 'Soroban query simulation complete');
         return { simulationResult };
     }
 }

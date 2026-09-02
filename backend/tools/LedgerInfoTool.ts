@@ -3,13 +3,13 @@
  * Tool for querying the latest ledger state from Soroban RPC with caching.
  */
 
-import { z } from "zod";
-import { config } from "../config";
-import { sorobanServer, withRetry } from "../rpc_client";
-import { withBackoffGuard } from "../network";
-import { createLogger } from "../utils/logger";
+import { z } from 'zod';
+import { config } from '../config';
+import { sorobanServer, withRetry } from '../rpc_client';
+import { withBackoffGuard } from '../network';
+import { createLogger } from '../utils/logger';
 
-const log = createLogger("ledger-info-tool");
+const log = createLogger('ledger-info-tool');
 
 export const LedgerInfoInputSchema = z
   .object({
@@ -22,7 +22,6 @@ export type LedgerInfoInput = z.infer<typeof LedgerInfoInputSchema>;
 
 export interface LedgerInfoResult {
   sequence: number;
-  closeTime: number;
   protocolVersion: number;
 }
 
@@ -43,23 +42,18 @@ export class LedgerInfoTool {
     const now = Date.now();
 
     if (!input.forceRefresh && this.cache && this.cache.expiresAt > now) {
-      log.debug({ cachedSequence: this.cache.data.sequence }, "Serving ledger info from cache");
+      log.debug({ cachedSequence: this.cache.data.sequence }, 'Serving ledger info from cache');
       return this.cache.data;
     }
 
-    log.info("Fetching latest ledger info from Soroban RPC");
+    log.info('Fetching latest ledger info from Soroban RPC');
 
     const response = await withBackoffGuard(() =>
-      withRetry(
-        () => sorobanServer.getLatestLedger(),
-        config.MAX_RETRIES,
-        config.RETRY_DELAY_MS
-      )
+      withRetry(() => sorobanServer.getLatestLedger(), config.MAX_RETRIES, config.RETRY_DELAY_MS)
     );
 
     const data: LedgerInfoResult = {
       sequence: Number(response.sequence),
-      closeTime: Number(response.closeTime),
       protocolVersion: Number(response.protocolVersion),
     };
 
@@ -69,8 +63,8 @@ export class LedgerInfoTool {
     };
 
     log.info(
-      { sequence: data.sequence, closeTime: data.closeTime, protocolVersion: data.protocolVersion },
-      "Latest ledger info fetched"
+      { sequence: data.sequence, protocolVersion: data.protocolVersion },
+      'Latest ledger info fetched'
     );
 
     return data;

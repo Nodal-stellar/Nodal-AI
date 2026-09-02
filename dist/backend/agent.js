@@ -10,6 +10,39 @@
  *     the secret never lives on the config object itself.
  *   - The spending limit is enforced here before delegating to tools.
  */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PayFiAgent = exports.spendingTracker = void 0;
 // Updated imports
@@ -30,20 +63,30 @@ const BalanceCheckTool_1 = require("./tools/BalanceCheckTool");
 const PathPaymentTool_1 = require("./tools/PathPaymentTool");
 const FeeBumpTool_1 = require("./tools/FeeBumpTool");
 const DexOfferTool_1 = require("./tools/DexOfferTool");
+const LiquidityPoolTool_1 = require("./tools/LiquidityPoolTool");
+const StellarTomlTool_1 = require("./tools/StellarTomlTool");
+const DataEntryTool_1 = require("./tools/DataEntryTool");
+const SequenceNumberTool_1 = require("./tools/SequenceNumberTool");
+const InflationTool_1 = require("./tools/InflationTool");
+const SponsoredAccountTool_1 = require("./tools/SponsoredAccountTool");
+const AnchorQuoteTool_1 = require("./tools/AnchorQuoteTool");
+const SorobanDeployTool_1 = require("./tools/SorobanDeployTool");
+const SwapTool_1 = require("./tools/SwapTool");
+const AccountHistoryTool_1 = require("./tools/AccountHistoryTool");
 const ContractEventListener_1 = require("./tools/ContractEventListener");
 const rpc_client_1 = require("./rpc_client");
+const rpcClient = __importStar(require("./rpc_client"));
 const logger_2 = require("./utils/logger");
 const spending_tracker_1 = require("./spending_tracker");
+Object.defineProperty(exports, "spendingTracker", { enumerable: true, get: function () { return spending_tracker_1.spendingTracker; } });
 const webhook_1 = require("./webhook");
-// Instantiate a singleton tracker
-exports.spendingTracker = new spending_tracker_1.SpendingTracker();
 // ─── Spending limit guard ─────────────────────────────────────────────────────
 /**
  * Check that a payment amount does not exceed the configured spending limit.
  * Also enforces cumulative spending within the sliding window.
  */
 function assertWithinSpendingLimit(amount) {
-    if (typeof amount !== "string")
+    if (typeof amount !== 'string')
         return; // let the tool's own schema catch this
     const parsed = parseFloat(amount);
     const limit = parseFloat(config_1.config.AGENT_SPENDING_LIMIT);
@@ -51,21 +94,50 @@ function assertWithinSpendingLimit(amount) {
         throw new Error(`Payment amount ${amount} ${config_1.config.X402_ASSET_CODE} exceeds ` +
             `AGENT_SPENDING_LIMIT of ${config_1.config.AGENT_SPENDING_LIMIT}`);
     }
-    if (!isNaN(parsed) && config_1.config.STELLAR_NETWORK === "mainnet" && parsed > config_1.MAINNET_SPENDING_CAP) {
+    if (!isNaN(parsed) && config_1.config.STELLAR_NETWORK === 'mainnet' && parsed > config_1.MAINNET_SPENDING_CAP) {
         throw new Error(`Payment amount ${amount} ${config_1.config.X402_ASSET_CODE} exceeds ` +
             `mainnet spending cap of ${config_1.MAINNET_SPENDING_CAP}`);
     }
     // Record cumulative spending (after individual checks pass)
-    exports.spendingTracker.record(amount);
+    spending_tracker_1.spendingTracker.record(amount);
 }
-const log = (0, logger_2.createLogger)("orchestrator");
+const log = (0, logger_2.createLogger)('orchestrator');
 // ─── Payload sanitisation ─────────────────────────────────────────────────────
 const SECRET_KEY_RE = /^(?<prefix>.*?["':\s]?)(?<secret>S[ A-Z2-7]{55})(?<suffix>["'\s]?.*)$/i;
 function redactSecretString(value) {
-    return value.replace(SECRET_KEY_RE, "$<prefix>[REDACTED]$<suffix>");
+    return value.replace(SECRET_KEY_RE, '$<prefix>[REDACTED]$<suffix>');
+}
+/**
+ * Render an error as the string that goes into {@link AgentResult.error}.
+ *
+ * A {@link StructuredError} may carry a `cause` holding the context needed to
+ * act on the failure automatically — for an auth rejection, which signer was
+ * presented and which one was expected. That context is JSON-serialised onto
+ * the end of the message so it survives into persisted results and webhook
+ * payloads, both of which only carry the string.
+ *
+ * The cause is passed through `sanitizeCause` first, so signing material can
+ * never be serialised out this way, and the whole string is redacted by the
+ * caller afterwards as a second line of defence.
+ */
+function describeError(err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!(err instanceof errors_1.StructuredError) || err.cause === undefined) {
+        return message;
+    }
+    try {
+        const context = JSON.stringify((0, errors_1.sanitizeCause)(err.cause));
+        // `undefined` and functions serialise to undefined rather than a string.
+        return context === undefined ? message : `${message} | context: ${context}`;
+    }
+    catch {
+        // Circular or otherwise unserialisable cause: the message alone still has
+        // to get through, so a failure here must not lose the error entirely.
+        return message;
+    }
 }
 function sanitizePayload(payload) {
-    if (payload === null || typeof payload !== "object")
+    if (payload === null || typeof payload !== 'object')
         return payload;
     if (Array.isArray(payload))
         return payload.map(sanitizePayload);
@@ -92,6 +164,16 @@ class PayFiAgent extends events_1.EventEmitter {
     pathPaymentTool;
     feeBumpTool;
     dexOfferTool;
+    liquidityPoolTool;
+    stellarTomlTool;
+    dataEntryTool;
+    sequenceNumberTool;
+    sponsoredAccountTool;
+    anchorQuoteTool;
+    inflationTool;
+    sorobanDeployTool;
+    swapTool;
+    accountHistoryTool;
     activeTasks = 0;
     isDraining = false;
     taskQueue = [];
@@ -119,25 +201,35 @@ class PayFiAgent extends events_1.EventEmitter {
         this.pathPaymentTool = new PathPaymentTool_1.PathPaymentTool(config_1.config.agentKeypair().secret());
         this.feeBumpTool = new FeeBumpTool_1.FeeBumpTool(config_1.config.agentKeypair().secret());
         this.dexOfferTool = new DexOfferTool_1.DexOfferTool(config_1.config.agentKeypair().secret());
+        this.liquidityPoolTool = new LiquidityPoolTool_1.LiquidityPoolTool(config_1.config.agentKeypair().secret());
+        this.stellarTomlTool = new StellarTomlTool_1.StellarTomlTool();
+        this.dataEntryTool = new DataEntryTool_1.DataEntryTool(config_1.config.agentKeypair().secret());
+        this.sequenceNumberTool = new SequenceNumberTool_1.SequenceNumberTool(config_1.config.agentKeypair().secret());
+        this.sponsoredAccountTool = new SponsoredAccountTool_1.SponsoredAccountTool(config_1.config.agentKeypair().secret());
+        this.anchorQuoteTool = new AnchorQuoteTool_1.AnchorQuoteTool();
+        this.inflationTool = new InflationTool_1.InflationTool(config_1.config.agentKeypair().secret());
+        this.sorobanDeployTool = new SorobanDeployTool_1.SorobanDeployTool();
+        this.swapTool = new SwapTool_1.SwapTool(config_1.config.agentKeypair().secret());
+        this.accountHistoryTool = new AccountHistoryTool_1.AccountHistoryTool();
         // ── Register event listeners — every registration is mirrored in destroy() ──
         const onError = (err) => {
-            const safe = err.message.replace(/S[A-Z2-7]{55}/g, "[REDACTED]");
-            logger_1.logger.error("Unhandled agent error", { error: safe });
+            const safe = err.message.replace(/S[A-Z2-7]{55}/g, '[REDACTED]');
+            logger_1.logger.error('Unhandled agent error', { error: safe });
         };
         const onTaskComplete = (result) => {
-            logger_1.logger.info("Task complete", { taskType: result.taskType });
+            logger_1.logger.info('Task complete', { taskType: result.taskType });
         };
         const onTaskFailed = (result) => {
-            logger_1.logger.warn("Task failed", { taskType: result.taskType, error: result.error });
+            logger_1.logger.warn('Task failed', { taskType: result.taskType, error: result.error });
         };
-        this.on("error", onError);
-        this.on("task:complete", onTaskComplete);
-        this.on("task:failed", onTaskFailed);
-        this._boundHandlers.set("error", onError);
-        this._boundHandlers.set("task:complete", onTaskComplete);
-        this._boundHandlers.set("task:failed", onTaskFailed);
+        this.on('error', onError);
+        this.on('task:complete', onTaskComplete);
+        this.on('task:failed', onTaskFailed);
+        this._boundHandlers.set('error', onError);
+        this._boundHandlers.set('task:complete', onTaskComplete);
+        this._boundHandlers.set('task:failed', onTaskFailed);
         // Log only safe fields — public key is derived, not the secret
-        logger_1.logger.info("PayFiAgent initialised", {
+        logger_1.logger.info('PayFiAgent initialised', {
             network: config_1.config.STELLAR_NETWORK,
             horizon: config_1.config.HORIZON_URL,
             soroban: config_1.config.SOROBAN_RPC_URL,
@@ -158,11 +250,11 @@ class PayFiAgent extends events_1.EventEmitter {
             .forAccount(config_1.config.AGENT_PUBLIC_KEY)
             .stream({
             onmessage: (payment) => {
-                const memo = payment.memo ?? "";
-                if (!memo.startsWith("x402:"))
+                const memo = payment.memo ?? '';
+                if (!memo.startsWith('x402:'))
                     return;
                 try {
-                    const raw = JSON.parse(Buffer.from(memo.slice(5), "base64").toString("utf8"));
+                    const raw = JSON.parse(Buffer.from(memo.slice(5), 'base64').toString('utf8'));
                     const challenge = X402PaymentTool_1.X402ChallengeSchema.parse(raw);
                     onChallenge(challenge);
                 }
@@ -171,24 +263,29 @@ class PayFiAgent extends events_1.EventEmitter {
                     // forwarding to onChallenge (or letting Zod's error surface
                     // deep inside respond(), where it can't be attributed to the
                     // stream that produced it).
-                    logger_1.logger.warn("Dropped invalid x402 challenge memo", {
+                    logger_1.logger.warn('Dropped invalid x402 challenge memo', {
                         error: err instanceof Error ? err.message : String(err),
                     });
                 }
             },
             onerror: (event) => {
-                logger_1.logger.warn("Payment stream error", { error: String(event) });
+                logger_1.logger.warn('Payment stream error', { error: String(event) });
+                // The underlying connection is dead — tear it down so `_streamStop`
+                // doesn't keep pointing at a broken stream forever, which would
+                // otherwise permanently block a future startListening() call (its
+                // early-return guard only checks whether `_streamStop` is set).
+                this.stopListening();
             },
         });
         this._streamStop = closeStream;
-        logger_1.logger.info("Payment stream started", { resourceUrl });
+        logger_1.logger.info('Payment stream started', { resourceUrl });
     }
     /** Stop the active Horizon payment stream subscription. */
     stopListening() {
         if (this._streamStop) {
             this._streamStop();
             this._streamStop = null;
-            logger_1.logger.info("Payment stream stopped");
+            logger_1.logger.info('Payment stream stopped');
         }
     }
     /**
@@ -205,14 +302,14 @@ class PayFiAgent extends events_1.EventEmitter {
             this._contractListenerStop();
         }
         this._contractListenerStop = (0, ContractEventListener_1.listen)(contractId, eventTypes, onEvent);
-        logger_1.logger.info("Contract event listener started", { contractId });
+        logger_1.logger.info('Contract event listener started', { contractId });
     }
     /** Stop the active contract event listener. */
     stopContractListener() {
         if (this._contractListenerStop) {
             this._contractListenerStop();
             this._contractListenerStop = null;
-            logger_1.logger.info("Contract event listener stopped");
+            logger_1.logger.info('Contract event listener stopped');
         }
     }
     /**
@@ -237,11 +334,11 @@ class PayFiAgent extends events_1.EventEmitter {
         this._boundHandlers.clear();
         // Remove any listeners added externally after construction
         this.removeAllListeners();
-        logger_1.logger.info("Agent destroyed — all event listeners removed");
+        logger_1.logger.info('Agent destroyed — all event listeners removed');
     }
     drain() {
         this.isDraining = true;
-        logger_1.logger.info("Agent draining — rejecting new tasks");
+        logger_1.logger.info('Agent draining — rejecting new tasks');
     }
     /**
      * Register a middleware function for pre/post task execution hooks.
@@ -256,12 +353,12 @@ class PayFiAgent extends events_1.EventEmitter {
      */
     use(middleware) {
         this.middlewares.push(middleware);
-        logger_1.logger.info("Middleware registered", { totalMiddlewares: this.middlewares.length });
+        logger_1.logger.info('Middleware registered', { totalMiddlewares: this.middlewares.length });
     }
     async waitForPendingTasks() {
         if (this.activeTasks === 0 && this.taskQueue.length === 0)
             return;
-        logger_1.logger.info("Waiting for pending tasks to finish", {
+        logger_1.logger.info('Waiting for pending tasks to finish', {
             activeTasks: this.activeTasks,
             queuedTasks: this.taskQueue.length,
         });
@@ -287,9 +384,11 @@ class PayFiAgent extends events_1.EventEmitter {
      */
     async runSequence(tasks) {
         const results = [];
-        for (const task of tasks) {
+        for (const [index, task] of tasks.entries()) {
             const result = await this.run(task);
-            results.push(result);
+            // Stamped on a copy rather than mutating the object `run` already handed
+            // to the "task:failed" listeners and the webhook dispatcher.
+            results.push({ ...result, sequenceIndex: index });
             if (!result.success)
                 break;
         }
@@ -300,12 +399,12 @@ class PayFiAgent extends events_1.EventEmitter {
         // Correlation ID ties together every log line, event, persisted result,
         // and webhook for this single task execution. Reuse the caller's if given.
         const correlationId = task.correlationId ?? (0, logger_2.generateCorrelationId)();
-        const taskLog = (0, logger_2.createLogger)("orchestrator", correlationId);
+        const taskLog = (0, logger_2.createLogger)('orchestrator', correlationId);
         if (this.isDraining) {
             return {
                 success: false,
                 taskType: task.type,
-                error: "Agent is shutting down — task rejected",
+                error: 'Agent is shutting down — task rejected',
                 correlationId,
             };
         }
@@ -317,7 +416,7 @@ class PayFiAgent extends events_1.EventEmitter {
                     taskType: task.type,
                     activeTasks: this.activeTasks,
                     queueLength: this.taskQueue.length + 1,
-                }, "Agent at capacity — task queued");
+                }, 'Agent at capacity — task queued');
                 return new Promise((resolve) => {
                     this.taskQueue.push({ task, correlationId, resolve });
                 });
@@ -326,7 +425,7 @@ class PayFiAgent extends events_1.EventEmitter {
                 taskType: task.type,
                 activeTasks: this.activeTasks,
                 maxConcurrentTasks: config_1.config.MAX_CONCURRENT_TASKS,
-            }, "Task rejected — max concurrent tasks reached");
+            }, 'Task rejected — max concurrent tasks reached');
             return {
                 success: false,
                 taskType: task.type,
@@ -349,18 +448,19 @@ class PayFiAgent extends events_1.EventEmitter {
         const next = this.taskQueue.shift();
         if (!next)
             return;
-        void this.executeTask(next.task, next.correlationId, (0, logger_2.createLogger)("orchestrator", next.correlationId)).then(next.resolve);
+        void this.executeTask(next.task, next.correlationId, (0, logger_2.createLogger)('orchestrator', next.correlationId)).then(next.resolve);
     }
     /** Run a task's tool logic — assumes the concurrency slot has already been reserved. */
     async executeTask(task, correlationId, taskLog) {
         this.activeTasks++;
-        taskLog.info({ taskType: task.type }, "Running task");
+        const startMs = Date.now();
+        taskLog.info({ taskType: task.type }, 'Running task');
         // ── Compose middleware chain ────────────────────────────────────────────────
         const executeTask = async () => {
             try {
                 let data;
                 switch (task.type) {
-                    case "stellar_payment": {
+                    case 'stellar_payment': {
                         const p = task.payload;
                         assertWithinSpendingLimit(p?.amount);
                         const paymentResult = await this.paymentTool.execute(task.payload);
@@ -370,58 +470,97 @@ class PayFiAgent extends events_1.EventEmitter {
                         };
                         break;
                     }
-                    case "soroban_invoke": {
+                    case 'soroban_invoke': {
                         data = await this.sorobanTool.execute(task.payload);
                         break;
                     }
-                    case "soroban_query":
+                    case 'soroban_query':
                         data = await this.sorobanQueryTool.query(task.payload);
                         break;
-                    case "x402_respond": {
+                    case 'x402_respond': {
                         const p = task.payload;
                         assertWithinSpendingLimit(p?.amount);
                         data = await this.x402Tool.respond(task.payload);
                         break;
                     }
-                    case "account_info":
+                    case 'account_info':
                         data = await this.accountInfoTool.fetch();
                         break;
-                    case "change_trust":
+                    case 'change_trust':
                         data = await this.trustlineTool.execute(task.payload);
                         break;
-                    case "multisig_payment":
+                    case 'multisig_payment':
                         data = await this.multiSigTool.execute(task.payload);
                         break;
-                    case "batch_payment":
+                    case 'batch_payment':
                         data = await this.batchPaymentTool.execute(task.payload);
                         break;
-                    case "balance_check":
-                        data = await this.balanceCheckTool.getBalance(task.payload);
+                    case 'balance_check': {
+                        const balanceCheckTool = this.balanceCheckTool;
+                        if (typeof balanceCheckTool.execute === 'function') {
+                            data = await balanceCheckTool.execute(task.payload);
+                        }
+                        else if (typeof balanceCheckTool.getBalance === 'function') {
+                            data = await balanceCheckTool.getBalance(task.payload);
+                        }
+                        else {
+                            throw new Error('Balance check tool does not implement execute() or getBalance().');
+                        }
                         break;
-                    case "path_payment":
+                    }
+                    case 'path_payment':
                         data = await this.pathPaymentTool.execute(task.payload);
                         break;
-                    case "fee_bump":
+                    case 'fee_bump':
                         data = await this.feeBumpTool.execute(task.payload);
                         break;
-                    case "dex_offer":
+                    case 'dex_offer':
                         data = await this.dexOfferTool.execute(task.payload);
+                        break;
+                    case 'swap':
+                        data = await this.swapTool.execute(task.payload);
+                        break;
+                    case 'account_history':
+                        data = await this.accountHistoryTool.fetch(task.payload);
+                        break;
+                    case 'soroban_deploy':
+                        data = await this.sorobanDeployTool.execute(task.payload);
+                        break;
+                    case 'liquidity_pool':
+                        data = await this.liquidityPoolTool.execute(task.payload);
+                        break;
+                    case 'stellar_toml':
+                        data = await this.stellarTomlTool.fetchToml(task.payload);
+                        break;
+                    case 'data_entry':
+                        data = await this.dataEntryTool.execute(task.payload);
+                        break;
+                    case 'sequence_number':
+                        data = await this.sequenceNumberTool.execute(task.payload);
+                        break;
+                    case 'sponsored_account':
+                        data = await this.sponsoredAccountTool.execute(task.payload);
+                        break;
+                    case 'anchor_quote':
+                        data = await this.anchorQuoteTool.execute(task.payload);
+                        break;
+                    case 'inflation':
+                        data = await this.inflationTool.execute(task.payload);
                         break;
                     default:
                         throw new Error(`Unknown task type: ${task.type}`);
                 }
-                taskLog.info({ taskType: task.type }, "Task completed");
+                taskLog.info({ taskType: task.type }, 'Task completed');
                 const result = { success: true, taskType: task.type, data, correlationId };
-                this.emit("task:complete", result);
+                this.emit('task:complete', result);
                 (0, persistence_1.saveResult)({ ...result, timestamp: new Date().toISOString() });
                 void (0, webhook_1.dispatchWebhook)(result);
                 return result;
             }
             catch (err) {
-                const message = err instanceof Error ? err.message : String(err);
-                const safe = redactSecretString(message);
+                const safe = redactSecretString(describeError(err));
                 const sanitized = sanitizePayload(task.payload);
-                taskLog.error({ taskType: task.type, error: safe, sanitizedPayload: sanitized }, "Task failed");
+                taskLog.error({ taskType: task.type, error: safe, sanitizedPayload: sanitized }, 'Task failed');
                 const result = {
                     success: false,
                     taskType: task.type,
@@ -429,7 +568,7 @@ class PayFiAgent extends events_1.EventEmitter {
                     errorType: (0, errors_1.getErrorType)(err),
                     correlationId,
                 };
-                this.emit("task:failed", result);
+                this.emit('task:failed', result);
                 void (0, webhook_1.dispatchWebhook)(result);
                 return result;
             }
@@ -447,12 +586,13 @@ class PayFiAgent extends events_1.EventEmitter {
             return await chain();
         }
         catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            const safe = redactSecretString(message);
+            const durationMs = Date.now() - startMs;
+            const safe = redactSecretString(describeError(err));
             const sanitized = sanitizePayload(task.payload);
-            taskLog.error({ taskType: task.type, error: safe, sanitizedPayload: sanitized }, "Task failed");
-            if (err instanceof rpc_client_1.StellarRPCError) {
-                this.emit("task:retry_exhausted", { taskType: task.type, attempts: config_1.config.MAX_RETRIES });
+            taskLog.error({ taskType: task.type, error: safe, sanitizedPayload: sanitized, durationMs }, 'Task failed');
+            const isStellarRpcError = !!rpcClient.StellarRPCError && err instanceof rpcClient.StellarRPCError;
+            if (isStellarRpcError) {
+                this.emit('task:retry_exhausted', { taskType: task.type, attempts: config_1.config.MAX_RETRIES });
             }
             const result = {
                 success: false,
@@ -460,8 +600,9 @@ class PayFiAgent extends events_1.EventEmitter {
                 error: safe,
                 errorType: (0, errors_1.getErrorType)(err),
                 correlationId,
+                durationMs,
             };
-            this.emit("task:failed", result);
+            this.emit('task:failed', result);
             void (0, webhook_1.dispatchWebhook)(result);
             return result;
         }
