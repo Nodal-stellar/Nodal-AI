@@ -20,7 +20,7 @@ jobs:
 
     steps:
       - name: Checkout full history
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # Fetch the entire history so conventional-changelog can walk all
           # commits back to the previous version tag.
