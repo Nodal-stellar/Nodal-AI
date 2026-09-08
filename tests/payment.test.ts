@@ -19,6 +19,7 @@ import { StellarPaymentTool } from '../backend/tools/StellarPaymentTool';
 import { SubmitResultSchema } from '../backend/tools/StellarPaymentTool';
 import * as rpcClient from '../backend/rpc_client';
 import type { MockHorizonServer } from './fixtures/MockHorizonServer';
+import { applyConditions, reset } from './helpers/MockNetworkConditions';
 import { makeMockAccount } from './fixtures/MockHorizonServer';
 
 // ─── Shared MockHorizonServer fixture ────────────────────────────────────────
@@ -769,5 +770,55 @@ describe('StellarPaymentTool — mutation-killing: destination key validation', 
     });
     expect(result.txHash).toBe('usdc_tx');
     expect(result.ledger).toBe(5);
+  });
+});
+
+describe('MockNetworkConditions slow-network payment scenario', () => {
+  // Demonstrates tests/helpers/MockNetworkConditions.ts against the real
+  // payment path: submitTransaction wrapped with latency still succeeds,
+  // forced failures surface as rejections, reset() restores behaviour.
+  let tool: StellarPaymentTool;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockHorizonServer.reset();
+    tool = new StellarPaymentTool();
+    mockHorizonServer.setSubmitResult({ hash: 'slow_net_hash', ledger: 9 } as any);
+  });
+
+  afterEach(() => {
+    reset();
+    vi.useRealTimers();
+  });
+
+  it('payment succeeds when the network is slow (1500ms latency)', async () => {
+    applyConditions(
+      { latencyMs: 1500 },
+      {
+        object: mockHorizonServer as unknown as Record<string, unknown>,
+        method: 'submitTransaction',
+      }
+    );
+    const pending = tool.execute({
+      destination: VALID_DEST,
+      amount: '1',
+      assetCode: 'XLM',
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+    const result = await pending;
+    expect(result.txHash).toBe('slow_net_hash');
+  });
+
+  it('payment rejects when the network always fails (failureRate 1)', async () => {
+    applyConditions(
+      { failureRate: 1, errorType: Error },
+      {
+        object: mockHorizonServer as unknown as Record<string, unknown>,
+        method: 'submitTransaction',
+      }
+    );
+    await expect(
+      tool.execute({ destination: VALID_DEST, amount: '1', assetCode: 'XLM' })
+    ).rejects.toThrow(/injected network failure/);
   });
 });
