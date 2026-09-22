@@ -1,6 +1,9 @@
 # Nodal AI
 
 [![CI](https://github.com/Nodal-stellar/Nodal-AI/actions/workflows/ci.yml/badge.svg)](https://github.com/Nodal-stellar/Nodal-AI/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](./CODE_OF_CONDUCT.md)
+
 **Modular, production-ready Agent Kit for autonomous PayFi (Payment-Finance) flows on the Stellar Network.**
 
 Nodal AI empowers developers to build autonomous agents capable of handling complex financial interactions. Whether you’re automating cross-border settlements, building machine-to-machine payment gateways, or orchestrating smart contract executions, Nodal AI provides the primitives to do it securely and efficiently on Stellar.
@@ -515,3 +518,17 @@ if (result.success) {
 ```
 
 See [`backend/agent.ts`](./backend/agent.ts) for task dispatch and the spending-limit guard, and [`backend/tools/X402PaymentTool.ts`](./backend/tools/X402PaymentTool.ts) for challenge validation and proof construction.
+
+---
+
+## Resources
+
+| Document | Description |
+| --- | --- |
+| [Architecture Guide](./ARCHITECTURE.md) | Deep dive into system design, tool dispatch, and state machines |
+| [Glossary](./GLOSSARY.md) | Stellar and PayFi terminology reference |
+| [Contributing](./CONTRIBUTING.md) | Contribution workflow, branch naming, and Stellar Wave programme |
+| [Troubleshooting](./TROUBLESHOOTING.md) | Solutions for common setup, build, and runtime issues |
+| [Code of Conduct](./CODE_OF_CONDUCT.md) | Community standards and expectations |
+| [Security Policy](./SECURITY.md) | Vulnerability reporting and dependency audit policies |
+| [Changelog](./CHANGELOG.md) | Release history and notable changes |
