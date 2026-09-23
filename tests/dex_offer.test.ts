@@ -19,6 +19,9 @@ const { mockOfferCall } = vi.hoisted(() => ({
 vi.mock('../backend/rpc_client', () => ({
   loadAccount: vi.fn(),
   submitTransaction: vi.fn(),
+  // Pass-through so verifyOfferExists exercises the mocked Horizon call
+  // directly, matching the shared withRetry wiring in DexOfferTool.
+  withRetry: (fn: () => Promise<unknown>) => fn(),
   horizonServer: {
     offers: () => ({
       offer: () => ({
