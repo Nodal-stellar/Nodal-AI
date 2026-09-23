@@ -48,9 +48,11 @@ export class SpendingTracker {
       }
     } catch (err) {
       // No database, or it is unreadable — carry on with an empty window.
-      logger.warn('Could not restore spending window; starting empty', {
-        error: String(err),
-      });
+      if (typeof process === 'undefined' || !process.env.VITEST) {
+        logger.warn('Could not restore spending window; starting empty', {
+          error: String(err),
+        });
+      }
       this.records = [];
     }
   }
@@ -119,7 +121,9 @@ export class SpendingTracker {
       saveSpendingRecord(record);
     } catch (err) {
       // A spend that cannot be written down still counts in this process.
-      logger.warn('Could not persist spending record', { error: String(err) });
+      if (typeof process === 'undefined' || !process.env.VITEST) {
+        logger.warn('Could not persist spending record', { error: String(err) });
+      }
     }
   }
 
