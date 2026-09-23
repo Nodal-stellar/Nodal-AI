@@ -1,5 +1,18 @@
+# CODEOWNERS — Auto-assign reviewers to pull requests
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for all files
+*                                       @sharanrenukeshbharmshetty
+
 # Security-sensitive files require maintainer review
-backend/config.ts @Dami24-hub
-backend/tools/X402PaymentTool.ts @Dami24-hub
-contracts/escrow/src/lib.rs @Dami24-hub
-SECURITY.md @Dami24-hub
+backend/config.ts                       @Dami24-hub @sharanrenukeshbharmshetty
+backend/tools/X402PaymentTool.ts        @Dami24-hub @sharanrenukeshbharmshetty
+contracts/escrow/src/lib.rs             @Dami24-hub @sharanrenukeshbharmshetty
+SECURITY.md                             @Dami24-hub @sharanrenukeshbharmshetty
+.env.example                            @Dami24-hub @sharanrenukeshbharmshetty
+
+# CI/CD pipelines
+/.github/workflows/                     @sharanrenukeshbharmshetty
+
+# Documentation
+*.md                                    @sharanrenukeshbharmshetty

@@ -19,3 +19,6 @@ This glossary keeps the Stellar- and PayFi-specific terms used in the repo in on
 | [WASM](https://developers.stellar.org/docs/learn/fundamentals/contract-development/environment-concepts) | WebAssembly, the portable binary format used to compile Soroban contracts for on-chain execution. |
 | [x402](https://github.com/x402-foundation/x402/blob/main/specs/x402-specification-v2.md) | An HTTP 402-based payment standard for machine-to-machine payment of gated resources. |
 | [XDR](https://developers.stellar.org/docs/learn/fundamentals/data-format/xdr) | External Data Representation, Stellar's binary serialization format for transactions, ledger data, and smart-contract metadata. |
+| [PayFiAgent](./backend/agent.ts) | The main orchestrator class that coordinates tool dispatch, spending limits, and transaction lifecycle management for autonomous PayFi workflows. |
+| [SpendingTracker](./backend/spending_tracker.ts) | A sliding-window tracker that records cumulative asset spend and enforces `AGENT_SPENDING_LIMIT` to prevent runaway payments. |
+| [Backoff / Rate-limit guard](./backend/network.ts) | The network-layer mechanism that detects HTTP 429 responses and pauses outbound traffic until the Retry-After window expires. |
