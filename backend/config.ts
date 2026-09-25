@@ -295,7 +295,7 @@ export interface AgentConfig {
    * Spending window in milliseconds for rate/cap computation.
    * Defines the time window over which spending is tracked and enforced.
    * Validated by EnvSchema to be a positive integer.
-   * Defaults to 60,000 (1 minute).
+   * Defaults to 86,400,000 (24 hours).
    */
   readonly SPENDING_WINDOW_MS: number;
   /**
@@ -400,7 +400,7 @@ function parseConfigAndDerive(): AgentConfig {
     process.stderr.write(
       `\n❌ [Config] Invalid environment — fix the following before starting:\n` +
         formatValidationErrors(result.error) +
-        `\n\nSee ..env for reference.\n\n`
+        `\n\nSee .env for reference.\n\n`
     );
     process.exit(1);
   }
