@@ -519,5 +519,5 @@ See [`backend/agent.ts`](./backend/agent.ts) for task dispatch and the spending-
 
 ## Handsoff notes
 
-<!-- handsoff-issue-621 -->
-- #621: `README.md`'s Docker instructions use the legacy hyphenated `docker-compose` syntax throughout, inconsistent with the rest of the project
+<!-- handsoff-issue-625 -->
+- #625: `bug_report.md`'s "Affected File / Module" checklist only lists 3 of 34 tool files
