@@ -77,7 +77,7 @@ The `contracts/` pillar holds your escrow and payment logic.
 
 We use `Vitest` to ensure the entire flow—from AI reasoning to network settlement—works as expected.
 
-- `npm run test`: Executes the `/tests` suite.
+- `npm run test:ts`: Executes the `/tests` suite (excluding E2E).
 - `npm run test:ui`: Runs the test suite with the interactive Vitest UI.
 
 ---
@@ -288,7 +288,7 @@ End-to-end tests run against the live Stellar testnet (not mocked). They require
 npm run test:e2e
 ```
 
-The E2E suite is excluded from the default `npm run test` to keep CI fast. Run it separately before releases or after SDK upgrades.
+The E2E suite is excluded from the default `npm run test:ts` / `npm run test:all` runs to keep CI fast. Run it separately before releases or after SDK upgrades.
 
 ---
 
