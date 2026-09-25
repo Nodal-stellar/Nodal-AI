@@ -16,7 +16,7 @@ import { rpc } from '@stellar/stellar-sdk';
 import { config, MAINNET_SPENDING_CAP } from './config';
 import { logger } from './logger';
 import { saveResult } from './persistence';
-import { StructuredError, ErrorType, getErrorType, sanitizeCause } from './errors';
+import { StructuredError, getErrorType, sanitizeCause } from './errors';
 import { StellarPaymentTool } from './tools/StellarPaymentTool';
 import { SorobanInvokeTool } from './tools/SorobanInvokeTool';
 import { X402PaymentTool, X402Challenge, X402ChallengeSchema } from './tools/X402PaymentTool';

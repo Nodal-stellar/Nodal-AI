@@ -9,10 +9,8 @@
 import {
   Keypair,
   TransactionBuilder,
-  Operation,
   Contract,
   BASE_FEE,
-  xdr,
 } from '@stellar/stellar-sdk';
 import { z } from 'zod';
 import { config } from '../config';

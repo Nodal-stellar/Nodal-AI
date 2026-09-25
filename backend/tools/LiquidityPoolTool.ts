@@ -7,10 +7,7 @@ import {
   Keypair,
   TransactionBuilder,
   Operation,
-  Asset,
   BASE_FEE,
-  LiquidityPoolAsset,
-  LiquidityPoolParameters,
 } from '@stellar/stellar-sdk';
 import { z } from 'zod';
 import { config } from '../config';
@@ -23,11 +20,6 @@ import {
 } from '../rpc_client';
 import { withBackoffGuard } from '../network';
 import { SOROBAN_TX_TIMEOUT } from './SorobanInvokeTool';
-
-const AssetSchema = z.object({
-  code: z.string(),
-  issuer: z.string().optional(),
-});
 
 export const LiquidityPoolInputSchema = z.discriminatedUnion('action', [
   z.object({
