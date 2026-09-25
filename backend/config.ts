@@ -30,7 +30,6 @@ dotenv.config();
 
 // ─── Custom Zod refinements ───────────────────────────────────────────────────
 
-
 /**
  * Validates a Stellar secret key (S…, 56 chars, base32).
  * The key itself is NEVER surfaced in Zod error messages —
@@ -567,17 +566,35 @@ if (process.env.AGENT_SECRET_KEY && process.env.AGENT_SECRET_KEY_ARN) {
   }
 }
 
-export const configPromise = (async () => {
-  if (_config) return _config;
-  if (_configError) throw _configError;
-  try {
-    _config = await loadConfig();
-    return _config;
-  } catch (err: any) {
-    _configError = err;
-    throw err;
+function ensureConfigPromise(): Promise<AgentConfig> {
+  if (_config) return Promise.resolve(_config);
+  if (_configError) return Promise.reject(_configError);
+  if (!__configPromise) {
+    __configPromise = (async () => {
+      try {
+        _config = await loadConfig();
+        return _config;
+      } catch (err: any) {
+        _configError = err;
+        throw err;
+      }
+    })();
   }
-})();
+  return __configPromise;
+}
+
+let __configPromise: Promise<AgentConfig> | null = null;
+
+export const configPromise = {
+  then: <TResult1 = AgentConfig, TResult2 = never>(
+    onfulfilled?: ((value: AgentConfig) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
+  ) => ensureConfigPromise().then(onfulfilled, onrejected),
+  catch: <TResult = never>(
+    onrejected?: ((reason: unknown) => TResult | PromiseLike<TResult>) | null
+  ) => ensureConfigPromise().catch(onrejected),
+  finally: (onfinally?: (() => void) | null) => ensureConfigPromise().finally(onfinally),
+} as PromiseLike<AgentConfig>;
 
 export const config = new Proxy({} as AgentConfig, {
   get(target, prop, receiver) {
