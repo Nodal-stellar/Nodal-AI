@@ -52,6 +52,10 @@ function redactSecretKeys(value: unknown): unknown {
   return value;
 }
 
+export function redactSecrets(value: unknown): unknown {
+  return redactSecretKeys(value);
+}
+
 export const logger = pino({
   level: process.env.LOG_LEVEL ?? 'info',
   redact: {
