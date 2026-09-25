@@ -11,11 +11,25 @@ Only the latest commit on `main` receives security patches at this stage of the 
 
 ---
 
+## Dependency Vulnerability Policy
+
+Dependency vulnerabilities are checked in CI before changes can merge:
+
+- `npm audit --audit-level=high` fails the `audit-npm` job for High or Critical npm advisories.
+- The optional `snyk` job runs `snyk test --severity-threshold=high` when the `SNYK_TOKEN` repository secret is configured.
+- Rust dependencies are checked with `cargo audit` in the `audit-rust` job.
+- Findings must be remediated by upgrading, replacing, or removing the affected dependency whenever possible.
+- A false positive may be ignored only after maintainer review, with a documented reason and expiry in [`.snyk`](./.snyk). The ignore must be removed when the finding is fixed or the justification expires.
+
+High and Critical findings are not accepted as routine CI noise. If remediation is not immediately available, document the risk, mitigation, owner, and review date in the security discussion before adding a narrowly scoped temporary exception.
+
+---
+
 ## Reporting a Vulnerability
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Use [GitHub Private Security Advisories](https://github.com/Dami24-hub/nodal-ai/security/advisories/new) to report vulnerabilities confidentially. This keeps details private until a fix is released.
+Use [GitHub Private Security Advisories](https://github.com/Nodal-stellar/Nodal-AI/security/advisories/new) to report vulnerabilities confidentially. This keeps details private until a fix is released.
 
 ### Response SLA
 
@@ -102,8 +116,65 @@ const cfg: AgentConfig = {
 
 ---
 
-## Additional Hardening Notes
+## Key Rotation (Stellar Agent Keypair)
 
-- **Mainnet spending cap:** `AGENT_SPENDING_LIMIT` is rejected at startup if it exceeds `10,000` on `mainnet`, preventing runaway agent spend.
-- **Exponential back-off:** All RPC calls use retry logic with jitter to reduce the attack surface of timing-based denial-of-service against the agent.
-- **Dependency pinning:** Keep `package.json` dependencies pinned to exact versions and audit regularly with `npm audit`.
+If `AGENT_SECRET_KEY` is suspected to be compromised or needs rotation for operational reasons, follow this step-by-step procedure. **Stellar's account model requires careful sequencing — a mistake can lock the agent account permanently.**
+
+### Prerequisites
+
+- Access to the current `AGENT_SECRET_KEY`
+- Write access to your environment variable store (e.g., `.env`, secrets manager, CI platform)
+- Confirmation that the current keypair is listed as a signer on the Stellar account
+
+### Rotation Procedure
+
+#### Step 1: Generate a New Keypair
+
+Generate a new keypair locally. Do not commit it to version control.
+
+```bash
+node -e "const { Keypair } = require('@stellar/stellar-sdk'); const kp = Keypair.random(); console.log('Public:', kp.publicKey()); console.log('Secret:', kp.secret());"
+```
+
+Save the output securely (e.g., in your secrets manager or encrypted note).
+
+#### Step 2: Add the New Key as a Signer (While Old Key is Still Active)
+
+Using the **current** `AGENT_SECRET_KEY`, submit a `setOptions` transaction to add the new public key as an additional signer:
+
+```typescript
+import { Keypair, TransactionBuilder, Networks, Operation, Horizon, BASE_FEE } from '@stellar/stellar-sdk';
+import { config } from './backend/config';
+
+const server = new Horizon.Server('https://horizon.stellar.org');
+const currentKeypair = config.agentKeypair();
+const newPublicKey = 'G...'; // The new keypair's public key
+
+const account = await server.loadAccount(currentKeypair.publicKey());
+const tx = new TransactionBuilder(account, {
+  fee: BASE_FEE,
+  networkPassphrase: Networks.PUBLIC,
+})
+  .addOperation(
+    Operation.setOptions({
+      signer: {
+        ed25519PublicKey: newPublicKey,
+        weight: 1, // Same weight as the current key
+      },
+    })
+  )
+  .setTimeout(180)
+  .build();
+
+tx.sign(currentKeypair);
+const txResult = await server.submitTransaction(tx);
+console.log('✅ New signer added:', txResult.id);
+```
+
+**Do NOT proceed to the next step until this transaction confirms on-chain.** Verify via:
+```bash
+curl https://
+
+/* … truncated 41
+
+/* … truncated 53 chars — edit only what you need near the top … */

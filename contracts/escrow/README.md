@@ -17,6 +17,9 @@ The contract stores its state in the persistent instance storage using the `Data
 | `Amount` | `i128` | The amount of token locked (in stroop-equivalent decimal units). |
 | `Expiry` | `u64` | The Unix timestamp (seconds) after which a refund can be executed by the depositor. |
 | `Released` | `bool` | A boolean flag indicating if the escrow has been settled (released or refunded). |
+| `InitializedAt` | `u64` | The ledger timestamp (seconds) at which `initialize` ran; returned as `initialized_at` in `EscrowState`. |
+| `PendingArbiter` | `Address` | The replacement arbiter proposed by the depositor via `propose_new_arbiter`. Present only while a rotation is pending; removed by `accept_arbiter_rotation`. |
+| `PendingArbiterTime` | `u64` | The ledger timestamp (seconds) at which the pending rotation was proposed. `accept_arbiter_rotation` succeeds only once `MIN_ROTATION_DELAY` (24 hours) has elapsed since this time; removed together with `PendingArbiter`. |
 
 ---
 
@@ -85,19 +88,48 @@ If an execution condition is violated, the contract panics with one of the follo
 
 | Code | Variant | Description |
 | :--- | :--- | :--- |
-| `1` | `AlreadyInitialized` | Escrow state has already been initialized. |
-| `2` | `AmountNotPositive` | Amount to lock must be greater than 0. |
-| `3` | `ExpiryNotInFuture` | Expiry timestamp must be greater than the current ledger timestamp. |
-| `4` | `NotArbiter` | The calling address is not the stored arbiter. |
-| `5` | `NotDepositor` | The calling address is not the stored depositor. |
-| `6` | `NotExpired` | Attempted refund before the expiration timestamp. |
-| `7` | `AlreadySettled` | Escrow is already settled (funds were already released or refunded). |
+| `1` | `AlreadyInitialized` | The escrow contract is already initialised. |
+| `2` | `AlreadyReleased` | The funds have already been released or refunded. |
+| `3` | `NotExpired` | The escrow has not yet expired. |
+| `4` | `NotArbiter` | The caller is not the authorized arbiter. |
+| `5` | `NotDepositor` | The caller is not the authorized depositor. |
+| `6` | `InvalidAmount` | The transfer amount must be positive. |
+| `7` | `InvalidExpiry` | The expiry timestamp must be in the future. |
+| `8` | `NotInitialized` | The escrow has not been initialized yet. |
+| `9` | `InvalidParties` | Depositor, recipient, and arbiter must all be distinct addresses. |
+| `10` | `RotationLocked` | The arbiter rotation time-lock has not yet expired. |
+| `11` | `NoPendingRotation` | No pending arbiter rotation proposal. |
+
+> **Keep this table in sync:** it is generated from the `EscrowError` enum in [`src/lib.rs`](src/lib.rs) (codes and doc comments). Whenever that enum changes, regenerate the table from it rather than editing rows by hand.
+
+---
+
+## Event Emissions & Confidentiality Audit
+
+Soroban emits contract events as **public on-chain data**. Every event is readable by any observer via `getEvents`, and the *topics* are the indexed, independently-filterable portion of an event. Because of this, an event that places private information in its topics constitutes an information disclosure. The following is a targeted audit of every `env.events().publish` emission in `lib.rs` (as of this audit):
+
+| Function | Topic(s) | Data payload | Private data in topics? |
+| :--- | :--- | :--- | :--- |
+| `initialize` | `escrow`, `initialized` | `depositor`, `recipient`, `amount` | No |
+| `release` | `escrow`, `released` | `recipient`, `amount` | No |
+| `refund` | `refunded` | `depositor`, `amount` | No |
+| `release_partial` | `partial_released` / `released` | `recipient`, `release_amount`, `remaining` | No |
+| `cancel` | `escrow`, `cancelled` | `depositor`, `amount` | No |
+| `propose_new_arbiter` | `arbiter_rotation_proposed` | `depositor`, `new_arbiter`, `now` | No |
+| `accept_arbiter_rotation` | `arbiter_rotation_accepted` | `new_arbiter`, `now` | No |
+
+### Audit conclusion: **No information disclosure found**
+
+1. **Topics carry only fixed event-name literals.** Every topic is a hardcoded `Symbol::new(&env, "...")` (e.g. `escrow`, `released`, `refunded`) used solely for event *type* classification. No caller-supplied or user-controlled value ever appears in a topic, and no private metadata (memos, off-chain references, PII) exists in contract storage to leak.
+2. **All data-payload values are already public on-chain state.** The payloads contain only addresses (`depositor`, `recipient`, `arbiter`, `new_arbiter`) and amounts/timestamps, each already disclosed by the public `get_state()` read function and ledger timestamps. Emitting them in events therefore reveals nothing that any on-chain observer could not already read directly.
+
+**Guidance for future changes:** keep topics restricted to static event-type symbols. If a data point is considered sensitive, exclude it from the emitted payload rather than from storage, and remember that event *data* — not just topics — is public to all observers.
 
 ---
 
 ## Cargo.toml Dependencies
 
-The contract specifies minimal, optimized dependencies in [Cargo.toml](file:///Users/owner/Documents/Code/drip/Nodal-AI/contracts/escrow/Cargo.toml):
+The contract specifies minimal, optimized dependencies in [Cargo.toml](./Cargo.toml):
 
 - **`soroban-sdk`**: The standard SDK for writing Smart Contracts on Stellar. The `alloc` feature enables dynamic allocation support.
 - **`testutils`**: Enables simulation, mocking, ledger manipulation, and event debugging inside the test environment.
@@ -162,3 +194,42 @@ soroban contract invoke \
   release \
   --arbiter G_ARBITER_ADDRESS
 ```
+
+---
+
+## Contract Upgrade Path
+
+### Immutability Constraint
+
+Soroban contracts are **immutable once deployed**. The escrow contract does not include an upgrade mechanism, meaning once deployed to mainnet, the contract code cannot be patched or modified. This is a fundamental design constraint of Soroban and ensures the security and predictability of deployed contracts.
+
+### Upgrade Strategy
+
+To deploy a new version of the escrow contract:
+
+1. **Deploy a New Contract**: Build and deploy the updated contract to Soroban, which will generate a new contract ID.
+
+2. **Migrate Active Escrows**: Transfer all active escrows from the old contract to the new contract:
+   - **Manual Migration**: For each active escrow, call `refund()` on the old contract (if expired) or coordinate with the arbiter to release funds, then re-initialize on the new contract.
+   - **Automated Migration Script**: Create a migration script that:
+     - Reads all active escrow states from the old contract
+     - Re-initializes each escrow on the new contract with the same parameters
+     - Validates that all funds have been transferred correctly
+
+3. **Update Contract Address Configuration**: Update the agent's configuration to reference the new contract address. This allows operators to swap contract addresses without code changes.
+
+### Recommended Pattern: Configuration-Driven Addresses
+
+To minimize downtime and simplify upgrades, store contract addresses in the agent's configuration file rather than hardcoding them:
+
+```json
+{
+  "escrow_contract_address": "CD_CURRENT_CONTRACT_ID"
+}
+```
+
+This approach allows operators to:
+- Quickly switch to a new contract by updating the configuration
+- Roll back to a previous contract if needed
+- Test new contracts on testnet before mainnet deployment
+- Avoid code deployments for contract address changes
