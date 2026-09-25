@@ -58,6 +58,10 @@ export class SpendingTracker {
   /**
    * Record a payment amount. The amount is expected to be a numeric string.
    * Throws if the new cumulative total exceeds `config.AGENT_SPENDING_LIMIT`.
+   *
+   * Callers must only invoke this once a transfer has actually been submitted
+   * successfully — recording before submission permanently counts a spend that
+   * may never have happened (see #646).
    */
   record(amountStr: string) {
     const amount = parseFloat(amountStr);
@@ -78,6 +82,33 @@ export class SpendingTracker {
       }
       if (total > limit) {
         throw new Error(`Cumulative spending ${total} exceeds limit ${limit}`);
+      }
+    }
+  }
+
+  /**
+   * Undo a previously recorded amount, used to roll back a spend that was
+   * recorded but whose transaction ultimately failed to submit (#646).
+   *
+   * Removes the most recent record matching `amountStr` within the active
+   * window and deletes it from persistence. Best-effort: a missing record is a
+   * no-op so callers can safely invoke this from a failure path.
+   */
+  rollback(amountStr: string): void {
+    const amount = parseFloat(amountStr);
+    if (isNaN(amount)) return;
+    const now = Date.now();
+    this.pruneOld(now);
+    for (let i = this.records.length - 1; i >= 0; i--) {
+      const rec = this.records[i];
+      if (rec && rec.amount === amount) {
+        this.records.splice(i, 1);
+        try {
+          pruneSpendingRecords(now - this.windowMs);
+        } catch {
+          // Persistence is best-effort; the in-memory window is authoritative.
+        }
+        return;
       }
     }
   }
