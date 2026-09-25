@@ -15,7 +15,6 @@ import { config } from '../config';
 import {
   loadAccount,
   submitTransaction,
-  horizonServer,
   resolveNetworkPassphrase,
 } from '../rpc_client';
 import { SubmitResultSchema } from './StellarPaymentTool';

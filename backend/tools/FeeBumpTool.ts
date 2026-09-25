@@ -9,7 +9,6 @@ import {
   TransactionBuilder,
   FeeBumpTransaction,
   Transaction,
-  Networks,
   BASE_FEE,
 } from '@stellar/stellar-sdk';
 import { z } from 'zod';
