@@ -50,6 +50,6 @@ export class SpendingTracker {
   }
 
   clear() {
-    this.records = [];
+    this.records.length = 0;
   }
 }

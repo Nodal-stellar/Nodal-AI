@@ -389,6 +389,28 @@ function parseConfigAndDerive(): AgentConfig {
 
   const raw: RawEnv = result.data;
 
+  // ── Mainnet HTTPS enforcement ──────────────────────────────────────────────
+  // On mainnet, both RPC endpoints MUST use HTTPS to prevent credential/data
+  // exposure over unencrypted connections. Testnet and futurenet permit HTTP
+  // for local devnets and CI environments.
+  if (raw.STELLAR_NETWORK === "mainnet") {
+    const httpsErrors: string[] = [];
+    if (!raw.HORIZON_URL.startsWith("https://")) {
+      httpsErrors.push(`  • HORIZON_URL: must use HTTPS on mainnet (got: ${raw.HORIZON_URL})`);
+    }
+    if (!raw.SOROBAN_RPC_URL.startsWith("https://")) {
+      httpsErrors.push(`  • SOROBAN_RPC_URL: must use HTTPS on mainnet (got: ${raw.SOROBAN_RPC_URL})`);
+    }
+    if (httpsErrors.length > 0) {
+      process.stderr.write(
+        `\n❌ [Config] Mainnet requires HTTPS for all RPC endpoints:\n` +
+        httpsErrors.join("\n") +
+        `\n\nSee .env.example for reference.\n\n`
+      );
+      process.exit(1);
+    }
+  }
+
   // ── Derive public key from secret ──────────────────────────────────────────
   let keypair: Keypair;
   try {
@@ -570,10 +592,10 @@ export const config = new Proxy({} as AgentConfig, {
 export const MAINNET_SPENDING_CAP = 10000;
 
 // ─── Compile-time encapsulation guard ────────────────────────────────────────
-// AgentConfig intentionally omits AGENT_SECRET_KEY via Omit<RawEnv, "AGENT_SECRET_KEY">.
-// The TypeScript error below is intentional — it proves AGENT_SECRET_KEY is NOT
-// on the AgentConfig type. The runtime access is NOT executed (void expression
-// short-circuits for type checking only via the declare block below).
+// AgentConfig intentionally omits AGENT_SECRET_KEY.
+// The TypeScript error below proves AGENT_SECRET_KEY is NOT on the AgentConfig
+// type. The false && guard ensures this line is dead code at runtime — the
+// typeof check prevents a ReferenceError since _configTypeGuard is declaration-
+// only and has no runtime binding after TypeScript erasure.
 // @ts-expect-error — AGENT_SECRET_KEY must NOT be accessible on AgentConfig
-declare const _configTypeGuard: AgentConfig;
-void (_configTypeGuard as any).AGENT_SECRET_KEY;
+if (false) { void (undefined as any as AgentConfig).AGENT_SECRET_KEY; }
