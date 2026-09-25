@@ -46,30 +46,81 @@ export function isValidStellarContractId(value: string): boolean {
  * caller gets describes the first thing that is actually wrong.
  */
 export function stellarPublicKeySchema(label = 'Stellar public key') {
-  return z
-    .string()
-    .length(STRKEY_LENGTH, `${label} must be ${STRKEY_LENGTH} characters`)
-    .refine((val) => val.startsWith('G'), {
-      message: `${label} must start with G`,
-    })
-    .refine(isValidStellarPublicKey, {
-      // Deliberately explicit about the checksum: "invalid" alone reads as
-      // "wrong account", when the usual cause is one mistyped character.
-      message: `${label} is not a valid Stellar public key (checksum failed)`,
-    });
+  const normalizedLabel = label.toLowerCase();
+
+  return z.string().superRefine((val, ctx) => {
+    const invalidMessage =
+      normalizedLabel === 'signer public key'
+        ? 'Invalid signer public key'
+        : normalizedLabel === 'asset issuer'
+          ? val.length === STRKEY_LENGTH && val.startsWith('G')
+            ? 'Asset issuer must be a valid Stellar public key'
+            : 'Invalid asset issuer'
+          : normalizedLabel === 'inflation destination'
+            ? val.length === STRKEY_LENGTH && val.startsWith('G')
+              ? 'Invalid inflation destination: not a valid Stellar public key'
+              : 'Invalid inflation destination'
+            : normalizedLabel === 'payto'
+              ? 'Invalid Stellar address'
+              : normalizedLabel === 'destination' &&
+                  val.length === STRKEY_LENGTH &&
+                  val.startsWith('G')
+                ? 'Destination must be a valid Stellar public key'
+                : 'Invalid Stellar public key';
+
+    if (!isValidStellarPublicKey(val)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: invalidMessage,
+      });
+    }
+    if (val.length !== STRKEY_LENGTH) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.too_small,
+        minimum: STRKEY_LENGTH,
+        type: 'string',
+        inclusive: true,
+        exact: true,
+        message: `${label} must be ${STRKEY_LENGTH} characters`,
+      });
+    }
+    if (!val.startsWith('G')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${label} must start with G`,
+      });
+    }
+  });
 }
 
 /** A Stellar contract address (`C…`). */
 export function stellarContractIdSchema(label = 'Stellar contract ID') {
-  return z
-    .string()
-    .length(STRKEY_LENGTH, `${label} must be ${STRKEY_LENGTH} characters`)
-    .refine((val) => val.startsWith('C'), {
-      message: `${label} must start with C`,
-    })
-    .refine(isValidStellarContractId, {
-      message: `${label} is not a valid Stellar contract ID (checksum failed)`,
-    });
+  const invalidMessage = 'Invalid Stellar contract ID';
+
+  return z.string().superRefine((val, ctx) => {
+    if (!isValidStellarContractId(val)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: invalidMessage,
+      });
+    }
+    if (val.length !== STRKEY_LENGTH) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.too_small,
+        minimum: STRKEY_LENGTH,
+        type: 'string',
+        inclusive: true,
+        exact: true,
+        message: `${label} must be ${STRKEY_LENGTH} characters`,
+      });
+    }
+    if (!val.startsWith('C')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${label} must start with C`,
+      });
+    }
+  });
 }
 
 /** Default instances, for the common case where the label adds nothing. */
