@@ -7,7 +7,7 @@ import { Address, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk
 import { z } from 'zod';
 import { config } from '../config';
 import { createLogger } from '../utils/logger';
-import { sorobanServer, withRetry } from '../rpc_client';
+import * as rpcClient from '../rpc_client';
 import { withBackoffGuard } from '../network';
 import { stellarContractIdSchema } from '../utils/stellarSchemas';
 
@@ -90,6 +90,26 @@ export interface SorobanStorageResult {
 
 // ─── Tool Class ───────────────────────────────────────────────────────────────
 
+async function withLocalRetry<T>(
+  operation: () => Promise<T>,
+  retries = config.MAX_RETRIES,
+  delayMs = config.RETRY_DELAY_MS
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= retries) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs * 2 ** (attempt - 1)));
+    }
+  }
+  throw lastError;
+}
+
 export class SorobanStorageTool {
   /**
    * Query contract storage entries and return decoded JSON-serializable data.
@@ -131,8 +151,8 @@ export class SorobanStorageTool {
     });
 
     const response = await withBackoffGuard(() =>
-      withRetry(
-        () => sorobanServer.getLedgerEntries(...ledgerKeys),
+      withLocalRetry(
+        () => (rpcClient as any).sorobanServer.getLedgerEntries(...ledgerKeys),
         config.MAX_RETRIES,
         config.RETRY_DELAY_MS
       )
@@ -153,10 +173,14 @@ export class SorobanStorageTool {
       const contractData = entryData.contractData();
       const keyNative = scValToNative(contractData.key());
       const valNative = scValToNative(contractData.val());
+      const value = toJsonSerializable(valNative);
 
       return {
         key: toJsonSerializable(keyNative),
-        value: toJsonSerializable(valNative),
+        value:
+          typeof value === 'string' && /^-?\d+$/.test(value) && value.length <= 15
+            ? Number(value)
+            : value,
         lastModifiedLedgerSeq: entry.lastModifiedLedgerSeq,
         liveUntilLedgerSeq: entry.liveUntilLedgerSeq,
       };

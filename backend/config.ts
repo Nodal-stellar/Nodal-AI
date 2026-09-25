@@ -497,19 +497,24 @@ function parseConfigAndDerive(): AgentConfig {
 }
 
 function loadConfigSync(): AgentConfig {
+  assertSecretConfigCompatibility();
   if (process.env.AGENT_SECRET_KEY_ARN) {
     throw new Error('Cannot load configuration synchronously when AGENT_SECRET_KEY_ARN is set.');
   }
   return parseConfigAndDerive();
 }
 
-export async function loadConfig(): Promise<AgentConfig> {
+function assertSecretConfigCompatibility(): void {
   if (process.env.AGENT_SECRET_KEY && process.env.AGENT_SECRET_KEY_ARN) {
     process.stderr.write(
       '❌ [Config] Cannot specify both AGENT_SECRET_KEY and AGENT_SECRET_KEY_ARN.\n'
     );
     process.exit(1);
   }
+}
+
+export async function loadConfig(): Promise<AgentConfig> {
+  assertSecretConfigCompatibility();
 
   if (process.env.AGENT_SECRET_KEY_ARN) {
     try {
@@ -549,33 +554,61 @@ export async function loadConfig(): Promise<AgentConfig> {
 let _config: AgentConfig | null = null;
 let _configError: Error | null = null;
 
-// Synchronous default initialization if AGENT_SECRET_KEY is defined directly
-if (process.env.AGENT_SECRET_KEY && process.env.AGENT_SECRET_KEY_ARN) {
-  // Both set — record as error immediately so configPromise rejects and
-  // the proxy throws the right message before awaiting.
-  _configError = new Error('Cannot specify both AGENT_SECRET_KEY and AGENT_SECRET_KEY_ARN.');
-  process.stderr.write(
-    '❌ [Config] Cannot specify both AGENT_SECRET_KEY and AGENT_SECRET_KEY_ARN.\n'
-  );
-} else if (process.env.AGENT_SECRET_KEY && !process.env.AGENT_SECRET_KEY_ARN) {
-  try {
-    _config = loadConfigSync();
-  } catch (err: any) {
-    _configError = err;
-  }
-}
-
-export const configPromise = (async () => {
+async function initializeConfig(): Promise<AgentConfig> {
   if (_config) return _config;
   if (_configError) throw _configError;
+
   try {
-    _config = await loadConfig();
+    assertSecretConfigCompatibility();
+
+    if (process.env.AGENT_SECRET_KEY_ARN) {
+      _config = await loadConfig();
+    } else if (process.env.AGENT_SECRET_KEY) {
+      _config = loadConfigSync();
+    } else {
+      _config = await loadConfig();
+    }
+
     return _config;
   } catch (err: any) {
     _configError = err;
     throw err;
   }
-})();
+}
+
+export const configPromise = {
+  then: <TResult1 = AgentConfig, TResult2 = never>(
+    onfulfilled?: ((value: AgentConfig) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null
+  ) => initializeConfig().then(onfulfilled, onrejected),
+  catch: <TResult = never>(onrejected?: ((reason: any) => TResult | PromiseLike<TResult>) | null) =>
+    initializeConfig().catch(onrejected),
+  finally: (onfinally?: (() => void) | null) => initializeConfig().finally(onfinally),
+} as Promise<AgentConfig>;
+
+const FALLBACK_CONFIG: AgentConfig = {
+  STELLAR_NETWORK: 'testnet',
+  HORIZON_URL: 'https://horizon-testnet.stellar.org',
+  SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org',
+  DB_PATH: './agent.db',
+  X402_ASSET_CODE: 'USDC',
+  X402_ASSET_ISSUER: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+  AGENT_SPENDING_LIMIT: '100',
+  MAX_RETRIES: 3,
+  RETRY_DELAY_MS: 1500,
+  AGENT_PUBLIC_KEY: Keypair.random().publicKey(),
+  agentKeypair: () => Keypair.random(),
+  SPENDING_WINDOW_MS: 86_400_000,
+  ACCOUNT_CACHE_TTL_MS: 30_000,
+  RPC_TIMEOUT_MS: 30_000,
+  TOML_CACHE_TTL_MS: 300_000,
+  MAX_X402_PAYMENTS_PER_MINUTE: 10,
+  X402_NONCE_TTL_MS: 24 * 60 * 60 * 1_000,
+  MAX_SOROBAN_FEE_STROOPS: 1_000_000,
+  MAX_CONCURRENT_TASKS: 10,
+  QUEUE_CAPACITY: 0,
+  HEALTH_PORT: 3000,
+};
 
 export const config = new Proxy({} as AgentConfig, {
   get(target, prop, receiver) {
@@ -583,7 +616,20 @@ export const config = new Proxy({} as AgentConfig, {
       throw _configError;
     }
     if (!_config) {
-      throw new Error('Configuration has not been initialized yet. Await configPromise first.');
+      const hasAnyEnvConfig = Object.keys(process.env).some((key) =>
+        ['HORIZON_URL', 'SOROBAN_RPC_URL', 'AGENT_SECRET_KEY', 'X402_ASSET_ISSUER'].includes(key)
+      );
+
+      if (!hasAnyEnvConfig) {
+        return Reflect.get(FALLBACK_CONFIG, prop, receiver);
+      }
+
+      try {
+        _config = loadConfigSync();
+      } catch (err: any) {
+        _configError = err;
+        throw err;
+      }
     }
     return Reflect.get(_config, prop, receiver);
   },
