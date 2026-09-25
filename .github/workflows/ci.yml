@@ -146,7 +146,21 @@ jobs:
       - name: Enforce WASM size budget
         run: bash scripts/check_wasm_size.sh
         env:
-          MAX_WASM_SIZE_BYTES: 200000
+          MAX_WASM_SIZE_BYTES: 120000
+
+  # Builds the production image and checks that native modules load inside
+  # it, so a missing better-sqlite3 binding can't silently ship again (#606).
+  docker-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build production image
+        run: docker build --target production -t nodal-ai:smoke .
+
+      - name: Boot check — better-sqlite3 native binding loads
+        run: docker run --rm nodal-ai:smoke node -e "new (require('better-sqlite3'))(':memory:')"
 
   secret-scan:
     runs-on: ubuntu-latest

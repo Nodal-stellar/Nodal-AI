@@ -80,8 +80,14 @@ FROM node:20-alpine AS prod-deps
 
 WORKDIR /build
 
+# Toolchain for compiling better-sqlite3 (no musl prebuilt binary is published)
+RUN apk add --no-cache python3 make g++
+
 COPY package.json package-lock.json* ./
+# --ignore-scripts skips better-sqlite3's install script, which builds its
+# native binding; rebuild just that package so the addon exists at runtime.
 RUN npm ci --omit=dev --ignore-scripts && \
+    npm rebuild better-sqlite3 && \
     npm cache clean --force
 
 # ─── Stage 4: Production image ────────────────────────────────────────────────
