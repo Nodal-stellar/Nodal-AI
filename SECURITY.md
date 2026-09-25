@@ -133,7 +133,7 @@ If `AGENT_SECRET_KEY` is suspected to be compromised or needs rotation for opera
 Generate a new keypair locally. Do not commit it to version control.
 
 ```bash
-node -e "const { Keypair } = require('js-stellar-sdk'); const kp = Keypair.random(); console.log('Public:', kp.publicKey()); console.log('Secret:', kp.secret());"
+node -e "const { Keypair } = require('@stellar/stellar-sdk'); const kp = Keypair.random(); console.log('Public:', kp.publicKey()); console.log('Secret:', kp.secret());"
 ```
 
 Save the output securely (e.g., in your secrets manager or encrypted note).
@@ -143,7 +143,7 @@ Save the output securely (e.g., in your secrets manager or encrypted note).
 Using the **current** `AGENT_SECRET_KEY`, submit a `setOptions` transaction to add the new public key as an additional signer:
 
 ```typescript
-import { Keypair, TransactionBuilder, Networks, Operation } from 'js-stellar-sdk';
+import { Keypair, TransactionBuilder, Networks, Operation, Horizon, BASE_FEE } from '@stellar/stellar-sdk';
 import { config } from './backend/config';
 
 const server = new Horizon.Server('https://horizon.stellar.org');
@@ -175,4 +175,6 @@ console.log('✅ New signer added:', txResult.id);
 ```bash
 curl https://
 
-/* … truncated 4155 chars — edit only what you need near the top … */
+/* … truncated 41
+
+/* … truncated 53 chars — edit only what you need near the top … */
