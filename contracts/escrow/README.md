@@ -17,6 +17,9 @@ The contract stores its state in the persistent instance storage using the `Data
 | `Amount` | `i128` | The amount of token locked (in stroop-equivalent decimal units). |
 | `Expiry` | `u64` | The Unix timestamp (seconds) after which a refund can be executed by the depositor. |
 | `Released` | `bool` | A boolean flag indicating if the escrow has been settled (released or refunded). |
+| `InitializedAt` | `u64` | The ledger timestamp (seconds) at which `initialize` ran; returned as `initialized_at` in `EscrowState`. |
+| `PendingArbiter` | `Address` | The replacement arbiter proposed by the depositor via `propose_new_arbiter`. Present only while a rotation is pending; removed by `accept_arbiter_rotation`. |
+| `PendingArbiterTime` | `u64` | The ledger timestamp (seconds) at which the pending rotation was proposed. `accept_arbiter_rotation` succeeds only once `MIN_ROTATION_DELAY` (24 hours) has elapsed since this time; removed together with `PendingArbiter`. |
 
 ---
 
@@ -85,13 +88,19 @@ If an execution condition is violated, the contract panics with one of the follo
 
 | Code | Variant | Description |
 | :--- | :--- | :--- |
-| `1` | `AlreadyInitialized` | Escrow state has already been initialized. |
-| `2` | `AmountNotPositive` | Amount to lock must be greater than 0. |
-| `3` | `ExpiryNotInFuture` | Expiry timestamp must be greater than the current ledger timestamp. |
-| `4` | `NotArbiter` | The calling address is not the stored arbiter. |
-| `5` | `NotDepositor` | The calling address is not the stored depositor. |
-| `6` | `NotExpired` | Attempted refund before the expiration timestamp. |
-| `7` | `AlreadySettled` | Escrow is already settled (funds were already released or refunded). |
+| `1` | `AlreadyInitialized` | The escrow contract is already initialised. |
+| `2` | `AlreadyReleased` | The funds have already been released or refunded. |
+| `3` | `NotExpired` | The escrow has not yet expired. |
+| `4` | `NotArbiter` | The caller is not the authorized arbiter. |
+| `5` | `NotDepositor` | The caller is not the authorized depositor. |
+| `6` | `InvalidAmount` | The transfer amount must be positive. |
+| `7` | `InvalidExpiry` | The expiry timestamp must be in the future. |
+| `8` | `NotInitialized` | The escrow has not been initialized yet. |
+| `9` | `InvalidParties` | Depositor, recipient, and arbiter must all be distinct addresses. |
+| `10` | `RotationLocked` | The arbiter rotation time-lock has not yet expired. |
+| `11` | `NoPendingRotation` | No pending arbiter rotation proposal. |
+
+> **Keep this table in sync:** it is generated from the `EscrowError` enum in [`src/lib.rs`](src/lib.rs) (codes and doc comments). Whenever that enum changes, regenerate the table from it rather than editing rows by hand.
 
 ---
 

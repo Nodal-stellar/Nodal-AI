@@ -91,7 +91,7 @@ Examples:
 ## Pull Request Checklist
 
 Before submitting your PR, make sure:
-- ✅ All tests pass (`npm run test` and `cargo test --manifest-path contracts/escrow/Cargo.toml`)
+- ✅ All tests pass (`npm run test:all`, which runs `cargo test` for the escrow contract and the TypeScript suite)
 - ✅ TypeScript compiles cleanly (`tsc --noEmit`)
 - ✅ Linting passes (`npm run lint`)
 - ✅ Formatting passes (`npm run format:check`) — run `npm run format` to auto-fix
@@ -112,7 +112,7 @@ Before submitting your PR, make sure:
 
 3. **Make Your Changes**:
    - Follow the project structure in `README.md`
-   - Ensure all tests pass: `npm run test`
+   - Ensure all tests pass: `npm run test:all`
    - Run the linter: `npm run lint`
    - Check formatting: `npm run format:check` (or `npm run format` to auto-fix)
    - For TypeScript changes, compile: `npm run build`
@@ -133,7 +133,7 @@ Before submitting your PR, make sure:
 Vitest snapshot tests (e.g., `tests/__snapshots__/agent.test.ts.snap`) lock down the serialization contracts and payload shapes of `AgentResult` across tools to prevent breaking webhook consumers.
 
 When your changes intentionally alter an output shape:
-- Update snapshots intentionally using `npm test -- -u` or `npx vitest run -u <path-to-test>`.
+- Update snapshots intentionally using `npm run test:ts -- -u` or `npx vitest run -u <path-to-test>`.
 - Review the diff in `tests/__snapshots__/*.snap` to ensure all modified fields are intentional and backwards-compatible.
 - **Never update snapshots blindly** just to make tests pass; always commit the updated snapshots with your PR.
 
@@ -160,7 +160,7 @@ All pull requests are automatically validated by GitHub Actions. The CI workflow
 
 - **Build**: Compiles TypeScript with `npm run build`
 - **Lint**: Enforces code style with `npm run lint` and formatting with `npm run format:check`
-- **Test**: Runs integration tests with `npm run test`
+- **Test**: Runs the Rust contract tests and the TypeScript suite with `npm run test:all`
 - **Test Rust**: Validates Soroban contracts with `cargo test`
 - **Audit**: Checks for vulnerabilities in npm and Cargo dependencies
 
@@ -232,7 +232,7 @@ Runs `scan-secrets.sh` to prevent accidental commits of sensitive data (API keys
 
 ### Pre-Push Hook (`.husky/pre-push`)
 
-**NEW**: Runs `npm test` automatically before allowing pushes to the remote repository.
+**NEW**: Runs `npm run test:ts` automatically before allowing pushes to the remote repository.
 
 This prevents broken tests from being pushed and failing only during CI checks. If your tests fail locally, the push is blocked with output showing which tests failed. Fix the failing tests and try pushing again.
 
