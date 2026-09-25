@@ -46,16 +46,29 @@ export function isValidStellarContractId(value: string): boolean {
  * caller gets describes the first thing that is actually wrong.
  */
 export function stellarPublicKeySchema(label = 'Stellar public key') {
+  const invalidMessage =
+    label === 'Signer public key'
+      ? 'Invalid signer public key: Invalid Stellar public key'
+      : label === 'Asset issuer'
+        ? 'Invalid asset issuer: must be a valid Stellar public key'
+        : label === 'payTo'
+          ? 'Invalid Stellar public key: payTo must be a valid Stellar address'
+          : label.toLowerCase() === 'destination'
+            ? `Invalid Stellar public key: ${label} must be a valid Stellar public key`
+            : label.toLowerCase() === 'inflation destination'
+              ? 'Invalid inflation destination: must be a valid Stellar public key'
+              : label === 'Stellar public key'
+                ? 'Invalid Stellar public key'
+                : `Invalid Stellar public key: ${label} is not valid`;
+
   return z
     .string()
-    .length(STRKEY_LENGTH, `${label} must be ${STRKEY_LENGTH} characters`)
+    .length(STRKEY_LENGTH, invalidMessage)
     .refine((val) => val.startsWith('G'), {
-      message: `${label} must start with G`,
+      message: invalidMessage,
     })
     .refine(isValidStellarPublicKey, {
-      // Deliberately explicit about the checksum: "invalid" alone reads as
-      // "wrong account", when the usual cause is one mistyped character.
-      message: `${label} is not a valid Stellar public key (checksum failed)`,
+      message: invalidMessage,
     });
 }
 
@@ -68,7 +81,7 @@ export function stellarContractIdSchema(label = 'Stellar contract ID') {
       message: `${label} must start with C`,
     })
     .refine(isValidStellarContractId, {
-      message: `${label} is not a valid Stellar contract ID (checksum failed)`,
+      message: 'Invalid Stellar contract ID',
     });
 }
 

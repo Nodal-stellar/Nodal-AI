@@ -49,6 +49,37 @@ export function toJsonSerializable(val: unknown): unknown {
   return val;
 }
 
+function normalizeStorageScalar(value: unknown): unknown {
+  if (typeof value === 'string' && /^-?\d+$/.test(value)) {
+    const asNumber = Number(value);
+    if (Number.isSafeInteger(asNumber)) {
+      return asNumber;
+    }
+  }
+  return value;
+}
+
+function normalizeStorageValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(normalizeStorageValue);
+  }
+  if (value instanceof Map) {
+    const obj: Record<string, unknown> = {};
+    for (const [k, v] of value.entries()) {
+      obj[String(k)] = normalizeStorageValue(v);
+    }
+    return obj;
+  }
+  if (value !== null && typeof value === 'object') {
+    const obj: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      obj[k] = normalizeStorageValue(v);
+    }
+    return obj;
+  }
+  return normalizeStorageScalar(value);
+}
+
 // ─── Input Schema ─────────────────────────────────────────────────────────────
 
 export const SorobanStorageInputSchema = z.object({
@@ -156,7 +187,7 @@ export class SorobanStorageTool {
 
       return {
         key: toJsonSerializable(keyNative),
-        value: toJsonSerializable(valNative),
+        value: normalizeStorageValue(toJsonSerializable(valNative)),
         lastModifiedLedgerSeq: entry.lastModifiedLedgerSeq,
         liveUntilLedgerSeq: entry.liveUntilLedgerSeq,
       };
