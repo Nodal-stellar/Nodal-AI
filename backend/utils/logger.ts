@@ -35,17 +35,17 @@ const STELLAR_SECRET_KEY_REGEX = /S[A-Z2-7]{55}/g;
  * Recursively redacts Stellar secret keys from string values so the Pino
  * logger preserves the legacy logger's secret-key scrubbing behavior.
  */
-function redactSecretKeys(value: unknown): unknown {
+export function redactSecrets(value: unknown): unknown {
   if (typeof value === 'string') {
     return value.replace(STELLAR_SECRET_KEY_REGEX, '[REDACTED]');
   }
   if (Array.isArray(value)) {
-    return value.map(redactSecretKeys);
+    return value.map(redactSecrets);
   }
   if (value !== null && typeof value === 'object') {
     const result: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-      result[key] = redactSecretKeys(val);
+      result[key] = redactSecrets(val);
     }
     return result;
   }
@@ -60,7 +60,7 @@ export const logger = pino({
   },
   hooks: {
     logMethod(args, method) {
-      const redacted = args.map(redactSecretKeys);
+      const redacted = args.map(redactSecrets);
       return method.apply(this, redacted as Parameters<typeof method>);
     },
   },

@@ -169,7 +169,9 @@ export function clearSpendingRecords(): void {
 }
 
 /** Replace the underlying DB instance — used in tests to inject an in-memory DB. */
-export function _setDb(db: Database.Database): void {
+export function _setDb(db: Database.Database | null): void {
   _db = db;
-  applySchema(_db);
+  if (_db) {
+    applySchema(_db);
+  }
 }

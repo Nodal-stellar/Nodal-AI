@@ -23,11 +23,12 @@ import { Keypair } from '@stellar/stellar-sdk';
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
 import { isValidStellarPublicKey } from './utils/stellarSchemas';
 
+export const MAINNET_SPENDING_CAP = 10_000;
+
 // Load .env file (no-op when running in CI / production with real env vars)
 dotenv.config();
 
 // ─── Custom Zod refinements ───────────────────────────────────────────────────
-
 
 /**
  * Validates a Stellar secret key (S…, 56 chars, base32).
@@ -293,7 +294,7 @@ export interface AgentConfig {
    * Spending window in milliseconds for rate/cap computation.
    * Defines the time window over which spending is tracked and enforced.
    * Validated by EnvSchema to be a positive integer.
-   * Defaults to 60,000 (1 minute).
+   * Defaults to 86,400,000 (24 hours).
    */
   readonly SPENDING_WINDOW_MS: number;
   /**
@@ -398,7 +399,7 @@ function parseConfigAndDerive(): AgentConfig {
     process.stderr.write(
       `\n❌ [Config] Invalid environment — fix the following before starting:\n` +
         formatValidationErrors(result.error) +
-        `\n\nSee ..env for reference.\n\n`
+        `\n\nSee .env for reference.\n\n`
     );
     process.exit(1);
   }
@@ -429,10 +430,10 @@ function parseConfigAndDerive(): AgentConfig {
   // ── Mainnet safety guard ───────────────────────────────────────────────────
   if (raw.STELLAR_NETWORK === 'mainnet') {
     const limit = parseFloat(raw.AGENT_SPENDING_LIMIT);
-    if (limit > 10_000) {
+    if (limit > MAINNET_SPENDING_CAP) {
       process.stderr.write(
         `❌ [Config] AGENT_SPENDING_LIMIT (${raw.AGENT_SPENDING_LIMIT}) exceeds ` +
-          `the mainnet safety cap of 10,000. Lower it or explicitly override.\n`
+          `the mainnet safety cap of ${MAINNET_SPENDING_CAP.toLocaleString('en-US')}. Lower it or explicitly override.\n`
       );
       process.exit(1);
     }
@@ -565,17 +566,35 @@ if (process.env.AGENT_SECRET_KEY && process.env.AGENT_SECRET_KEY_ARN) {
   }
 }
 
-export const configPromise = (async () => {
-  if (_config) return _config;
-  if (_configError) throw _configError;
-  try {
-    _config = await loadConfig();
-    return _config;
-  } catch (err: any) {
-    _configError = err;
-    throw err;
+function ensureConfigPromise(): Promise<AgentConfig> {
+  if (_config) return Promise.resolve(_config);
+  if (_configError) return Promise.reject(_configError);
+  if (!__configPromise) {
+    __configPromise = (async () => {
+      try {
+        _config = await loadConfig();
+        return _config;
+      } catch (err: any) {
+        _configError = err;
+        throw err;
+      }
+    })();
   }
-})();
+  return __configPromise;
+}
+
+let __configPromise: Promise<AgentConfig> | null = null;
+
+export const configPromise = {
+  then: <TResult1 = AgentConfig, TResult2 = never>(
+    onfulfilled?: ((value: AgentConfig) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
+  ) => ensureConfigPromise().then(onfulfilled, onrejected),
+  catch: <TResult = never>(
+    onrejected?: ((reason: unknown) => TResult | PromiseLike<TResult>) | null
+  ) => ensureConfigPromise().catch(onrejected),
+  finally: (onfinally?: (() => void) | null) => ensureConfigPromise().finally(onfinally),
+} as PromiseLike<AgentConfig>;
 
 export const config = new Proxy({} as AgentConfig, {
   get(target, prop, receiver) {
@@ -594,8 +613,6 @@ export const config = new Proxy({} as AgentConfig, {
  * Any single operation/payment attempting to exceed this value will be blocked
  * by the spending limit assertion before submission.
  */
-export const MAINNET_SPENDING_CAP = 10000;
-
 // ─── Compile-time encapsulation guard ────────────────────────────────────────
 // AgentConfig intentionally omits AGENT_SECRET_KEY via Omit<RawEnv, "AGENT_SECRET_KEY">.
 // The TypeScript assertion below is intentional — it proves AGENT_SECRET_KEY is NOT
