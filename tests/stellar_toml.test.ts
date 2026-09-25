@@ -15,6 +15,14 @@ vi.mock('../backend/config', () => ({
   },
 }));
 
+vi.mock('../backend/rpc_client', () => ({
+  withRetry: (request: () => unknown) => request(),
+}));
+
+vi.mock('../backend/network', () => ({
+  withBackoffGuard: (request: () => unknown) => request(),
+}));
+
 describe('StellarTomlTool', () => {
   let tool: StellarTomlTool;
 
@@ -113,6 +121,30 @@ EMAIL = "alice@example.com"
     });
 
     await expect(tool.fetchToml({ domain: 'bad.example.com' })).rejects.toThrow();
+  });
+
+  it('rejects excessive TOML nesting without recursing indefinitely', async () => {
+    const nestedValue = `${'['.repeat(501)}0${']'.repeat(501)}`;
+    (axios.get as any).mockResolvedValue({
+      data: `value = ${nestedValue}`,
+    });
+
+    await expect(tool.fetchToml({ domain: 'nested.example.com' })).rejects.toThrow(
+      /Maximum nesting depth/
+    );
+  });
+
+  it('does not pollute Object.prototype from a TOML __proto__ key', async () => {
+    (axios.get as any).mockResolvedValue({
+      data: '__proto__.stellarTomlPolluted = true\n',
+    });
+
+    try {
+      await tool.fetchToml({ domain: 'polluted.example.com' });
+      expect(Object.prototype).not.toHaveProperty('stellarTomlPolluted');
+    } finally {
+      delete (Object.prototype as { stellarTomlPolluted?: boolean }).stellarTomlPolluted;
+    }
   });
 
   it('rejects a currency status outside the SEP-1 enum', async () => {
