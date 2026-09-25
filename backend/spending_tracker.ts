@@ -195,6 +195,7 @@ export class SpendingTracker {
   }
 
   clear() {
+    this.records.length = 0;
     this.records = [];
     try {
       clearSpendingRecords();

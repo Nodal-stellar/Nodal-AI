@@ -1001,6 +1001,11 @@ describe('PayFiAgent — payload sanitisation', () => {
     expect(result.error).not.toContain('SABCDEFGHIJKLMNOPQRSTUVWXYZ234567');
   });
 
+  it("recursively redacts nested sensitive keys in deeply nested objects", async () => {
+    const mockInstance = vi.mocked(StellarPaymentTool).mock.results[0]!.value;
+    mockInstance.execute.mockRejectedValueOnce(
+      new Error("simulated nested payload failure")
+    );
   it('recursively redacts nested sensitive keys in deeply nested objects', async () => {
     const mockInstance = vi.mocked(StellarPaymentTool).mock.results[0]?.value;
     if (!mockInstance) throw new Error('Mock instance not found');
@@ -1030,6 +1035,11 @@ describe('PayFiAgent — payload sanitisation', () => {
     expect(result.error).toBe('simulated nested payload failure');
   });
 
+  it("includes errorType in AgentResult for structured errors", async () => {
+    const mockInstance = vi.mocked(StellarPaymentTool).mock.results[0]!.value;
+    mockInstance.execute.mockRejectedValueOnce(
+      new ValidationError("Invalid payment parameters")
+    );
   it('includes errorType in AgentResult for structured errors', async () => {
     const mockInstance = vi.mocked(StellarPaymentTool).mock.results[0]?.value;
     if (!mockInstance) throw new Error('Mock instance not found');
