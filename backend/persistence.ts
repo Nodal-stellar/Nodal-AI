@@ -64,6 +64,20 @@ function getDb(): Database.Database {
 }
 
 /**
+ * Close the live connection and drop the cached handle (#644).
+ *
+ * `getDb()` owns the only `better-sqlite3` handle, so releasing it belongs here
+ * rather than in DatabaseManager. After this call the next access re-opens a
+ * fresh connection via `getDb()`. Safe to call when no connection is open.
+ */
+export function closeDb(): void {
+  if (_db) {
+    _db.close();
+    _db = null;
+  }
+}
+
+/**
  * Execute a trivial query against the live connection (#234).
  *
  * `getDb()` owns the only `better-sqlite3` handle, so the probe belongs here
