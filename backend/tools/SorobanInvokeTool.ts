@@ -9,9 +9,7 @@ import {
   Keypair,
   Transaction,
   TransactionBuilder,
-  Operation,
   Contract,
-  nativeToScVal,
   scValToNative,
   xdr,
 } from '@stellar/stellar-sdk';
