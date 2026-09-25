@@ -300,7 +300,7 @@ Released under the [MIT License](LICENSE).
 
 _Built for the Stellar ecosystem by [Dami24-hub]._
 
-````
+---
 
 ## API Reference
 
@@ -320,23 +320,18 @@ The primary integration surface for developers. Dispatch tasks to the agent via 
 type TaskType = "stellar_payment" | "soroban_invoke" | "x402_respond" | "path_payment" | "fee_bump" | "account_info"
 ```
 
-All three values are wired into `PayFiAgent.run()` in `backend/agent.ts`. Any unrecognised type throws `"Unknown task type: <value>"` immediately at dispatch time.
+Each value below is wired into `PayFiAgent.run()` in `backend/agent.ts`. Any unrecognised type throws `"Unknown task type: <value>"` immediately at dispatch time.
 
 | Value | Tool | Description |
 |-------|------|-------------|
 | `stellar_payment` | `StellarPaymentTool` | Submit a native XLM or custom Stellar asset payment via Horizon. Enforces the per-transaction `AGENT_SPENDING_LIMIT` and the mainnet spending cap before execution. |
 | `soroban_invoke` | `SorobanInvokeTool` | Invoke any Soroban smart contract function. Always runs a mandatory simulation pass via Soroban RPC before broadcast; set `simulateOnly: true` for a dry-run that skips submission. |
 | `x402_respond` | `X402PaymentTool` | Respond to an [x402](https://github.com/x402-foundation/x402) `402 Payment Required` challenge. Validates the challenge schema, enforces spending limits, delegates to `StellarPaymentTool`, and returns an `X402PaymentProof`. |
+| `path_payment` | `PathPaymentTool` | Cross-asset path payment (strict send) routed through the Stellar DEX. |
+| `fee_bump` | `FeeBumpTool` | Wrap an existing transaction in a fee-bump envelope for a sponsored retry. |
+| `account_info` | `AccountInfoTool` | Fetch the agent's account balances, sequence number, and trustlines from Horizon. |
 
 > **Standalone utilities:** `BalanceCheckTool` (`backend/tools/BalanceCheckTool.ts`) and `SorobanQueryTool` (`backend/tools/SorobanQueryTool.ts`) are importable directly and are not dispatched through `PayFiAgent.run()`. Use them outside the agent task loop when you only need a read-only query.
-| Value | Description |
-|-------|-------------|
-| `stellar_payment` | Native XLM or custom asset payment via Horizon |
-| `soroban_invoke` | Smart contract invocation via Soroban RPC with simulation |
-| `x402_respond` | Respond to an x402 payment challenge with spending limit guard |
-| `path_payment` | Cross-asset path payment strict send via the Stellar DEX |
-| `fee_bump` | Wrap an existing transaction in a fee-bump envelope for sponsored retry |
-| `account_info` | Fetch the agent's account balances, sequence number, and trustlines from Horizon |
 
 ### AgentTask
 
@@ -443,7 +438,7 @@ sequenceDiagram
     ST-->>X: { txHash, ledger }
     X-->>PA: X402PaymentProof
     PA-->>C: AgentResult
-````
+```
 
 In practice, the `payload` handed to `run()` is the parsed body of a `402 Payment Required` response from a resource server, conforming to `X402ChallengeSchema` — but the HTTP exchange that obtains and replays that challenge is the caller's responsibility, not `X402PaymentTool`'s.
 
