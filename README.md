@@ -361,6 +361,15 @@ Input wrapper for task dispatch. The `payload` shape depends on `type`:
 - `inflation`: `{ action: "set"; inflationDestination: string }` or `{ action: "get"; accountId?: string }` — set or query the account's inflation destination
 - `balance_check`: `{ assetCode: string; assetIssuer?: string; publicKey?: string }`
 - `soroban_query`: `{ contractId: string; method: string; args: SorobanValue[] }`
+- `swap`: `{ sellAsset: { code: string; issuer?: string }; buyAsset: { code: string; issuer?: string }; sellAmount: string; maxSlippagePct: number }` (`maxSlippagePct` is 0–100)
+- `account_history`: `{ publicKey?: string; limit?: number; cursor?: string; assetCode?: string }` (`limit` is 1–200, default 10)
+- `soroban_deploy`: `{ action: "upload" | "deploy"; wasm?: Buffer | string; wasmBuffer?: Buffer | string }` or `{ action: "instantiate"; wasmHash: string }` — `upload`/`deploy` require WASM bytes (a `Buffer`, file path, hex or base64 string)
+- `liquidity_pool`: `{ action: "deposit"; liquidityPoolId: string; maxAmountA: string; maxAmountB: string; minPrice: string; maxPrice: string }` or `{ action: "withdraw"; liquidityPoolId: string; amount: string; minAmountA: string; minAmountB: string }` or `{ action: "info"; liquidityPoolId: string }`
+- `stellar_toml`: `{ domain: string }` — fetches and parses the domain's SEP-1 `stellar.toml`
+- `data_entry`: `{ action: "set"; name: string; value: string }` or `{ action: "delete"; name: string }` or `{ action: "get"; name: string; accountId?: string }` (`name` and `value` are at most 64 bytes)
+- `sequence_number`: `{ action: "get"; accountId?: string }` or `{ action: "bump"; bumpTo: string | number | bigint }`
+- `sponsored_account`: `{ newAccountPublicKey: string; startingBalance?: string; newAccountSignature?: string; newAccountSecret?: string }` (`startingBalance` defaults to `"0"`; supply `newAccountSecret` or a base64 `newAccountSignature` so the new account co-signs the `endSponsoringFutureReserves` operation, which the network requires)
+- `anchor_quote`: `{ anchorQuoteUrl: string; sellAsset: string; buyAsset: string; sellAmount?: string; buyAmount?: string; context?: "sep6" | "sep31"; jwtToken?: string }` (at least one of `sellAmount` / `buyAmount` is required)
 
 ### AgentResult
 
