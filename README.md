@@ -365,6 +365,8 @@ Input wrapper for task dispatch. The `payload` shape depends on `type`:
 - `sequence_number`: `{ action: "get"; accountId?: string }` or `{ action: "bump"; bumpTo: string | number | bigint }`
 - `sponsored_account`: `{ newAccountPublicKey: string; startingBalance?: string; newAccountSignature?: string; newAccountSecret?: string }` (`startingBalance` defaults to `"0"`; supply `newAccountSecret` or a base64 `newAccountSignature` so the new account co-signs the `endSponsoringFutureReserves` operation, which the network requires)
 - `anchor_quote`: `{ anchorQuoteUrl: string; sellAsset: string; buyAsset: string; sellAmount?: string; buyAmount?: string; context?: "sep6" | "sep31"; jwtToken?: string }` (at least one of `sellAmount` / `buyAmount` is required)
+- `set_options`: `{ homeDomain?: string; masterWeight?: number; lowThreshold?: number; medThreshold?: number; highThreshold?: number; setFlags?: number; clearFlags?: number; confirmLockoutRisk?: boolean; confirmAuthImmutable?: boolean }` (weights and thresholds are 0–255; `homeDomain` is at most 32 characters)
+  > ⚠️ **Irreversible changes are guarded.** `masterWeight: 0` is rejected unless the account's other ed25519 signers can still meet the high threshold (pre-auth and hash-x signers don't count). Otherwise the agent would be permanently locked out of its account. `setFlags` including `AuthImmutableFlag` (`4`) is rejected because it permanently freezes the account's auth flags and blocks merging. Pass `confirmLockoutRisk: true` or `confirmAuthImmutable: true` only when you intend the irreversible outcome.
 
 ### AgentResult
 
