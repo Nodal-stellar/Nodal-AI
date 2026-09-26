@@ -528,3 +528,6 @@ See [`backend/agent.ts`](./backend/agent.ts) for task dispatch and the spending-
 
 <!-- handsoff-issue-680 -->
 - #680: README's Mainnet Checklist claims all four items are "enforced," but one is just advice
+
+<!-- handsoff-issue-681 -->
+- #681: CONTRIBUTING.md and ARCHITECTURE.md both say the task-type `switch` lives in `PayFiAgent.run()` — it's actually in the private `executeTask()`
