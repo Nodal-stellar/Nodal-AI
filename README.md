@@ -357,7 +357,7 @@ Input wrapper for task dispatch. The `payload` shape depends on `type`:
 - `balance_check`: `{ assetCode: string; assetIssuer?: string; publicKey?: string }`
 - `soroban_query`: `{ contractId: string; method: string; args: SorobanValue[] }`
 - `swap`: `{ sellAsset: { code: string; issuer?: string }; buyAsset: { code: string; issuer?: string }; sellAmount: string; maxSlippagePct: number }` (`maxSlippagePct` is 0–100)
-- `account_history`: `{ publicKey?: string; limit?: number; cursor?: string; assetCode?: string }` (`limit` is 1–200, default 10)
+- `account_history`: `{ publicKey?: string; limit?: number; cursor?: string; assetCode?: string }` (`limit` is 1–200, default 10, and counts *matching* payments after non-`payment` operations and the `assetCode` filter are dropped; the tool pages through Horizon to fill it, up to 5 pages per call. The result adds `pagesFetched` and `pageLimitReached` — when `pageLimitReached` is true, fewer than `limit` records does not mean history is exhausted; continue from `nextCursor`)
 - `soroban_deploy`: `{ action: "upload" | "deploy"; wasm?: Buffer | string; wasmBuffer?: Buffer | string }` or `{ action: "instantiate"; wasmHash: string }` — `upload`/`deploy` require WASM bytes (a `Buffer`, file path, hex or base64 string)
 - `liquidity_pool`: `{ action: "deposit"; liquidityPoolId: string; maxAmountA: string; maxAmountB: string; minPrice: string; maxPrice: string }` or `{ action: "withdraw"; liquidityPoolId: string; amount: string; minAmountA: string; minAmountB: string }` or `{ action: "info"; liquidityPoolId: string }`
 - `stellar_toml`: `{ domain: string }` — fetches and parses the domain's SEP-1 `stellar.toml`
