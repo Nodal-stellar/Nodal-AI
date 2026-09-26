@@ -173,8 +173,78 @@ console.log('✅ New signer added:', txResult.id);
 
 **Do NOT proceed to the next step until this transaction confirms on-chain.** Verify via:
 ```bash
-curl https://
+curl https://horizon.stellar.org/accounts/<AGENT_PUBLIC_KEY>
+# Look for the new public key in the response's signers array
+```
 
-/* … truncated 41
+#### Step 3: Update `AGENT_SECRET_KEY` to the New Key
 
-/* … truncated 53 chars — edit only what you need near the top … */
+Once the new signer is confirmed on-chain, update your environment:
+```bash
+export AGENT_SECRET_KEY="S..." # Use the new keypair's secret key
+```
+
+Restart any running agent processes so they pick up the new key.
+
+#### Step 4: Verify the New Key Works
+
+Test that the agent can sign transactions with the new key. This snippet reuses the `server` and `account` from Step 2 (re-create them first if you are running it standalone):
+
+```typescript
+import { TransactionBuilder, Networks, Operation, Horizon, BASE_FEE } from '@stellar/stellar-sdk';
+import { config } from './backend/config';
+
+// Standalone setup (skip if reusing Step 2's variables):
+// const server = new Horizon.Server('https://horizon.stellar.org');
+const newKeypair = config.agentKeypair();
+// const account = await server.loadAccount(newKeypair.publicKey());
+
+const testTx = new TransactionBuilder(account, {
+  fee: BASE_FEE,
+  networkPassphrase: Networks.PUBLIC,
+})
+  .addOperation(Operation.bumpSequence({ bumpTo: account.sequenceNumber() }))
+  .setTimeout(180)
+  .build();
+
+testTx.sign(newKeypair);
+const result = await server.submitTransaction(testTx);
+console.log('✅ New key can sign transactions:', result.id);
+```
+
+#### Step 5: Remove the Old Key as a Signer
+
+Once the new key is confirmed working and the old key is no longer needed, remove it from the signers list. This snippet also reuses the `server` and `account` from Step 2:
+
+```typescript
+import { TransactionBuilder, Networks, Operation, Horizon, BASE_FEE } from '@stellar/stellar-sdk';
+import { config } from './backend/config';
+
+const oldPublicKey = '...'; // The old keypair's public key
+const newKeypair = config.agentKeypair();
+
+const tx = new TransactionBuilder(account, {
+  fee: BASE_FEE,
+  networkPassphrase: Networks.PUBLIC,
+})
+  .addOperation(
+    Operation.setOptions({
+      signer: {
+        ed25519PublicKey: oldPublicKey,
+        weight: 0, // Weight of 0 removes the signer
+      },
+    })
+  )
+  .setTimeout(180)
+  .build();
+
+tx.sign(newKeypair); // Sign with the NEW key
+const txResult = await server.submitTransaction(tx);
+console.log('✅ Old signer removed:', txResult.id);
+```
+
+### Critical Warnings
+
+⚠️ **Do not remove the old key until the new key is confirmed working.** If you remove the old key before verifying the new one works, the account will have no active signers and become permanently inaccessible.
+
+⚠️ **Do not update `AGENT_SECRET_KEY` in production until the new signer is confirmed on-chain.** Mismatched signers and active keys will cause transaction signing failures.
