@@ -230,7 +230,7 @@ export class SorobanInvokeTool {
    * Invoke a Soroban smart contract function.
    *
    * Every call **always** runs a mandatory simulation step via
-   * {@link prepareSorobanTx} before any broadcast attempt. The simulation both
+   * `prepareSorobanTxWithEvents` (`backend/rpc_client.ts`) before any broadcast attempt. The simulation both
    * validates the transaction and attaches the required Soroban resource footprint.
    *
    * ### Return shape — driven by `simulateOnly`
