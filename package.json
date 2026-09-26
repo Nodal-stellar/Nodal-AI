@@ -44,11 +44,11 @@
     "axios": "1.20.0",
     "better-sqlite3": "12.11.1",
     "dotenv": "16.6.1",
-    "opossum": "8.1.4",
-    "picomatch": "4.0.7",
     "express": "5.2.1",
     "opossum": "8.5.0",
+    "picomatch": "4.0.7",
     "pino": "10.3.1",
+    "toml": "4.3.0",
     "zod": "3.25.76"
   },
   "devDependencies": {
@@ -70,5 +70,11 @@
     "typedoc": "0.28.20",
     "typescript": "5.9.3",
     "vitest": "3.2.7"
+  },
+  "overrides": {
+    "toml": "$toml",
+    "typed-rest-client": {
+      "qs": "6.16.0"
+    }
   }
 }
