@@ -1,6 +1,11 @@
 /**
  * backend/tools/MultiSigPaymentTool.ts
  * Build M-of-N multi-signature payment transactions for high-value PayFi operations.
+ *
+ * NOTE: Unlike StellarPaymentTool and X402PaymentTool, this tool does not currently
+ * enforce a spending-limit check. Spending-limit enforcement for multisig payments
+ * is tracked separately (see issue #669); until it lands, callers must apply their
+ * own value caps before invoking this tool.
  */
 
 import {
