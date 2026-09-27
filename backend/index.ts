@@ -86,4 +86,4 @@ start().catch((err) => {
   process.exit(1);
 });
 
-export { agent };
+export { agent, PayFiAgent };
