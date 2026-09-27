@@ -12,8 +12,10 @@ Nodal AI is structured into three clean pillars to isolate concerns, simplify de
 /
 ├── backend/            # Pillar 1: Agent Orchestration (TypeScript/Node.js)
 │   ├── db/             # Local database layers / state tracking
+│   ├── middleware/     # HTTP middleware (centralised error handling in error_handler.ts)
 │   ├── tools/          # Individual agent tools (StellarPaymentTool, SorobanInvokeTool, X402PaymentTool)
 │   ├── types/          # Domain-specific type and schema validation definitions
+│   ├── utils/          # Shared helpers (logger.ts, stellarSchemas.ts)
 │   ├── agent.ts        # The main orchestrator class (PayFiAgent)
 │   ├── config.ts       # Secure configuration layer and environment schema validations
 │   └── rpc_client.ts   # Central network gateway with observability, retries, and simulation gates
@@ -25,7 +27,7 @@ Nodal AI is structured into three clean pillars to isolate concerns, simplify de
     └── soroban_invoke.test.ts # Smart contract invocation tests
 ```
 
-- **`backend/`** holds the "Agent Brain." Code here handles configuration parsing, validation, task dispatching, and cryptographic credentials signing without storing keys in memory properties.
+- **`backend/`** holds the "Agent Brain." Code here handles configuration parsing, validation, task dispatching, and cryptographic credential signing. The agent's signing keypair is derived once from `AGENT_SECRET_KEY` at startup — `config.agentKeypair()` returns that single cached `Keypair` instance — and tools that need to sign hold it as a `private keypair: Keypair` instance property. The keypair therefore does live in process memory for the lifetime of the process (rather than being re-derived per call); what is guaranteed is that it is never logged, serialized, or echoed into error messages (see `backend/utils/logger.ts` redaction rules).
 - **`contracts/`** defines the on-chain business logic using Soroban. Contracts are compiled into WebAssembly (`.wasm`) targets.
 - **`tests/`** ensures E2E compatibility by spinning up isolated transaction sequences and verifying agent interaction against mock or live network endpoints.
 
