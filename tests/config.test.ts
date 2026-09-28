@@ -9,13 +9,6 @@ import { z } from 'zod';
 // so after vi.resetModules() + vi.doMock() the same object is always used.
 const mockSend = vi.fn();
 
-// Use vi.mock for the initial hoisted registration. Tests that call
-// vi.resetModules() must call vi.doMock() in beforeEach to re-register the
-// mock after the module registry is cleared (see beforeEach in the suites
-// that use vi.resetModules()).
-vi.mock("@aws-sdk/client-secrets-manager", () => ({
-  SecretsManagerClient: vi.fn().mockImplementation(() => ({ send: mockSend })),
-  GetSecretValueCommand: vi.fn().mockImplementation((args: any) => args),
 const VALID_SECRET = Keypair.random().secret();
 const VALID_ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
 
