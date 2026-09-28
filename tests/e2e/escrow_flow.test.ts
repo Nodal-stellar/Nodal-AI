@@ -29,17 +29,6 @@ import {
   Address,
   xdr,
   Contract,
-} from "@stellar/stellar-sdk";
-import axios from "axios";
-import * as fs from "fs";
-import * as path from "path";
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const SOROBAN_RPC_URL =
-  process.env.SOROBAN_RPC_URL ?? "https://soroban-testnet.stellar.org";
-const HORIZON_URL =
-  process.env.HORIZON_URL ?? "https://horizon-testnet.stellar.org";
 } from '@stellar/stellar-sdk';
 import axios from 'axios';
 import * as fs from 'fs';
