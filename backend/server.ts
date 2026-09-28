@@ -6,7 +6,8 @@
  * Endpoints:
  *   GET /health  → 200 { status: "ok", components: { horizon, soroban, database } }
  *                  503 { status: "degraded", components: { ... } } when a dependency is down
- *   GET /status  → 200 { results: PersistedResult[] }   (last 10 AgentResult records)
+ *   GET /status  → 200 { results: PersistedResult[] }   (paginated via ?limit=&offset=,
+ *                  default last 10; Bearer auth when WEBHOOK_SECRET is set)
  *
  * Uses only the Node.js built-in `http` module — no additional dependencies.
  * Port is read from config.HEALTH_PORT (env var HEALTH_PORT, default 3000).
@@ -99,18 +100,18 @@ export async function checkDatabase(): Promise<ComponentStatus> {
 
 // ─── Auth helper ──────────────────────────────────────────────────────────────
 
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
-
 /**
  * Returns true if the request passes Bearer-token authentication.
- * When WEBHOOK_SECRET is unset, all requests are allowed.
+ * When WEBHOOK_SECRET is unset, all requests are allowed. The secret is read
+ * per request so a rotated value takes effect without re-importing the module.
  */
 function isAuthenticated(req: http.IncomingMessage): boolean {
-  if (!WEBHOOK_SECRET) return true;
+  const secret = process.env.WEBHOOK_SECRET;
+  if (!secret) return true;
   const auth = req.headers['authorization'];
   if (!auth) return false;
   const [scheme, token] = auth.split(' ');
-  return scheme?.toLowerCase() === 'bearer' && token === WEBHOOK_SECRET;
+  return scheme?.toLowerCase() === 'bearer' && token === secret;
 }
 
 const HEALTH_PATH = '/health';
@@ -140,7 +141,10 @@ export function createHealthServer(): http.Server {
     // The previous inline branch served persisted results with no auth guard
     // and a hardcoded `getResults(10)`.
     if (req.method === 'GET' && req.url?.split('?')[0] === STATUS_PATH) {
-      const parsedUrl = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
+      const parsedUrl = new URL(
+        req.url ?? STATUS_PATH,
+        `http://${req.headers.host ?? 'localhost'}`
+      );
       void handleResults(req, res, parsedUrl);
       return;
     }
@@ -225,6 +229,71 @@ async function handleHealth(_req: http.IncomingMessage, res: http.ServerResponse
   } catch (err) {
     const errorResponse = handleError(err);
     log.error({
-      msg: 'Unha
+      msg: 'Unhandled request error',
+      status: errorResponse.status,
+      type: errorResponse.type,
+    });
+    const body = JSON.stringify(errorResponse);
+    res.writeHead(errorResponse.status, {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+      ...errorResponse.headers,
+    });
+    res.end(body);
+  }
+}
 
-/* … truncated 344 chars — edit only what you need near the top … */
+const DEFAULT_RESULTS_LIMIT = 10;
+const MAX_RESULTS_LIMIT = 100;
+
+/** Parses a non-negative integer query parameter, falling back when absent or invalid. */
+function parseNonNegativeInt(value: string | null, fallback: number): number {
+  if (value === null) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+/**
+ * GET /status — paginated persisted AgentResult records, newest first.
+ * Requires a matching Bearer token when WEBHOOK_SECRET is set.
+ * Query parameters: `limit` (default 10, max 100) and `offset` (default 0).
+ */
+function handleResults(req: http.IncomingMessage, res: http.ServerResponse, url: URL): void {
+  if (!isAuthenticated(req)) {
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Unauthorized' }));
+    return;
+  }
+
+  try {
+    const limit = Math.min(
+      parseNonNegativeInt(url.searchParams.get('limit'), DEFAULT_RESULTS_LIMIT),
+      MAX_RESULTS_LIMIT
+    );
+    const offset = parseNonNegativeInt(url.searchParams.get('offset'), 0);
+    const body = JSON.stringify({ results: getResults(limit, offset) });
+
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+    });
+    res.end(body);
+  } catch (err) {
+    // Route through the shared handler so a StructuredError gets the status
+    // code that describes it instead of a blanket 500 - and so an internal
+    // fault's message is not echoed to the caller.
+    const errorResponse = handleError(err);
+    log.error({
+      msg: 'Failed to read persisted results',
+      status: errorResponse.status,
+      type: errorResponse.type,
+    });
+    const body = JSON.stringify({ error: 'Failed to read results', ...errorResponse });
+    res.writeHead(errorResponse.status, {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+      ...errorResponse.headers,
+    });
+    res.end(body);
+  }
+}
