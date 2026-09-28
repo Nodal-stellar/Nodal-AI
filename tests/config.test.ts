@@ -16,6 +16,11 @@ class MockSecretsManagerClient {
   send = mockSend;
 }
 
+// Use vi.mock for the initial hoisted registration. Tests that call
+// vi.resetModules() must call vi.doMock() in beforeEach to re-register the
+// mock after the module registry is cleared (see beforeEach in the suites
+// that use vi.resetModules()).
+//
 // The implementation is passed directly to vi.fn() (its "original"), not
 // chained on afterward via .mockImplementation() — vitest.config.ts sets
 // restoreMocks: true, which wipes a chained .mockImplementation() override
