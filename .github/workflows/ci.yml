@@ -11,7 +11,11 @@ on:
     - cron: '0 3 * * 1'
 
 jobs:
+  # Required status check (#704): branch protection on `main` should list the
+  # `build` check as required, so a PR that does not compile cannot merge.
+  # Keep this job's `name` stable — renaming it silently drops the requirement.
   build:
+    name: build
     runs-on: ubuntu-latest
 
     steps:
@@ -26,6 +30,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Type-check sources (tsc --noEmit)
+        run: npx tsc --noEmit
 
       - name: Build TypeScript
         run: npm run build
