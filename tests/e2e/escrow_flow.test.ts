@@ -319,7 +319,6 @@ let recipientKp: Keypair;
 let contractId: string;
 
 describe.skipIf(process.env.RUN_E2E !== "true")("Escrow E2E — testnet (legacy)", () => {
-describe('Escrow E2E — testnet', () => {
   beforeAll(async () => {
     deployerKp = Keypair.random();
     recipientKp = Keypair.random();
