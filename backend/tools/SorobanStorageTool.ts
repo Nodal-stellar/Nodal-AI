@@ -7,7 +7,7 @@ import { Address, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk
 import { z } from 'zod';
 import { config } from '../config';
 import { createLogger } from '../utils/logger';
-import * as rpcClient from '../rpc_client';
+import { sorobanServer } from '../rpc_client';
 import { withBackoffGuard } from '../network';
 import { stellarContractIdSchema } from '../utils/stellarSchemas';
 
@@ -183,20 +183,21 @@ export class SorobanStorageTool {
 
     const response = await withBackoffGuard(() =>
       withLocalRetry(
-        () => (rpcClient as any).sorobanServer.getLedgerEntries(...ledgerKeys),
+        () => sorobanServer.getLedgerEntries(...ledgerKeys),
         config.MAX_RETRIES,
         config.RETRY_DELAY_MS
       )
     );
 
-    const entries: StorageEntryResult[] = (response.entries ?? []).map((entry: any) => {
+    const entries: StorageEntryResult[] = (response.entries ?? []).map((entry) => {
       let entryData: xdr.LedgerEntryData;
-      if (typeof entry.val === 'string') {
-        entryData = xdr.LedgerEntryData.fromXDR(entry.val, 'base64');
-      } else if (entry.val instanceof xdr.LedgerEntryData) {
-        entryData = entry.val;
-      } else if (entry.val && typeof entry.val.contractData === 'function') {
-        entryData = entry.val;
+      const val = entry.val as unknown;
+      if (typeof val === 'string') {
+        entryData = xdr.LedgerEntryData.fromXDR(val, 'base64');
+      } else if (val instanceof xdr.LedgerEntryData) {
+        entryData = val;
+      } else if (val && typeof (val as { contractData?: unknown }).contractData === 'function') {
+        entryData = val as xdr.LedgerEntryData;
       } else {
         throw new Error('Unable to parse LedgerEntryData from RPC response');
       }
@@ -204,13 +205,16 @@ export class SorobanStorageTool {
       const contractData = entryData.contractData();
       const keyNative = scValToNative(contractData.key());
       const valNative = scValToNative(contractData.val());
-      const value = toJsonSerializable(valNative);
 
       return {
         key: toJsonSerializable(keyNative),
         value: normalizeStorageValue(toJsonSerializable(valNative)),
-        lastModifiedLedgerSeq: entry.lastModifiedLedgerSeq,
-        liveUntilLedgerSeq: entry.liveUntilLedgerSeq,
+        ...(entry.lastModifiedLedgerSeq !== undefined
+          ? { lastModifiedLedgerSeq: entry.lastModifiedLedgerSeq }
+          : {}),
+        ...(entry.liveUntilLedgerSeq !== undefined
+          ? { liveUntilLedgerSeq: entry.liveUntilLedgerSeq }
+          : {}),
       };
     });
 
@@ -221,7 +225,7 @@ export class SorobanStorageTool {
 
     return {
       entries,
-      latestLedger: response.latestLedger,
+      ...(response.latestLedger !== undefined ? { latestLedger: response.latestLedger } : {}),
     };
   }
 }

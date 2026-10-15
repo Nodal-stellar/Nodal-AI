@@ -42,9 +42,8 @@ export class BalanceCheckTool {
   async execute(rawInput: unknown): Promise<string> {
     const input = BalanceCheckInputSchema.parse(rawInput);
     const account = await loadAccount(input.publicKey);
-    const balances = account.balances as any[];
 
-    const balance = findBalance(account, input.assetCode, input.assetIssuer);
+    const balance = findBalance(account, input.assetCode ?? 'XLM', input.assetIssuer);
     return balance?.balance ?? '0';
   }
 }

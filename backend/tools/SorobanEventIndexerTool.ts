@@ -6,7 +6,7 @@
 import { rpc } from '@stellar/stellar-sdk';
 import { z } from 'zod';
 import { config } from '../config';
-import * as rpcClient from '../rpc_client';
+import { sorobanServer } from '../rpc_client';
 import { withBackoffGuard } from '../network';
 import { stellarContractIdSchema } from '../utils/stellarSchemas';
 
@@ -63,11 +63,11 @@ export class SorobanEventIndexerTool {
     const response = await withBackoffGuard(() =>
       withLocalRetry(
         () =>
-          (rpcClient as any).sorobanServer.getEvents({
+          sorobanServer.getEvents({
             startLedger: input.fromLedger,
             endLedger: input.toLedger,
             filters,
-          } as rpc.Server.GetEventsRequest),
+          }),
         config.MAX_RETRIES,
         config.RETRY_DELAY_MS
       )

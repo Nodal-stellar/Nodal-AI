@@ -81,10 +81,16 @@ function buildPredicate(
       return Claimant.predicateBeforeRelativeTime(String(predicate.seconds));
     case 'not':
       return Claimant.predicateNot(buildPredicate(predicate.predicate));
-    case 'and':
-      return Claimant.predicateAnd(predicate.predicates.map(buildPredicate));
-    case 'or':
-      return Claimant.predicateOr(predicate.predicates.map(buildPredicate));
+    case 'and': {
+      const built = predicate.predicates.map(buildPredicate);
+      const first = built[0] ?? Claimant.predicateUnconditional();
+      return built.slice(1).reduce((acc, curr) => Claimant.predicateAnd(acc, curr), first);
+    }
+    case 'or': {
+      const built = predicate.predicates.map(buildPredicate);
+      const first = built[0] ?? Claimant.predicateUnconditional();
+      return built.slice(1).reduce((acc, curr) => Claimant.predicateOr(acc, curr), first);
+    }
   }
 }
 

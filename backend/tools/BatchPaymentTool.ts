@@ -38,8 +38,8 @@ export type BatchPaymentInput = z.infer<typeof BatchPaymentInputSchema>;
 const STROOP_SCALE = 10_000_000n;
 
 function toStroops(decimal: string): bigint {
-  const [whole, fraction = ''] = decimal.split('.');
-  return BigInt(whole) * STROOP_SCALE + BigInt(fraction.padEnd(7, '0'));
+  const [whole = '0', fraction = ''] = decimal.split('.');
+  return BigInt(whole || '0') * STROOP_SCALE + BigInt(fraction.padEnd(7, '0'));
 }
 
 function fromStroops(stroops: bigint): string {
@@ -117,7 +117,10 @@ export class BatchPaymentTool {
     });
 
     for (const p of payments) {
-      const asset = p.assetCode === 'XLM' ? Asset.native() : new Asset(p.assetCode, p.assetIssuer);
+      const asset =
+        p.assetCode === 'XLM' || !p.assetIssuer
+          ? Asset.native()
+          : new Asset(p.assetCode, p.assetIssuer);
       builder.addOperation(
         Operation.payment({ destination: p.destination, asset, amount: p.amount })
       );
