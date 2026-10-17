@@ -125,6 +125,19 @@ const EnvSchema = z.object({
     .refine((val) => isValidStellarPublicKey(val), {
       message: 'X402_ASSET_ISSUER is not a valid Ed25519 public key',
     }),
+  // SEP-41 token contract (C...) for the same asset. Trustlines and issuer
+  // checks use the classic G-address above, but x402 payment requirements
+  // reference the SAC contract. When unset it is derived from
+  // X402_ASSET_CODE + X402_ASSET_ISSUER via Asset.contractId() — see
+  // backend/utils/x402Asset.ts. Only set it to override that derivation.
+  X402_ASSET_CONTRACT: z
+    .string()
+    .length(56, 'X402_ASSET_CONTRACT must be a 56-character Stellar address')
+    .refine((val) => val.startsWith('C'), {
+      message:
+        'X402_ASSET_CONTRACT must start with C — a SEP-41 SAC contract address, not the classic G issuer',
+    })
+    .optional(),
   ALLOWED_X402_ORIGINS: z.string().optional(),
   // Maximum amount a single x402 challenge may request. Unset = no per-challenge cap.
   X402_MAX_PRICE: z
@@ -283,6 +296,14 @@ export interface AgentConfig {
    * Required.
    */
   readonly X402_ASSET_ISSUER: string;
+
+  /**
+   * The 56-character C-address of the SEP-41 SAC contract for the x402 asset.
+   * Optional: when absent, resolveX402AssetContract() derives it from
+   * X402_ASSET_CODE + X402_ASSET_ISSUER via Asset.contractId().
+   * Set explicitly only to override that derivation.
+   */
+  readonly X402_ASSET_CONTRACT?: string | undefined;
 
   /**
    * The spending limit for the agent.
@@ -556,6 +577,7 @@ function parseConfigAndDerive(): AgentConfig {
     OTLP_ENDPOINT,
     WEBHOOK_URL,
     WEBHOOK_SECRET,
+    X402_ASSET_CONTRACT,
     ...rest
   } = raw;
 
@@ -573,6 +595,7 @@ function parseConfigAndDerive(): AgentConfig {
     X402_NONCE_TTL_MS: raw.X402_NONCE_TTL_MS,
     MAX_SOROBAN_FEE_STROOPS: raw.MAX_SOROBAN_FEE_STROOPS,
     ...(ALLOWED_X402_ORIGINS ? { ALLOWED_X402_ORIGINS } : {}),
+    ...(X402_ASSET_CONTRACT ? { X402_ASSET_CONTRACT } : {}),
     ...(AGENT_SECRET_KEY_ARN ? { AGENT_SECRET_KEY_ARN } : {}),
     ...(OTLP_ENDPOINT ? { OTLP_ENDPOINT } : {}),
     ...(WEBHOOK_URL ? { WEBHOOK_URL } : {}),
