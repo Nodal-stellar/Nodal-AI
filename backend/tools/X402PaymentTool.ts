@@ -17,6 +17,7 @@ import { logger } from '../logger';
 import { INonceStore, SqliteNonceStore, MAX_NONCE_TTL_MS } from '../nonce_store';
 import { TransactionFailureError } from '../errors';
 import { stellarPublicKeySchema } from '../utils/stellarSchemas';
+import { toCaip2 } from '../utils/caip2';
 
 /**
  * Best-effort recovery of a transaction hash from a submission error.
@@ -262,7 +263,9 @@ export class X402PaymentTool {
 
     return {
       protocol: 'x402',
-      network: config.STELLAR_NETWORK,
+      // x402 v2 peers identify chains by CAIP-2 — report `stellar:<network>`,
+      // not the bare env name (see backend/utils/caip2.ts).
+      network: toCaip2(config.STELLAR_NETWORK),
       txHash,
       nonce: challenge.nonce,
       payer: this.signer.publicKey(),
