@@ -18,7 +18,8 @@
 
 import * as http from 'http';
 import { config } from './config';
-import { getResults } from './persistence';
+import { getResults, getWebhookById, requeueWebhook, deadWebhooks } from './persistence';
+import type { ResultsFilter } from './persistence';
 import { horizonServer, sorobanServer } from './rpc_client';
 import { db } from './db/client';
 import { handleError } from './middleware/error_handler';
@@ -122,6 +123,8 @@ const HEALTH_PATH = '/health';
 const STATUS_PATH = '/status';
 const SPENDING_PATH = '/spending';
 const METRICS_PATH = '/metrics';
+const WEBHOOKS_DEAD_PATH = '/admin/webhooks/dead';
+const WEBHOOKS_REPLAY_RE = /^\/admin\/webhooks\/(\d+)\/replay$/;
 
 /**
  * Creates and returns the health-check HTTP server.
@@ -210,6 +213,63 @@ export function createHealthServer(): http.Server {
       return;
     }
 
+    // ── GET /admin/webhooks/dead — list dead-lettered webhook rows ────────
+    if (req.method === 'GET' && req.url === WEBHOOKS_DEAD_PATH) {
+      if (!isAuthenticated(req)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+      }
+      try {
+        const body = JSON.stringify({ webhooks: deadWebhooks() });
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        });
+        res.end(body);
+      } catch (err) {
+        const errorResponse = handleError(err);
+        const body = JSON.stringify({ error: 'Failed to fetch dead webhooks', ...errorResponse });
+        res.writeHead(errorResponse.status, { 'Content-Type': 'application/json' });
+        res.end(body);
+      }
+      return;
+    }
+
+    // ── POST /admin/webhooks/:id/replay — re-queue a dead-lettered row ────
+    const replayMatch = req.method === 'POST' && req.url
+      ? WEBHOOKS_REPLAY_RE.exec(req.url)
+      : null;
+    if (replayMatch) {
+      if (!isAuthenticated(req)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+      }
+      try {
+        const id = parseInt(replayMatch[1]!, 10);
+        const row = getWebhookById(id);
+        if (!row) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: `Webhook ${id} not found` }));
+          return;
+        }
+        requeueWebhook(id);
+        const body = JSON.stringify({ queued: true, id });
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        });
+        res.end(body);
+      } catch (err) {
+        const errorResponse = handleError(err);
+        const body = JSON.stringify({ error: 'Failed to replay webhook', ...errorResponse });
+        res.writeHead(errorResponse.status, { 'Content-Type': 'application/json' });
+        res.end(body);
+      }
+      return;
+    }
+
     // ── 404 for everything else ────────────────────────────────────────────
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not Found' }));
@@ -292,7 +352,14 @@ function parseNonNegativeInt(value: string | null, fallback: number): number {
 /**
  * GET /status — paginated persisted AgentResult records, newest first.
  * Requires a matching Bearer token when WEBHOOK_SECRET is set.
- * Query parameters: `limit` (default 10, max 100) and `offset` (default 0).
+ * Query parameters:
+ *   `limit`         (default 10, max 100)
+ *   `offset`        (default 0)
+ *   `taskType`      filter by exact task type string
+ *   `status`        "success" | "failure" — filter by outcome
+ *   `correlationId` filter by correlation ID
+ *   `from`          ISO-8601 lower bound on timestamp (inclusive)
+ *   `to`            ISO-8601 upper bound on timestamp (inclusive)
  */
 function handleResults(req: http.IncomingMessage, res: http.ServerResponse, url: URL): void {
   if (!isAuthenticated(req)) {
@@ -307,7 +374,26 @@ function handleResults(req: http.IncomingMessage, res: http.ServerResponse, url:
       MAX_RESULTS_LIMIT
     );
     const offset = parseNonNegativeInt(url.searchParams.get('offset'), 0);
-    const body = JSON.stringify({ results: getResults(limit, offset) });
+
+    const filter: ResultsFilter = {};
+
+    const taskType = url.searchParams.get('taskType');
+    if (taskType) filter.taskType = taskType;
+
+    const statusParam = url.searchParams.get('status');
+    if (statusParam === 'success') filter.success = true;
+    else if (statusParam === 'failure') filter.success = false;
+
+    const correlationId = url.searchParams.get('correlationId');
+    if (correlationId) filter.correlationId = correlationId;
+
+    const from = url.searchParams.get('from');
+    if (from) filter.from = from;
+
+    const to = url.searchParams.get('to');
+    if (to) filter.to = to;
+
+    const body = JSON.stringify({ results: getResults(limit, offset, filter) });
 
     res.writeHead(200, {
       'Content-Type': 'application/json',

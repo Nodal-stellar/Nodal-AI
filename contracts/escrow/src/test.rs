@@ -985,7 +985,7 @@ mod tests {
         client.initialize(&depositor, &recipient, &arbiter, &token_id, &500, &expiry);
         client.propose_new_arbiter(&depositor, &new_arbiter);
         // Try to accept before 24 hours have passed — should panic
-        client.accept_arbiter_rotation();
+        client.accept_arbiter_rotation(&new_arbiter);
     }
 
     // 35. accept_arbiter_rotation succeeds after time-lock expires
@@ -1007,7 +1007,7 @@ mod tests {
         client.propose_new_arbiter(&depositor, &new_arbiter);
         // Advance time by 24 hours + 1 second
         env.ledger().with_mut(|li| li.timestamp = now + 86_401);
-        client.accept_arbiter_rotation();
+        client.accept_arbiter_rotation(&new_arbiter);
         // Verify the new arbiter is now active
         let state = client.get_state();
         assert_eq!(state.arbiter, new_arbiter);
@@ -1043,7 +1043,7 @@ mod tests {
         // because we only inspect state (`get_state()`) after the panic, never
         // mutate through a reference that might have been left inconsistent.
         let locked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.accept_arbiter_rotation()
+            client.accept_arbiter_rotation(&new_arbiter)
         }));
         assert!(
             locked.is_err(),
@@ -1056,7 +1056,7 @@ mod tests {
         // Exactly at the minimum floor the rotation is permitted.
         env.ledger()
             .with_mut(|li| li.timestamp = now + MIN_ROTATION_DELAY);
-        client.accept_arbiter_rotation();
+        client.accept_arbiter_rotation(&new_arbiter);
         let state = client.get_state();
         assert_eq!(state.arbiter, new_arbiter);
     }
@@ -1070,6 +1070,7 @@ mod tests {
         let depositor = Address::generate(&env);
         let recipient = Address::generate(&env);
         let arbiter = Address::generate(&env);
+        let new_arbiter = Address::generate(&env);
         let (token_id, _) = create_token(&env, &depositor);
         StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
         let contract_id = env.register_contract(None, EscrowContract);
@@ -1077,7 +1078,7 @@ mod tests {
         let expiry = env.ledger().timestamp() + EXPIRY_OFFSET;
         client.initialize(&depositor, &recipient, &arbiter, &token_id, &500, &expiry);
         // Try to accept without proposing — should panic
-        client.accept_arbiter_rotation();
+        client.accept_arbiter_rotation(&new_arbiter);
     }
 
     // 37. arbiter rotation enables recovery from compromised key
@@ -1107,14 +1108,139 @@ mod tests {
         client.propose_new_arbiter(&depositor, &trusted_arbiter);
         // Wait for time-lock to expire
         env.ledger().with_mut(|li| li.timestamp = now + 86_401);
-        // Accept rotation
-        client.accept_arbiter_rotation();
+        // Accept rotation — trusted_arbiter must sign
+        client.accept_arbiter_rotation(&trusted_arbiter);
         // Verify the trusted arbiter is now active
         let state = client.get_state();
         assert_eq!(
             state.arbiter, trusted_arbiter,
             "arbiter should be rotated to trusted address"
         );
+    }
+
+    // 38. accept_arbiter_rotation without new_arbiter auth panics
+    #[test]
+    #[should_panic]
+    fn test_accept_arbiter_rotation_requires_new_arbiter_auth() {
+        let env = Env::default();
+        // Only mock depositor auth — new_arbiter never signs.
+        let depositor = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let arbiter = Address::generate(&env);
+        let new_arbiter = Address::generate(&env);
+        let (token_id, _) = create_token(&env, &depositor);
+        StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let now = env.ledger().timestamp();
+        let expiry = now + EXPIRY_OFFSET;
+        // Initialize with full auth mocking
+        env.mock_all_auths();
+        client.initialize(&depositor, &recipient, &arbiter, &token_id, &500, &expiry);
+        client.propose_new_arbiter(&depositor, &new_arbiter);
+        // Advance past the time-lock
+        env.ledger().with_mut(|li| li.timestamp = now + 86_401);
+        // Clear all mocked auths — new_arbiter is not signing
+        env.mock_auths(&[]);
+        // Should panic because new_arbiter.require_auth() fires
+        client.accept_arbiter_rotation(&new_arbiter);
+    }
+
+    // 39. cancel_arbiter_rotation removes the pending proposal
+    #[test]
+    fn test_cancel_arbiter_rotation_removes_proposal() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let depositor = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let arbiter = Address::generate(&env);
+        let new_arbiter = Address::generate(&env);
+        let (token_id, _) = create_token(&env, &depositor);
+        StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let now = env.ledger().timestamp();
+        let expiry = now + EXPIRY_OFFSET;
+        client.initialize(&depositor, &recipient, &arbiter, &token_id, &500, &expiry);
+        client.propose_new_arbiter(&depositor, &new_arbiter);
+        // Depositor cancels before the time-lock expires
+        client.cancel_arbiter_rotation(&depositor);
+        // Arbiter must still be the original one
+        let state = client.get_state();
+        assert_eq!(state.arbiter, arbiter, "original arbiter must remain after cancellation");
+        // Trying to accept after cancel must panic (NoPendingRotation)
+        env.ledger().with_mut(|li| li.timestamp = now + 86_401);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.accept_arbiter_rotation(&new_arbiter)
+        }));
+        assert!(result.is_err(), "accept must panic after proposal was cancelled");
+    }
+
+    // 40. cancel_arbiter_rotation without depositor auth panics
+    #[test]
+    #[should_panic]
+    fn test_cancel_arbiter_rotation_requires_depositor_auth() {
+        let env = Env::default();
+        let depositor = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let arbiter = Address::generate(&env);
+        let new_arbiter = Address::generate(&env);
+        let impostor = Address::generate(&env);
+        let (token_id, _) = create_token(&env, &depositor);
+        StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let now = env.ledger().timestamp();
+        let expiry = now + EXPIRY_OFFSET;
+        env.mock_all_auths();
+        client.initialize(&depositor, &recipient, &arbiter, &token_id, &500, &expiry);
+        client.propose_new_arbiter(&depositor, &new_arbiter);
+        // Now remove all mocked auths and try to cancel as impostor
+        env.mock_auths(&[]);
+        client.cancel_arbiter_rotation(&impostor);
+    }
+
+    // 41. cancel_arbiter_rotation without pending rotation panics
+    #[test]
+    #[should_panic]
+    fn test_cancel_arbiter_rotation_no_pending_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let depositor = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let arbiter = Address::generate(&env);
+        let (token_id, _) = create_token(&env, &depositor);
+        StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let expiry = env.ledger().timestamp() + EXPIRY_OFFSET;
+        client.initialize(&depositor, &recipient, &arbiter, &token_id, &500, &expiry);
+        // No proposal — cancel must panic with NoPendingRotation
+        client.cancel_arbiter_rotation(&depositor);
+    }
+
+    // 42. accept with a mismatched new_arbiter address panics with NotArbiter
+    #[test]
+    #[should_panic]
+    fn test_accept_arbiter_rotation_wrong_address_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let depositor = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let arbiter = Address::generate(&env);
+        let new_arbiter = Address::generate(&env);
+        let wrong_arbiter = Address::generate(&env);
+        let (token_id, _) = create_token(&env, &depositor);
+        StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let now = env.ledger().timestamp();
+        let expiry = now + EXPIRY_OFFSET;
+        client.initialize(&depositor, &recipient, &arbiter, &token_id, &500, &expiry);
+        client.propose_new_arbiter(&depositor, &new_arbiter);
+        env.ledger().with_mut(|li| li.timestamp = now + 86_401);
+        // Pass a different address — must panic with NotArbiter
+        client.accept_arbiter_rotation(&wrong_arbiter);
     }
 
     // ── Property tests: conservation of funds ──────────────────────────────

@@ -53,6 +53,27 @@ function applySchema(db: Database.Database): void {
         value TEXT NOT NULL
       )
     `);
+  // Durable webhook outbox (#803). Each pending delivery is a row; the worker
+  // picks up PENDING rows, attempts delivery with backoff+jitter, and moves
+  // rows to DEAD after MAX_WEBHOOK_ATTEMPTS failures. A restart picks up where
+  // the previous process left off — nothing is lost in memory.
+  db.exec(`
+      CREATE TABLE IF NOT EXISTS webhook_outbox (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        deliveryId    TEXT    NOT NULL UNIQUE,
+        payload       TEXT    NOT NULL,
+        status        TEXT    NOT NULL DEFAULT 'PENDING',
+        attempts      INTEGER NOT NULL DEFAULT 0,
+        nextRetryAt   INTEGER NOT NULL DEFAULT 0,
+        lastError     TEXT,
+        createdAt     INTEGER NOT NULL,
+        updatedAt     INTEGER NOT NULL
+      )
+    `);
+  db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_webhook_outbox_status_next
+        ON webhook_outbox (status, nextRetryAt)
+    `);
   // Idempotent migration for databases created before correlationId existed.
   const cols = db.prepare(`PRAGMA table_info(agent_results)`).all() as Array<{ name: string }>;
   if (!cols.some((c) => c.name === 'correlationId')) {
@@ -115,13 +136,53 @@ export function saveResult(result: PersistedResult): void {
     });
 }
 
-export function getResults(limit = 100, offset = 0): PersistedResult[] {
+/** Filter parameters accepted by {@link getResults}. */
+export interface ResultsFilter {
+  taskType?: string;
+  /** `true` = success only, `false` = failures only, omit = both. */
+  success?: boolean;
+  correlationId?: string;
+  /** ISO-8601 lower bound (inclusive). */
+  from?: string;
+  /** ISO-8601 upper bound (inclusive). */
+  to?: string;
+}
+
+export function getResults(limit?: number, offset?: number, filter?: ResultsFilter): PersistedResult[];
+export function getResults(limit = 100, offset = 0, filter: ResultsFilter = {}): PersistedResult[] {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (filter.taskType !== undefined) {
+    conditions.push('taskType = ?');
+    params.push(filter.taskType);
+  }
+  if (filter.success !== undefined) {
+    conditions.push('success = ?');
+    params.push(filter.success ? 1 : 0);
+  }
+  if (filter.correlationId !== undefined) {
+    conditions.push('correlationId = ?');
+    params.push(filter.correlationId);
+  }
+  if (filter.from !== undefined) {
+    conditions.push('timestamp >= ?');
+    params.push(filter.from);
+  }
+  if (filter.to !== undefined) {
+    conditions.push('timestamp <= ?');
+    params.push(filter.to);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  params.push(limit, offset);
+
   const rows = getDb()
     .prepare(
       `SELECT timestamp, taskType, success, data, error, correlationId
-       FROM agent_results ORDER BY id DESC LIMIT ? OFFSET ?`
+       FROM agent_results ${where} ORDER BY id DESC LIMIT ? OFFSET ?`
     )
-    .all(limit, offset) as Array<{
+    .all(...params) as Array<{
     timestamp: string;
     taskType: string;
     success: number;
@@ -141,6 +202,126 @@ export function getResults(limit = 100, offset = 0): PersistedResult[] {
     if (r.correlationId !== null) result.correlationId = r.correlationId;
     return result;
   });
+}
+
+// ─── Webhook outbox (#803) ─────────────────────────────────────────────────────
+
+export type WebhookOutboxStatus = 'PENDING' | 'DELIVERED' | 'DEAD';
+
+export interface WebhookOutboxRow {
+  id: number;
+  deliveryId: string;
+  payload: string;
+  status: WebhookOutboxStatus;
+  attempts: number;
+  nextRetryAt: number;
+  lastError: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * Insert a webhook payload into the outbox so it survives a restart.
+ * Called in the same logical flow as saveResult — the outbox entry exists
+ * before the in-process delivery is attempted.
+ */
+export function enqueueWebhook(deliveryId: string, payload: string): WebhookOutboxRow {
+  const now = Date.now();
+  const info = getDb()
+    .prepare(
+      `INSERT INTO webhook_outbox (deliveryId, payload, status, attempts, nextRetryAt, createdAt, updatedAt)
+       VALUES (@deliveryId, @payload, 'PENDING', 0, @now, @now, @now)`
+    )
+    .run({ deliveryId, payload, now });
+  return {
+    id: Number(info.lastInsertRowid),
+    deliveryId,
+    payload,
+    status: 'PENDING',
+    attempts: 0,
+    nextRetryAt: now,
+    lastError: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+/**
+ * Return up to `batchSize` PENDING rows whose nextRetryAt is at or before now,
+ * ordered oldest-first so the earliest failures are retried first.
+ */
+export function pendingWebhooks(nowMs = Date.now(), batchSize = 50): WebhookOutboxRow[] {
+  return getDb()
+    .prepare(
+      `SELECT id, deliveryId, payload, status, attempts, nextRetryAt, lastError, createdAt, updatedAt
+       FROM webhook_outbox
+       WHERE status = 'PENDING' AND nextRetryAt <= ?
+       ORDER BY id ASC LIMIT ?`
+    )
+    .all(nowMs, batchSize) as WebhookOutboxRow[];
+}
+
+/** Mark a row as successfully delivered. */
+export function markWebhookDelivered(id: number): void {
+  const now = Date.now();
+  getDb()
+    .prepare(
+      `UPDATE webhook_outbox SET status = 'DELIVERED', updatedAt = @now WHERE id = @id`
+    )
+    .run({ id, now });
+}
+
+/** Record a failed attempt and schedule the next retry (or dead-letter). */
+export function markWebhookFailed(
+  id: number,
+  lastError: string,
+  nextRetryAt: number,
+  dead: boolean
+): void {
+  const now = Date.now();
+  getDb()
+    .prepare(
+      `UPDATE webhook_outbox
+       SET attempts = attempts + 1,
+           lastError = @lastError,
+           nextRetryAt = @nextRetryAt,
+           status = @status,
+           updatedAt = @now
+       WHERE id = @id`
+    )
+    .run({ id, lastError, nextRetryAt, status: dead ? 'DEAD' : 'PENDING', now });
+}
+
+/** Return a single outbox row by id (used by the replay endpoint). */
+export function getWebhookById(id: number): WebhookOutboxRow | undefined {
+  return getDb()
+    .prepare(
+      `SELECT id, deliveryId, payload, status, attempts, nextRetryAt, lastError, createdAt, updatedAt
+       FROM webhook_outbox WHERE id = ?`
+    )
+    .get(id) as WebhookOutboxRow | undefined;
+}
+
+/** Reset a dead-lettered row back to PENDING so the worker retries it. */
+export function requeueWebhook(id: number): void {
+  const now = Date.now();
+  getDb()
+    .prepare(
+      `UPDATE webhook_outbox
+       SET status = 'PENDING', nextRetryAt = @now, updatedAt = @now
+       WHERE id = @id`
+    )
+    .run({ id, now });
+}
+
+/** Return all DEAD rows for the dead-letter API. */
+export function deadWebhooks(): WebhookOutboxRow[] {
+  return getDb()
+    .prepare(
+      `SELECT id, deliveryId, payload, status, attempts, nextRetryAt, lastError, createdAt, updatedAt
+       FROM webhook_outbox WHERE status = 'DEAD' ORDER BY id DESC`
+    )
+    .all() as WebhookOutboxRow[];
 }
 
 // ─── Audit log (#744) ─────────────────────────────────────────────────────────

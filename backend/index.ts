@@ -10,6 +10,7 @@ import { db } from './db/client';
 import { createLogger } from './utils/logger';
 import { initTelemetry, shutdownTelemetry } from './telemetry';
 import { configPromise } from './config';
+import { startWebhookWorker, stopWebhookWorker } from './webhook';
 
 const log = createLogger('process');
 
@@ -41,10 +42,12 @@ async function shutdown(signal: string): Promise<void> {
     // 3. Stop the health check server
     if (healthServer) {
       await new Promise<void>((resolve, reject) =>
-        healthServer.close((err: Error | undefined) => (err ? reject(err) : resolve()))
         healthServer.close((err?: Error) => (err ? reject(err) : resolve()))
       );
     }
+
+    // 4. Stop the webhook outbox worker
+    stopWebhookWorker();
 
     // 4. Close database connection
     await db.close();
@@ -73,6 +76,9 @@ async function start() {
 
   agent = new PayFiAgent();
   healthServer = startHealthServer();
+
+  // Start the durable webhook outbox worker (#803)
+  startWebhookWorker();
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));

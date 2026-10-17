@@ -633,19 +633,25 @@ impl EscrowContract {
     /// Accept the pending arbiter rotation after the minimum time-lock.
     ///
     /// Finalizes the arbiter change if at least `MIN_ROTATION_DELAY` (24 hours)
-    /// have passed since `propose_new_arbiter` was called. Can be called by anyone
-    /// once the time-lock has expired.
+    /// have passed since `propose_new_arbiter` was called. The **incoming arbiter
+    /// must sign** — they are explicitly consenting to the role. Without this
+    /// requirement a depositor could appoint a mistyped or unusable address,
+    /// bricking `release` forever.
     ///
     /// # Arguments
-    /// * `env` - The execution environment.
+    /// * `env`         - The execution environment.
+    /// * `new_arbiter` - Must match the pending arbiter recorded by `propose_new_arbiter`.
     ///
     /// # Panics
     /// * `NoPendingRotation` - If no arbiter rotation has been proposed.
     /// * `RotationLocked` - If the 24-hour time-lock has not yet elapsed.
+    /// * `NotArbiter` - If `new_arbiter` does not match the pending arbiter address.
+    ///   (Soroban also panics on auth failure when `new_arbiter.require_auth()` is
+    ///   called and the incoming arbiter has not signed.)
     ///
     /// # Return Value
     /// None.
-    pub fn accept_arbiter_rotation(env: Env) {
+    pub fn accept_arbiter_rotation(env: Env, new_arbiter: Address) {
         if !env.storage().instance().has(&DataKey::PendingArbiter) {
             panic_with_error!(&env, EscrowError::NoPendingRotation);
         }
@@ -668,15 +674,23 @@ impl EscrowContract {
             panic_with_error!(&env, EscrowError::RotationLocked);
         }
 
-        let new_arbiter: Address = env
+        let stored_pending: Address = env
             .storage()
             .instance()
             .get(&DataKey::PendingArbiter)
             .expect("escrow: state corrupted");
 
+        // The incoming arbiter must consent — they sign before storage is mutated.
+        // This prevents a depositor from forcing an unwilling or mistyped address
+        // into the arbiter role, which would permanently brick `release`.
+        if new_arbiter != stored_pending {
+            panic_with_error!(&env, EscrowError::NotArbiter);
+        }
+        stored_pending.require_auth();
+
         env.storage()
             .instance()
-            .set(&DataKey::Arbiter, &new_arbiter);
+            .set(&DataKey::Arbiter, &stored_pending);
         env.storage().instance().remove(&DataKey::PendingArbiter);
         env.storage()
             .instance()
@@ -684,7 +698,55 @@ impl EscrowContract {
 
         env.events().publish(
             (Symbol::new(&env, "arbiter_rotation_accepted"),),
-            (new_arbiter, now),
+            (stored_pending, now),
+        );
+    }
+
+    /// Cancel a pending arbiter rotation proposal. Only callable by the stored depositor.
+    ///
+    /// Allows the depositor to withdraw a rotation they no longer want — for example
+    /// when the proposed address was a typo or the situation changed before the
+    /// time-lock elapsed.
+    ///
+    /// # Arguments
+    /// * `env`       - The execution environment.
+    /// * `depositor` - Must match the depositor recorded at initialisation.
+    ///
+    /// # Panics
+    /// * `NotDepositor` - If the caller is not the stored depositor.
+    /// * `NoPendingRotation` - If there is no active rotation proposal.
+    ///
+    /// # Return Value
+    /// None.
+    pub fn cancel_arbiter_rotation(env: Env, depositor: Address) {
+        let stored_depositor: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Depositor)
+            .expect("escrow: state corrupted");
+        stored_depositor.require_auth();
+        if depositor != stored_depositor {
+            panic_with_error!(&env, EscrowError::NotDepositor);
+        }
+
+        if !env.storage().instance().has(&DataKey::PendingArbiter) {
+            panic_with_error!(&env, EscrowError::NoPendingRotation);
+        }
+
+        let cancelled_arbiter: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingArbiter)
+            .expect("escrow: state corrupted");
+
+        env.storage().instance().remove(&DataKey::PendingArbiter);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingArbiterTime);
+
+        env.events().publish(
+            (Symbol::new(&env, "arbiter_rotation_cancelled"),),
+            (depositor, cancelled_arbiter),
         );
     }
 
