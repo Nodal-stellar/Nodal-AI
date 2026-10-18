@@ -34,8 +34,8 @@
 #![allow(unexpected_cfgs)]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error,
-    token::Client as TokenClient, Address, Env, Symbol,
+    bytes, contract, contracterror, contractimpl, contracttype, panic_with_error,
+    token::Client as TokenClient, Address, Bytes, Env, Symbol, Vec,
 };
 
 // ─── Security constants ───────────────────────────────────────────────────────
@@ -49,6 +49,20 @@ use soroban_sdk::{
 /// below this value. Keep any future configurability above this constant and
 /// reject proposals requesting less than `MIN_ROTATION_DELAY`.
 pub const MIN_ROTATION_DELAY: u64 = 86_400; // 24 hours in seconds
+
+// ─── TTL / storage-bump constants ─────────────────────────────────────────────
+
+/// The threshold at which we extend instance storage TTL.  If the remaining
+/// TTL on instance storage is below this value the contract will bump it up to
+/// `INSTANCE_TTL_EXTEND_TO` on every mutating call and on `bump()`.
+///
+/// Set to 30 days (in ledgers, assuming 5-second ledger close time).
+pub const INSTANCE_TTL_THRESHOLD: u32 = 518_400; // 30 days × 86_400 s / 5 s per ledger
+
+/// Target TTL we extend instance storage to when a bump is triggered.
+///
+/// Set to 90 days in ledgers.
+pub const INSTANCE_TTL_EXTEND_TO: u32 = 1_555_200; // 90 days × 86_400 s / 5 s per ledger
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
 
@@ -64,6 +78,46 @@ pub enum DataKey {
     InitializedAt,
     PendingArbiter,
     PendingArbiterTime,
+    // Milestone-based escrow (#808)
+    Milestones,
+    // Dispute resolution (#810)
+    DisputeState,
+    DisputeRaisedBy,
+    DisputeEvidenceHash,
+}
+
+// ─── Milestone structs (#808) ─────────────────────────────────────────────────
+
+/// A single milestone in a milestone-based escrow.
+///
+/// * `amount`           — Token units locked to this milestone.
+/// * `deadline`         — Unix timestamp after which the depositor may refund
+///                        this milestone if it has not been approved.
+/// * `description_hash` — 32-byte hash of the off-chain milestone description
+///                        (use SHA-256 of the description string). May be all
+///                        zeroes when no description is required.
+/// * `approved`         — Set to `true` by `approve_milestone`; starts `false`.
+#[contracttype]
+#[derive(Clone)]
+pub struct Milestone {
+    pub amount: i128,
+    pub deadline: u64,
+    pub description_hash: Bytes,
+    pub approved: bool,
+}
+
+// ─── Dispute state (#810) ─────────────────────────────────────────────────────
+
+/// Dispute lifecycle state.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum DisputeStatus {
+    /// No active dispute — normal operation.
+    None = 0,
+    /// Dispute raised; funds frozen pending arbiter decision.
+    Raised = 1,
+    /// Arbiter has resolved the dispute; escrow is settled.
+    Resolved = 2,
 }
 
 // ─── Escrow State ─────────────────────────────────────────────────────────────
@@ -108,6 +162,24 @@ pub enum EscrowError {
     RotationLocked = 10,
     /// No pending arbiter rotation proposal.
     NoPendingRotation = 11,
+    // ─── Milestone errors (#808) ───────────────────────────────────────────
+    /// Milestone list is empty or sum of milestone amounts != total deposit.
+    InvalidMilestones = 12,
+    /// Milestone index is out of bounds.
+    InvalidMilestoneIndex = 13,
+    /// Milestone has already been approved.
+    MilestoneAlreadyApproved = 14,
+    /// Milestone deadline has not yet expired for refund.
+    MilestoneNotExpired = 15,
+    // ─── Dispute errors (#810) ─────────────────────────────────────────────
+    /// A dispute is already active; refunds are blocked.
+    DisputeActive = 16,
+    /// No dispute is currently active.
+    NoActiveDispute = 17,
+    /// The split basis points must be 0–10 000 (0–100 %).
+    InvalidSplitBps = 18,
+    /// Caller is not authorized to raise a dispute.
+    NotParty = 19,
 }
 
 // ─── Contract ─────────────────────────────────────────────────────────────────
@@ -222,6 +294,8 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Released, &false);
         env.storage().instance().set(&DataKey::InitializedAt, &now);
 
+        Self::bump_instance_ttl(&env);
+
         env.events().publish(
             (
                 Symbol::new(&env, "escrow"),
@@ -263,6 +337,8 @@ impl EscrowContract {
         }
 
         Self::assert_not_released(&env);
+        Self::assert_no_dispute(&env);
+        Self::bump_instance_ttl(&env);
 
         let token: Address = env
             .storage()
@@ -330,6 +406,8 @@ impl EscrowContract {
         }
 
         Self::assert_not_released(&env);
+        Self::assert_no_dispute(&env);
+        Self::bump_instance_ttl(&env);
 
         let expiry: u64 = env
             .storage()
@@ -465,6 +543,8 @@ impl EscrowContract {
         }
 
         Self::assert_not_released(&env);
+        Self::assert_no_dispute(&env);
+        Self::bump_instance_ttl(&env);
 
         // Validate release_amount
         let stored_amount: i128 = env
@@ -688,6 +768,425 @@ impl EscrowContract {
         );
     }
 
+        env.events().publish(
+            (Symbol::new(&env, "arbiter_rotation_accepted"),),
+            (new_arbiter, now),
+        );
+    }
+
+    // ─── Issue #805: public TTL bump ──────────────────────────────────────────
+
+    /// Allow anyone to extend the instance storage TTL.
+    ///
+    /// Prevents a long-running escrow from being archived before `release` or
+    /// `refund` can be called. Bumps to `INSTANCE_TTL_EXTEND_TO` if the
+    /// remaining TTL is below `INSTANCE_TTL_THRESHOLD`. The escrow must be
+    /// initialized and not yet settled before bumping.
+    ///
+    /// # Panics
+    /// * `NotInitialized` — if called before `initialize`.
+    /// * `AlreadyReleased` — if the escrow is already settled.
+    pub fn bump(env: Env) {
+        if !env.storage().instance().has(&DataKey::Depositor) {
+            panic_with_error!(&env, EscrowError::NotInitialized);
+        }
+        Self::assert_not_released(&env);
+        Self::bump_instance_ttl(&env);
+
+        env.events().publish(
+            (Symbol::new(&env, "escrow"), Symbol::new(&env, "bumped")),
+            env.ledger().timestamp(),
+        );
+    }
+
+    // ─── Issue #808: Milestone-based escrow ───────────────────────────────────
+
+    /// Initialize a milestone-based escrow.
+    ///
+    /// This is an alternative entry point to `initialize` for multi-tranche
+    /// deals. The depositor locks `sum(milestones[*].amount)` tokens; the
+    /// arbiter (or depositor after deadline) approves individual tranches.
+    ///
+    /// # Arguments
+    /// * `depositor`  — Party locking the funds.
+    /// * `recipient`  — Party who receives approved tranches.
+    /// * `arbiter`    — Trusted party who calls `approve_milestone`.
+    /// * `token`      — SAC token contract address.
+    /// * `milestones` — Non-empty list of `Milestone` structs. `sum(amounts)`
+    ///                  is the total deposit pulled from the depositor.
+    ///
+    /// # Panics
+    /// * `AlreadyInitialized` — if already initialized.
+    /// * `InvalidParties` — if depositor/recipient/arbiter are not all distinct.
+    /// * `InvalidMilestones` — if list is empty or any amount is non-positive.
+    /// * `InvalidExpiry` — if any milestone deadline is not in the future.
+    pub fn initialize_with_milestones(
+        env: Env,
+        depositor: Address,
+        recipient: Address,
+        arbiter: Address,
+        token: Address,
+        milestones: Vec<Milestone>,
+    ) {
+        if env.storage().instance().has(&DataKey::Depositor) {
+            panic_with_error!(&env, EscrowError::AlreadyInitialized);
+        }
+
+        depositor.require_auth();
+
+        if depositor == arbiter || depositor == recipient || arbiter == recipient {
+            panic_with_error!(&env, EscrowError::InvalidParties);
+        }
+
+        if milestones.is_empty() {
+            panic_with_error!(&env, EscrowError::InvalidMilestones);
+        }
+
+        let now = env.ledger().timestamp();
+        let mut total: i128 = 0_i128;
+        for m in milestones.iter() {
+            if m.amount <= 0 {
+                panic_with_error!(&env, EscrowError::InvalidMilestones);
+            }
+            if m.deadline <= now {
+                panic_with_error!(&env, EscrowError::InvalidExpiry);
+            }
+            total = total
+                .checked_add(m.amount)
+                .expect("escrow: milestone total overflow");
+        }
+        if total <= 0 || total > i128::MAX / 2 {
+            panic_with_error!(&env, EscrowError::InvalidMilestones);
+        }
+
+        // Pull total deposit from depositor
+        TokenClient::new(&env, &token).transfer(
+            &depositor,
+            &env.current_contract_address(),
+            &total,
+        );
+
+        // Store core fields (re-use same keys as regular initialize)
+        env.storage().instance().set(&DataKey::Depositor, &depositor);
+        env.storage().instance().set(&DataKey::Recipient, &recipient);
+        env.storage().instance().set(&DataKey::Arbiter, &arbiter);
+        env.storage().instance().set(&DataKey::Token, &token);
+        env.storage().instance().set(&DataKey::Amount, &total);
+        // Use the last milestone's deadline as the overall expiry
+        let last_deadline = milestones.last().unwrap().deadline;
+        env.storage().instance().set(&DataKey::Expiry, &last_deadline);
+        env.storage().instance().set(&DataKey::Released, &false);
+        env.storage().instance().set(&DataKey::InitializedAt, &now);
+        env.storage().instance().set(&DataKey::Milestones, &milestones);
+
+        Self::bump_instance_ttl(&env);
+
+        env.events().publish(
+            (Symbol::new(&env, "escrow"), Symbol::new(&env, "milestones_initialized")),
+            (depositor.clone(), recipient.clone(), total, milestones.len() as u32),
+        );
+    }
+
+    /// Approve a milestone and release its tranche to the recipient.
+    ///
+    /// Only the stored arbiter may call this. Once all milestones are approved
+    /// the escrow is sealed (`Released = true`).
+    ///
+    /// # Arguments
+    /// * `arbiter` — Must match the stored arbiter.
+    /// * `index`   — Zero-based milestone index.
+    ///
+    /// # Panics
+    /// * `NotInitialized` — if not initialized.
+    /// * `NotArbiter` — if caller is not the stored arbiter.
+    /// * `AlreadyReleased` — if already settled.
+    /// * `DisputeActive` — if a dispute is in progress (#810).
+    /// * `InvalidMilestoneIndex` — if `index` is out of bounds.
+    /// * `MilestoneAlreadyApproved` — if already approved.
+    pub fn approve_milestone(env: Env, arbiter: Address, index: u32) {
+        let stored_arbiter: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Arbiter)
+            .expect("escrow: state corrupted");
+        stored_arbiter.require_auth();
+        if arbiter != stored_arbiter {
+            panic_with_error!(&env, EscrowError::NotArbiter);
+        }
+
+        Self::assert_not_released(&env);
+        Self::assert_no_dispute(&env);
+        Self::bump_instance_ttl(&env);
+
+        let mut milestones: Vec<Milestone> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Milestones)
+            .expect("escrow: no milestones stored — use initialize_with_milestones");
+
+        if index >= milestones.len() {
+            panic_with_error!(&env, EscrowError::InvalidMilestoneIndex);
+        }
+        let mut m = milestones.get(index).unwrap();
+        if m.approved {
+            panic_with_error!(&env, EscrowError::MilestoneAlreadyApproved);
+        }
+
+        let token: Address = env.storage().instance().get(&DataKey::Token).expect("escrow: state corrupted");
+        let recipient: Address = env.storage().instance().get(&DataKey::Recipient).expect("escrow: state corrupted");
+        let tranche = m.amount;
+
+        m.approved = true;
+        milestones.set(index, m);
+        env.storage().instance().set(&DataKey::Milestones, &milestones);
+
+        // Deduct from running total
+        let remaining: i128 = env.storage().instance().get(&DataKey::Amount).expect("escrow: state corrupted");
+        let new_remaining = remaining - tranche;
+        env.storage().instance().set(&DataKey::Amount, &new_remaining);
+
+        TokenClient::new(&env, &token).transfer(
+            &env.current_contract_address(),
+            &recipient,
+            &tranche,
+        );
+
+        let all_approved = milestones.iter().all(|ms| ms.approved);
+        if all_approved {
+            env.storage().instance().set(&DataKey::Released, &true);
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "escrow"), Symbol::new(&env, "milestone_approved")),
+            (index, tranche, new_remaining, all_approved),
+        );
+    }
+
+    /// Refund a single expired and unapproved milestone back to the depositor.
+    ///
+    /// The depositor may reclaim a tranche once its `deadline` has passed and
+    /// it has not been approved. The overall escrow is sealed when no tokens
+    /// remain locked.
+    ///
+    /// # Arguments
+    /// * `depositor` — Must match the stored depositor.
+    /// * `index`     — Zero-based milestone index.
+    ///
+    /// # Panics
+    /// * `NotDepositor` — if caller is not the stored depositor.
+    /// * `AlreadyReleased` — if already settled.
+    /// * `DisputeActive` — if a dispute is in progress (#810).
+    /// * `InvalidMilestoneIndex` — if `index` is out of bounds.
+    /// * `MilestoneAlreadyApproved` — if the milestone was already approved.
+    /// * `MilestoneNotExpired` — if the milestone deadline has not passed.
+    pub fn refund_milestone(env: Env, depositor: Address, index: u32) {
+        let stored_depositor: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Depositor)
+            .expect("escrow: state corrupted");
+        stored_depositor.require_auth();
+        if depositor != stored_depositor {
+            panic_with_error!(&env, EscrowError::NotDepositor);
+        }
+
+        Self::assert_not_released(&env);
+        Self::assert_no_dispute(&env);
+        Self::bump_instance_ttl(&env);
+
+        let mut milestones: Vec<Milestone> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Milestones)
+            .expect("escrow: no milestones stored");
+
+        if index >= milestones.len() {
+            panic_with_error!(&env, EscrowError::InvalidMilestoneIndex);
+        }
+        let mut m = milestones.get(index).unwrap();
+        if m.approved {
+            panic_with_error!(&env, EscrowError::MilestoneAlreadyApproved);
+        }
+        if env.ledger().timestamp() < m.deadline {
+            panic_with_error!(&env, EscrowError::MilestoneNotExpired);
+        }
+
+        let token: Address = env.storage().instance().get(&DataKey::Token).expect("escrow: state corrupted");
+        let tranche = m.amount;
+
+        // Mark as approved to prevent double-refund
+        m.approved = true;
+        milestones.set(index, m);
+        env.storage().instance().set(&DataKey::Milestones, &milestones);
+
+        let remaining: i128 = env.storage().instance().get(&DataKey::Amount).expect("escrow: state corrupted");
+        let new_remaining = remaining - tranche;
+        env.storage().instance().set(&DataKey::Amount, &new_remaining);
+
+        TokenClient::new(&env, &token).transfer(
+            &env.current_contract_address(),
+            &stored_depositor,
+            &tranche,
+        );
+
+        // Seal escrow if no more tokens remain
+        if new_remaining == 0 {
+            env.storage().instance().set(&DataKey::Released, &true);
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "escrow"), Symbol::new(&env, "milestone_refunded")),
+            (index, tranche, new_remaining),
+        );
+    }
+
+    // ─── Issue #810: Dispute resolution ───────────────────────────────────────
+
+    /// Raise a dispute, freezing all remaining funds.
+    ///
+    /// Either the depositor or the recipient may raise a dispute. While the
+    /// dispute is active (`DisputeStatus::Raised`), `release`, `refund`,
+    /// `release_partial`, `cancel`, and milestone approvals are all blocked.
+    ///
+    /// # Arguments
+    /// * `party`         — Must be either the stored depositor or recipient.
+    /// * `evidence_hash` — 32-byte SHA-256 hash of off-chain dispute evidence.
+    ///
+    /// # Panics
+    /// * `NotInitialized` — if not initialized.
+    /// * `AlreadyReleased` — if already settled.
+    /// * `DisputeActive` — if a dispute is already raised.
+    /// * `NotParty` — if the caller is neither depositor nor recipient.
+    pub fn raise_dispute(env: Env, party: Address, evidence_hash: Bytes) {
+        if !env.storage().instance().has(&DataKey::Depositor) {
+            panic_with_error!(&env, EscrowError::NotInitialized);
+        }
+        Self::assert_not_released(&env);
+        Self::assert_no_dispute(&env);
+
+        let stored_depositor: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Depositor)
+            .expect("escrow: state corrupted");
+        let stored_recipient: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Recipient)
+            .expect("escrow: state corrupted");
+
+        if party != stored_depositor && party != stored_recipient {
+            panic_with_error!(&env, EscrowError::NotParty);
+        }
+        party.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeState, &DisputeStatus::Raised);
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeRaisedBy, &party);
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeEvidenceHash, &evidence_hash);
+
+        Self::bump_instance_ttl(&env);
+
+        env.events().publish(
+            (Symbol::new(&env, "escrow"), Symbol::new(&env, "dispute_raised")),
+            (party.clone(), evidence_hash),
+        );
+    }
+
+    /// Resolve an active dispute by splitting the locked funds.
+    ///
+    /// Only the stored arbiter may resolve. `recipient_bps` is the percentage
+    /// of remaining funds the *recipient* receives, expressed in basis points
+    /// (0 = 100% to depositor, 10_000 = 100% to recipient). No dust is lost:
+    /// `recipient_amount = remaining * recipient_bps / 10_000` with the
+    /// remainder going to the depositor.
+    ///
+    /// # Arguments
+    /// * `arbiter`        — Must match the stored arbiter.
+    /// * `recipient_bps`  — Basis points 0–10 000 for the recipient's share.
+    ///
+    /// # Panics
+    /// * `NotArbiter` — if caller is not the stored arbiter.
+    /// * `NoActiveDispute` — if no dispute has been raised.
+    /// * `InvalidSplitBps` — if `recipient_bps > 10_000`.
+    /// * `AlreadyReleased` — if already settled.
+    pub fn resolve_dispute(env: Env, arbiter: Address, recipient_bps: u32) {
+        let stored_arbiter: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Arbiter)
+            .expect("escrow: state corrupted");
+        stored_arbiter.require_auth();
+        if arbiter != stored_arbiter {
+            panic_with_error!(&env, EscrowError::NotArbiter);
+        }
+
+        let status: DisputeStatus = env
+            .storage()
+            .instance()
+            .get(&DataKey::DisputeState)
+            .unwrap_or(DisputeStatus::None);
+        if status != DisputeStatus::Raised {
+            panic_with_error!(&env, EscrowError::NoActiveDispute);
+        }
+
+        Self::assert_not_released(&env);
+
+        if recipient_bps > 10_000 {
+            panic_with_error!(&env, EscrowError::InvalidSplitBps);
+        }
+
+        let token: Address = env.storage().instance().get(&DataKey::Token).expect("escrow: state corrupted");
+        let amount: i128 = env.storage().instance().get(&DataKey::Amount).expect("escrow: state corrupted");
+        let depositor: Address = env.storage().instance().get(&DataKey::Depositor).expect("escrow: state corrupted");
+        let recipient: Address = env.storage().instance().get(&DataKey::Recipient).expect("escrow: state corrupted");
+
+        // Split arithmetic: exact, no dust lost.
+        // recipient_amount = amount * recipient_bps / 10_000 (floor division)
+        // depositor_amount = amount - recipient_amount (gets the remainder)
+        let recipient_amount: i128 = amount
+            .checked_mul(recipient_bps as i128)
+            .expect("escrow: split overflow")
+            / 10_000_i128;
+        let depositor_amount: i128 = amount - recipient_amount;
+
+        // Seal the escrow
+        env.storage().instance().set(&DataKey::Released, &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeState, &DisputeStatus::Resolved);
+        env.storage().instance().set(&DataKey::Amount, &0_i128);
+
+        let token_client = TokenClient::new(&env, &token);
+
+        if recipient_amount > 0 {
+            token_client.transfer(
+                &env.current_contract_address(),
+                &recipient,
+                &recipient_amount,
+            );
+        }
+        if depositor_amount > 0 {
+            token_client.transfer(
+                &env.current_contract_address(),
+                &depositor,
+                &depositor_amount,
+            );
+        }
+
+        Self::bump_instance_ttl(&env);
+
+        env.events().publish(
+            (Symbol::new(&env, "escrow"), Symbol::new(&env, "dispute_resolved")),
+            (arbiter.clone(), recipient_bps, recipient_amount, depositor_amount),
+        );
+    }
+
     // ─── Internal helpers ────────────────────────────────────────────────────
 
     fn assert_not_released(env: &Env) {
@@ -700,7 +1199,28 @@ impl EscrowContract {
             panic_with_error!(env, EscrowError::AlreadyReleased);
         }
     }
-}
+
+    /// Bump instance storage TTL if it has fallen below `INSTANCE_TTL_THRESHOLD`.
+    ///
+    /// Called automatically at the top of every mutating public function so that
+    /// long-running escrows are never archived while still active (issue #805).
+    fn bump_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+    }
+
+    /// Assert that no active dispute is in progress (#810).
+    fn assert_no_dispute(env: &Env) {
+        let status: DisputeStatus = env
+            .storage()
+            .instance()
+            .get(&DataKey::DisputeState)
+            .unwrap_or(DisputeStatus::None);
+        if status == DisputeStatus::Raised {
+            panic_with_error!(env, EscrowError::DisputeActive);
+        }
+    }
 
 #[cfg(test)]
 mod test;
