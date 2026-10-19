@@ -36,6 +36,8 @@ vi.mock('../backend/config', () => ({
     STELLAR_NETWORK: 'testnet',
     AGENT_PUBLIC_KEY: 'GTEST1234567890123456789012345678901234567890123456',
     HEALTH_PORT: 3000,
+    AGENT_SPENDING_LIMIT: '100',
+    SPENDING_WINDOW_MS: 3600000,
     // server.ts pulls in rpc_client, which builds a Horizon.Server at import
     // time; without these the URI constructor throws and the suite cannot load.
     HORIZON_URL: 'https://horizon-testnet.stellar.org',
@@ -56,6 +58,8 @@ vi.mock('../backend/persistence', () => ({
 
 import type * as http from 'http';
 import { createHealthServer } from '../backend/server';
+import { config } from '../backend/config';
+import { spendingTracker } from '../backend/agent';
 import {
   ContractError,
   NetworkTimeoutError,
@@ -67,8 +71,12 @@ import { getResults } from '../backend/persistence';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function makeReq(method: string, url: string): http.IncomingMessage {
-  return { method, url } as http.IncomingMessage;
+function makeReq(
+  method: string,
+  url: string,
+  headers: Record<string, string> = {}
+): http.IncomingMessage {
+  return { method, url, headers } as unknown as http.IncomingMessage;
 }
 
 function makeRes(): http.ServerResponse & {
@@ -274,6 +282,78 @@ describe('backend/server.ts — health check HTTP server', () => {
     it('returns 500 for a plain Error', async () => {
       const res = await requestStatusWith(new Error('boom'));
       expect(res._statusCode).toBe(500);
+    });
+  });
+
+  // ── GET /spending (issue #800) ─────────────────────────────────────────────
+  describe('GET /spending (issue #800)', () => {
+    beforeEach(() => {
+      spendingTracker.clear();
+      (config as any).AGENT_SPENDING_LIMIT = '100';
+    });
+
+    it('returns 200 with window status and spending details', () => {
+      createHealthServer();
+      const req = makeReq('GET', '/spending');
+      const res = makeRes();
+
+      capturedHandler!(req, res);
+
+      expect(res._statusCode).toBe(200);
+      const body = JSON.parse(res._body);
+      expect(body).toMatchObject({
+        total: 0,
+        limit: 100,
+        percentUsed: 0,
+        recordCount: 0,
+        oldestTimestamp: null,
+      });
+      expect(res._headers['Content-Type']).toBe('application/json');
+    });
+
+    it('matches route and returns 200 when query string is present', () => {
+      createHealthServer();
+      const req = makeReq('GET', '/spending?period=1h&filter=active');
+      const res = makeRes();
+
+      capturedHandler!(req, res);
+
+      expect(res._statusCode).toBe(200);
+      const body = JSON.parse(res._body);
+      expect(body.total).toBe(0);
+      expect(body.limit).toBe(100);
+    });
+
+    it('guards against division by zero when limit is 0', () => {
+      (config as any).AGENT_SPENDING_LIMIT = '0';
+      createHealthServer();
+      const req = makeReq('GET', '/spending');
+      const res = makeRes();
+
+      capturedHandler!(req, res);
+
+      expect(res._statusCode).toBe(200);
+      const body = JSON.parse(res._body);
+      expect(body.limit).toBe(0);
+      expect(body.percentUsed).toBe(0);
+      expect(Number.isFinite(body.percentUsed)).toBe(true);
+    });
+
+    it('calculates percentUsed correctly with recorded spending', () => {
+      spendingTracker.record('25');
+      createHealthServer();
+      const req = makeReq('GET', '/spending');
+      const res = makeRes();
+
+      capturedHandler!(req, res);
+
+      expect(res._statusCode).toBe(200);
+      const body = JSON.parse(res._body);
+      expect(body.total).toBe(25);
+      expect(body.limit).toBe(100);
+      expect(body.percentUsed).toBe(25);
+      expect(body.recordCount).toBe(1);
+      expect(typeof body.oldestTimestamp).toBe('number');
     });
   });
 

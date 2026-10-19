@@ -123,8 +123,10 @@ const SPENDING_PATH = '/spending';
  */
 export function createHealthServer(): http.Server {
   const server = http.createServer((req, res) => {
+    const pathname = (req.url ?? '').split('?')[0];
+
     // ── GET /health ────────────────────────────────────────────────────────
-    if (req.method === 'GET' && req.url === HEALTH_PATH) {
+    if (req.method === 'GET' && pathname === HEALTH_PATH) {
       const body = JSON.stringify({
         status: 'ok',
         network: config.STELLAR_NETWORK,
@@ -140,7 +142,7 @@ export function createHealthServer(): http.Server {
     }
 
     // ── GET /status ────────────────────────────────────────────────────────
-    if (req.method === 'GET' && req.url === STATUS_PATH) {
+    if (req.method === 'GET' && pathname === STATUS_PATH) {
       try {
         const results = getResults(10);
         const body = JSON.stringify({ results });
@@ -168,20 +170,25 @@ export function createHealthServer(): http.Server {
     }
 
     // ── GET /spending ──────────────────────────────────────────────────────
-    if (req.method === 'GET' && req.url === SPENDING_PATH) {
+    if (req.method === 'GET' && pathname === SPENDING_PATH) {
       if (!isAuthenticated(req)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized' }));
         return;
       }
 
-      const total = spendingTracker.total();
+      const status = spendingTracker.getWindowStatus();
       const limit = parseFloat(config.AGENT_SPENDING_LIMIT);
+      const safeLimit = !isNaN(limit) && limit > 0 ? limit : 0;
+      const percentUsed = safeLimit > 0 ? (status.total / safeLimit) * 100 : 0;
+
       const body = JSON.stringify({
-        total,
-        limit,
-        windowMs: config.SPENDING_WINDOW_MS,
-        percentUsed: (total / limit) * 100,
+        total: status.total,
+        limit: safeLimit,
+        windowMs: status.windowMs,
+        percentUsed,
+        recordCount: status.recordCount,
+        oldestTimestamp: status.oldestTimestamp,
       });
 
       res.writeHead(200, {
