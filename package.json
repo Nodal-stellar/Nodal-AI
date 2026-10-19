@@ -8,6 +8,7 @@
     "build": "tsc",
     "pretest": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
+    "test": "npm run test:ts",
     "test:fuzz": "vitest run tests/fuzz/**",
     "test:ts": "vitest run",
     "test:ts:watch": "vitest",
