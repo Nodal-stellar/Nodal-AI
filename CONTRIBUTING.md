@@ -53,6 +53,20 @@ We are actively participating in the **Stellar Wave** program! Here's how you ca
 2. **Claim the Issue**: Comment on the issue to let maintainers know you're working on it.
 3. **Submit a PR**: Follow the guidelines below and reference the issue in your PR.
 4. **Earn Drips Points**: Once your PR is merged, you'll be eligible for Drips points!
+5. **Add a New Tool**: If your contribution adds a new agent capability, follow our [Adding a Tool Guide](./docs/contributing/adding-a-tool.md) and use `npm run new-tool <ToolName>` to scaffold the files.
+
+---
+
+## Adding a New Tool
+
+Contributing a new tool to Nodal AI? We provide a step-by-step developer guide and an automatic scaffolding generator:
+
+- 📖 **Guide**: [docs/contributing/adding-a-tool.md](./docs/contributing/adding-a-tool.md)
+- 🛠️ **Scaffolding Generator**:
+  ```bash
+  npm run new-tool <ToolName>
+  ```
+  This creates `backend/tools/<ToolName>Tool.ts` with Zod validation and a corresponding test suite in `tests/`.
 
 ---
 
