@@ -113,6 +113,8 @@ function isAuthenticated(req: http.IncomingMessage): boolean {
 }
 
 const HEALTH_PATH = '/health';
+const LIVEZ_PATH = '/livez';
+const READYZ_PATH = '/readyz';
 const STATUS_PATH = '/status';
 const SPENDING_PATH = '/spending';
 
@@ -125,8 +127,23 @@ export function createHealthServer(): http.Server {
   const server = http.createServer((req, res) => {
     const pathname = (req.url ?? '').split('?')[0];
 
-    // ── GET /health ────────────────────────────────────────────────────────
-    if (req.method === 'GET' && pathname === HEALTH_PATH) {
+    // ── GET /livez (Kubernetes liveness probe: process is alive) ────────────
+    if (req.method === 'GET' && pathname === LIVEZ_PATH) {
+      const body = JSON.stringify({
+        status: 'ok',
+        uptime: process.uptime(),
+      });
+
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      });
+      res.end(body);
+      return;
+    }
+
+    // ── GET /readyz & GET /health (Kubernetes readiness & health probe) ─────
+    if (req.method === 'GET' && (pathname === READYZ_PATH || pathname === HEALTH_PATH)) {
       const body = JSON.stringify({
         status: 'ok',
         network: config.STELLAR_NETWORK,

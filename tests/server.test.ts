@@ -160,6 +160,39 @@ describe('backend/server.ts — health check HTTP server', () => {
     });
   });
 
+  describe('GET /livez (issue #799)', () => {
+    it('returns 200 with { status: "ok", uptime } for liveness probe', () => {
+      createHealthServer();
+      const req = makeReq('GET', '/livez');
+      const res = makeRes();
+
+      capturedHandler!(req, res);
+
+      expect(res._statusCode).toBe(200);
+      const body = JSON.parse(res._body);
+      expect(body.status).toBe('ok');
+      expect(typeof body.uptime).toBe('number');
+      expect(res._headers['Content-Type']).toBe('application/json');
+    });
+  });
+
+  describe('GET /readyz (issue #799)', () => {
+    it('returns 200 with { status: "ok", network, publicKey } for readiness probe', () => {
+      createHealthServer();
+      const req = makeReq('GET', '/readyz');
+      const res = makeRes();
+
+      capturedHandler!(req, res);
+
+      expect(res._statusCode).toBe(200);
+      const body = JSON.parse(res._body);
+      expect(body.status).toBe('ok');
+      expect(body.network).toBe('testnet');
+      expect(body.publicKey).toBe('GTEST1234567890123456789012345678901234567890123456');
+      expect(res._headers['Content-Type']).toBe('application/json');
+    });
+  });
+
   describe('GET /status', () => {
     it('returns 200 with { results: [] } when no persisted results exist', () => {
       createHealthServer();
