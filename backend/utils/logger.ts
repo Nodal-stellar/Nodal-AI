@@ -11,8 +11,18 @@ const isDev = process.env.NODE_ENV !== 'production';
 
 // Transaction memos (e.g. the nonce slices X402PaymentTool writes) can carry
 // caller-supplied, potentially user-identifiable strings, so they're stripped
-// from structured log output regardless of nesting depth.
-export const REDACT_PATHS = ['*.memo', 'payload.memo', 'data.memo'];
+export const REDACT_PATHS = [
+  '*.memo',
+  'payload.memo',
+  'data.memo',
+  '*.secretKey',
+  '*.privateKey',
+  '*.apiKey',
+  '*.authorization',
+  '*.password',
+  'payload.secretKey',
+  'data.secretKey',
+];
 
 export const logger = pino({
   level: process.env.LOG_LEVEL ?? 'info',
