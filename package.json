@@ -5,6 +5,8 @@
   "private": true,
   "scripts": {
     "setup": "npx ts-node scripts/setup.ts",
+    "doctor": "npx ts-node scripts/doctor.ts",
+    "new-tool": "npx ts-node scripts/new-tool.ts",
     "build": "tsc",
     "pretest": "tsc --noEmit",
     "typecheck": "tsc --noEmit",

@@ -36,6 +36,24 @@ If you are new to the Stellar-specific terms used throughout the repo, see the [
 
 ---
 
+## Prerequisites
+
+Before getting started, make sure your machine meets the following requirements:
+
+- **Node.js**: `v20.x` or later (LTS recommended)
+- **npm**: `v9.x` or later
+- **Git**: `v2.x` or later
+- **Rust & Cargo** *(optional)*: Required if compiling or testing Soroban smart contracts (`contracts/escrow`)
+- **Stellar CLI** *(optional)*: Required for deploying Soroban contracts to networks
+
+You can automatically verify all dependencies and configuration by running:
+
+```bash
+npm run doctor
+```
+
+---
+
 ## Quick Start
 
 1. **Clone & Configure:**
@@ -43,7 +61,7 @@ If you are new to the Stellar-specific terms used throughout the repo, see the [
    ```bash
    git clone https://github.com/Nodal-stellar/Nodal-AI.git
    cd nodal-ai
-   cp .env.example .env
+   npm run setup    # Interactive onboarding script, or `cp .env.example .env`
    ```
 
    Open `.env` and fill in at minimum `AGENT_SECRET_KEY`, `HORIZON_URL`, `SOROBAN_RPC_URL`, and `X402_ASSET_ISSUER`. See [`.env.example`](./.env.example) for the full list of variables and their descriptions.
@@ -55,9 +73,11 @@ If you are new to the Stellar-specific terms used throughout the repo, see the [
    ```
 
 3. **Verify Installation:**
+
    ```bash
-   npm run build
-   npm run test:all
+   npm run doctor   # Verify environment health
+   npm test         # Run TypeScript test suite
+   npm run test:all # Run all tests (requires Cargo for contracts)
    ```
 
 ---
