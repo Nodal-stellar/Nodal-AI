@@ -56,9 +56,7 @@ describe('FriendBotTool', () => {
       mockNetwork = 'mainnet';
       const tool = new FriendBotTool();
 
-      await expect(tool.execute({ publicKey: validPubKey })).rejects.toThrow(
-        ConfigError
-      );
+      await expect(tool.execute({ publicKey: validPubKey })).rejects.toThrow(ConfigError);
     });
 
     it('fetches testnet friendbot URL and returns funding result', async () => {

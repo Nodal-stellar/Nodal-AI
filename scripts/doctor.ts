@@ -204,7 +204,9 @@ function main(): void {
     console.log('❌ Environment check failed. Please resolve the errors above.\n');
     process.exit(1);
   } else {
-    console.log('✨ All required dependencies are satisfied! You are ready to build and contribute.\n');
+    console.log(
+      '✨ All required dependencies are satisfied! You are ready to build and contribute.\n'
+    );
   }
 }
 

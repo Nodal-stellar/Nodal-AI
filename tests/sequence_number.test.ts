@@ -21,10 +21,7 @@ vi.mock('../backend/rpc_client', () => ({
   resolveNetworkPassphrase: vi.fn(() => 'Test SDF Network ; September 2015'),
 }));
 
-import {
-  SequenceNumberTool,
-  SequenceNumberInputSchema,
-} from '../backend/tools/SequenceNumberTool';
+import { SequenceNumberTool, SequenceNumberInputSchema } from '../backend/tools/SequenceNumberTool';
 import * as rpcClient from '../backend/rpc_client';
 
 describe('SequenceNumberTool', () => {
