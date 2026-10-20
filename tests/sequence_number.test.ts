@@ -85,7 +85,7 @@ describe('SequenceNumberTool', () => {
   describe('execute', () => {
     it('executes get action and returns sequence number for default account', async () => {
       const mockAccount = new Account(agentPubkey, '1000');
-      vi.mocked(rpcClient.loadAccount).mockResolvedValueOnce(mockAccount);
+      vi.mocked(rpcClient.loadAccount).mockResolvedValueOnce(mockAccount as any);
 
       const tool = new SequenceNumberTool(mockKeypair.secret());
       const result = await tool.execute({ action: 'get' });
@@ -100,7 +100,7 @@ describe('SequenceNumberTool', () => {
     it('executes get action for a specified accountId', async () => {
       const otherKeypair = Keypair.random();
       const mockAccount = new Account(otherKeypair.publicKey(), '5555');
-      vi.mocked(rpcClient.loadAccount).mockResolvedValueOnce(mockAccount);
+      vi.mocked(rpcClient.loadAccount).mockResolvedValueOnce(mockAccount as any);
 
       const tool = new SequenceNumberTool(mockKeypair.secret());
       const result = await tool.execute({
@@ -119,7 +119,7 @@ describe('SequenceNumberTool', () => {
 
     it('executes bump action and submits transaction', async () => {
       const mockAccount = new Account(agentPubkey, '1000');
-      vi.mocked(rpcClient.loadAccount).mockResolvedValueOnce(mockAccount);
+      vi.mocked(rpcClient.loadAccount).mockResolvedValueOnce(mockAccount as any);
       vi.mocked(rpcClient.submitTransaction).mockResolvedValueOnce({
         hash: 'tx-hash-bump-123',
         ledger: 424242,

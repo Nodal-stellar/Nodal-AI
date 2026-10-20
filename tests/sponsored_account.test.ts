@@ -71,7 +71,7 @@ describe('SponsoredAccountTool', () => {
       const newKeypair = Keypair.random();
       const mockAccount = new Account(agentPubkey, '500');
 
-      vi.mocked(rpcClient.loadAccount).mockResolvedValueOnce(mockAccount);
+      vi.mocked(rpcClient.loadAccount).mockResolvedValueOnce(mockAccount as any);
       vi.mocked(rpcClient.submitTransaction).mockResolvedValueOnce({
         hash: 'tx-hash-sponsor-123',
         ledger: 100200,
@@ -99,7 +99,7 @@ describe('SponsoredAccountTool', () => {
       const newKeypair = Keypair.random();
       const mockAccount = new Account(agentPubkey, '500');
 
-      vi.mocked(rpcClient.loadAccount).mockResolvedValueOnce(mockAccount);
+      vi.mocked(rpcClient.loadAccount).mockResolvedValueOnce(mockAccount as any);
       vi.mocked(rpcClient.submitTransaction).mockResolvedValueOnce({
         hash: 'tx-hash-sponsor-456',
         ledger: 100201,
