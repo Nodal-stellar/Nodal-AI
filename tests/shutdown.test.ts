@@ -1,10 +1,12 @@
 /**
  * tests/shutdown.test.ts
  *
- * Tests for the graceful shutdown sequence in backend/index.ts (issue #705).
+ * Tests for the graceful shutdown sequence in backend/main.ts (issue #705).
+ * The process entry point moved out of backend/index.ts in issue #833; the
+ * assertions below are unchanged.
  *
  * Strategy:
- *   - Mock every dependency of backend/index.ts (agent, health server, db,
+ *   - Mock every dependency of backend/main.ts (agent, health server, db,
  *     telemetry, config, logger) so importing the entry point opens no
  *     sockets and touches no real resources.
  *   - Spy on process.on to capture the SIGTERM/SIGINT handlers registered by
@@ -57,12 +59,12 @@ vi.mock('../backend/utils/logger', () => ({
 
 type SignalHandler = () => void;
 
-describe('backend/index.ts graceful shutdown', () => {
+describe('backend/main.ts graceful shutdown', () => {
   let handlers: Record<string, SignalHandler>;
   let exitSpy: any;
 
   async function bootEntryPoint(): Promise<void> {
-    await import('../backend/index');
+    await import('../backend/main');
     await vi.waitFor(() => {
       expect(handlers.SIGTERM).toBeDefined();
       expect(handlers.SIGINT).toBeDefined();

@@ -14,7 +14,7 @@
  * hash can be looked up on-chain (revealing the amount and both parties), set
  * OTEL_REDACT_TX_HASH=true when traces are exported somewhere public.
  *
- * Called once from backend/index.ts at startup.
+ * Called once from backend/main.ts at startup.
  */
 
 import { NodeSDK } from '@opentelemetry/sdk-node';

@@ -141,5 +141,6 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.HEALTH_PORT||3000)+'/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1)).setTimeout(8000,function(){this.destroy()})"
 
-# Entry point — index.js loads config, then starts the agent and health server
-CMD ["node", "dist/backend/index.js"]
+# Entry point — main.js loads config, then starts the agent and health server.
+# backend/index.js is the library entry point and starts nothing (issue #833).
+CMD ["node", "dist/backend/main.js"]

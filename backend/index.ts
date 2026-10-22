@@ -1,94 +1,14 @@
 /**
  * backend/index.ts
- * Agent process entry point.
- * Registers SIGTERM/SIGINT handlers and orchestrates graceful shutdown.
+ * Library entry point: re-exports the agent for programmatic use.
+ *
+ * Importing this module must not start anything (issue #833). Running the
+ * service — awaiting config, migrating the database, opening the health
+ * server, installing SIGTERM/SIGINT handlers and exiting the process — lives
+ * in `backend/main.ts`, which the Dockerfile's CMD executes. Keeping the two
+ * entry points separate is what makes `import { PayFiAgent } from 'nodal-ai'`
+ * usable from a test, a script or another process without booting a server as
+ * a side effect.
  */
 
-import { PayFiAgent } from './agent';
-import { startHealthServer } from './server';
-import { db } from './db/client';
-import { createLogger } from './utils/logger';
-import { initTelemetry, shutdownTelemetry } from './telemetry';
-import { configPromise } from './config';
-
-const log = createLogger('process');
-
-let agent: PayFiAgent;
-let healthServer: any;
-const HARD_KILL_MS = 10_000;
-// Leave headroom inside the hard-kill window for the remaining teardown steps.
-export const PENDING_TASKS_TIMEOUT_MS = 8_000;
-let isShuttingDown = false;
-
-async function shutdown(signal: string): Promise<void> {
-  if (isShuttingDown) return;
-  isShuttingDown = true;
-
-  log.info({ msg: 'Graceful shutdown initiated', signal });
-
-  // Hard kill: force exit if shutdown hangs beyond 10 seconds
-  const hardKill = setTimeout(() => {
-    log.error({ msg: 'Hard kill: graceful shutdown exceeded 10s, forcing exit' });
-    process.exit(1);
-  }, HARD_KILL_MS);
-
-  try {
-    // 1. Stop accepting new tasks
-    if (agent) {
-      agent.drain();
-      // 2. Wait (bounded) for in-flight tasks to settle; queued ones were
-      //    already rejected by drain().
-      await agent.waitForPendingTasks(PENDING_TASKS_TIMEOUT_MS);
-    }
-
-    // 3. Stop the health check server
-    if (healthServer) {
-      await new Promise<void>((resolve, reject) =>
-        healthServer.close((err?: Error) => (err ? reject(err) : resolve()))
-      );
-    }
-
-    // 4. Close database connection
-    await db.close();
-
-    // 5. Shut down telemetry (flushes pending spans)
-    await shutdownTelemetry();
-
-    clearTimeout(hardKill);
-    log.info({ msg: 'All resources released, exiting cleanly' });
-    process.exit(0);
-  } catch (err) {
-    log.error({
-      msg: 'Error during shutdown sequence',
-      error: err instanceof Error ? err.message : String(err),
-    });
-    clearTimeout(hardKill);
-    process.exit(1);
-  }
-}
-
-async function start() {
-  await configPromise;
-
-  // Bring the database schema up to date before anything reads or writes it.
-  await db.migrate();
-
-  // Initialise OpenTelemetry export (no-op when OTLP_ENDPOINT is unset)
-  initTelemetry();
-
-  agent = new PayFiAgent();
-  healthServer = startHealthServer(agent);
-
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
-}
-
-start().catch((err) => {
-  log.error({
-    msg: 'Failed to start agent process',
-    error: err instanceof Error ? err.message : String(err),
-  });
-  process.exit(1);
-});
-
-export { agent, PayFiAgent };
+export { PayFiAgent } from './agent';
