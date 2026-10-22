@@ -38,5 +38,7 @@
       "xdr.ScVal": "https://stellar.github.io/js-stellar-sdk/"
     }
   },
-  "githubPages": false
+  "githubPages": false,
+  "plugin": [],
+  "theme": "default"
 }

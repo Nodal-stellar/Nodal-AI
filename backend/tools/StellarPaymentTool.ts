@@ -10,7 +10,7 @@ import { Horizon, TransactionBuilder, Operation, Asset, Memo } from '@stellar/st
 import { z } from 'zod';
 import { config } from '../config';
 import { createAgentSigner, Signer } from '../signer';
-import { logger } from '../logger';
+import { logger } from '../utils/logger';
 import { loadAccount, resolveNetworkPassphrase, submitTransaction } from '../rpc_client';
 import { SOROBAN_TX_TIMEOUT } from './SorobanInvokeTool';
 import { createLogger } from '../utils/logger';

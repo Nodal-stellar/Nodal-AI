@@ -8,7 +8,7 @@
 import { EventEmitter } from 'events';
 import { Address, rpc, xdr } from '@stellar/stellar-sdk';
 import { config } from '../config';
-import { logger } from '../logger';
+import { logger } from '../utils/logger';
 import { sorobanServer as defaultSorobanServer } from '../rpc_client';
 
 export interface StorageChangeEvent {

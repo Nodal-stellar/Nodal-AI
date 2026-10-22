@@ -8,7 +8,7 @@
 
 import { EventEmitter } from 'events';
 import { horizonServer } from '../rpc_client';
-import { logger } from '../logger';
+import { logger } from '../utils/logger';
 import { config } from '../config';
 
 export type BalanceDirection = 'credit' | 'debit';

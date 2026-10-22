@@ -33,29 +33,79 @@ If you are new to the Stellar-specific terms used throughout the repo, see the [
 
 ---
 
+## Prerequisites
+
+Before you begin, ensure you have the following installed:
+
+### Required
+
+- **Node.js** 22 or later ([Download](https://nodejs.org/))
+- **npm** (comes with Node.js)
+- **Git** ([Download](https://git-scm.com/))
+- **Rust** toolchain with `wasm32-unknown-unknown` target ([Install via rustup](https://rustup.rs/))
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  rustup target add wasm32-unknown-unknown
+  ```
+
+### Optional
+
+- **Stellar CLI** - For contract deployment and advanced operations
+  ```bash
+  cargo install stellar-cli
+  ```
+- **Docker** - For containerized development and testing ([Download](https://www.docker.com/))
+
+### Quick Check
+
+Run the built-in doctor script to verify your environment:
+
+```bash
+npm run doctor
+```
+
+This checks that all required tools are installed at the correct versions.
+
+---
+
 ## Quick Start
 
-1. **Clone & Configure:**
+1. **Clone & Verify Environment:**
 
    ```bash
    git clone https://github.com/Nodal-stellar/Nodal-AI.git
    cd Nodal-AI
-   cp .env.example .env
+   npm run doctor
    ```
 
-   Open `.env` and fill in at minimum `AGENT_SECRET_KEY`, `HORIZON_URL`, `SOROBAN_RPC_URL`, and `X402_ASSET_ISSUER`. See [`.env.example`](./.env.example) for the full list of variables and their descriptions.
+2. **Configure Environment:**
 
-2. **Install Dependencies:**
+   ```bash
+   cp .env.example .env
+   npm run setup
+   ```
+
+   The interactive `setup` script will prompt you for required values, or you can edit `.env` manually. At minimum, configure:
+   - `AGENT_SECRET_KEY`
+   - `HORIZON_URL`
+   - `SOROBAN_RPC_URL`
+   - `X402_ASSET_ISSUER`
+
+   See [`.env.example`](./.env.example) for the full list of variables and their descriptions.
+
+3. **Install Dependencies:**
 
    ```bash
    npm install
    ```
 
-3. **Verify Installation:**
+4. **Verify Installation:**
    ```bash
    npm run build
    npm run test:all
    ```
+
+   > **Note:** `npm run test:all` runs both TypeScript and Rust tests. For TypeScript-only verification, use `npm run test:ts`.
 
 ---
 

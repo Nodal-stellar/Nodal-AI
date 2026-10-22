@@ -13,7 +13,7 @@ import { horizonServer, withRetry } from '../rpc_client';
 import { Caip2NetworkId, fromCaip2, toCaip2, withBackoffGuard } from '../network';
 import { StellarPaymentTool } from './StellarPaymentTool';
 import { buildMemo } from './MemoAttachmentTool';
-import { logger } from '../logger';
+import { logger } from '../utils/logger';
 import { INonceStore, SqliteNonceStore, MAX_NONCE_TTL_MS } from '../nonce_store';
 import { getStorage } from '../db/storage';
 import { TransactionFailureError } from '../errors';

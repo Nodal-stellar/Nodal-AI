@@ -322,3 +322,21 @@ jobs:
       - run: npm ci
       - name: Audit npm dependencies
         run: npm audit --audit-level=high
+
+  docs-link-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - name: Install markdown-link-check
+        run: npm install -g markdown-link-check
+      - name: Check for broken links in docs
+        run: |
+          markdown-link-check docs/index.md docs/guide/*.md docs/design/*.md
