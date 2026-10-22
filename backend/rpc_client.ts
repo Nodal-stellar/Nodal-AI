@@ -23,7 +23,7 @@ import {
   ConfigError,
   ContractError,
 } from './errors';
-import { logger } from './logger';
+import { logger } from './utils/logger';
 import { validateXDR } from './types/xdr';
 import { createLogger } from './utils/logger';
 import { BREAKER_STATE, rpcBreakerState } from './metrics';

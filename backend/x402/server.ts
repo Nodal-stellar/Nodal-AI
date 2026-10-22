@@ -7,7 +7,7 @@
 
 import { X402Middleware, X402MiddlewareOptions } from '@x402/express';
 import { config } from '../config';
-import { logger } from '../logger';
+import { logger } from '../utils/logger';
 
 /**
  * Options for creating an x402 middleware instance.

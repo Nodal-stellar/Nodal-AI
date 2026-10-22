@@ -19,8 +19,8 @@ module.exports = {
       // backend/utils/logger.ts instead.
       files: ["backend/**/*.ts"],
       excludedFiles: [
-        // backend/logger.ts is the logger implementation itself — it must be
-        // allowed to call console.log/console.error as the output transport.
+        // backend/logger.ts is the deprecated shim — it must be allowed to
+        // re-export from utils/logger for backward compatibility.
         "backend/logger.ts",
       ],
       rules: {
@@ -34,6 +34,18 @@ module.exports = {
               "CallExpression[callee.type='MemberExpression'][callee.property.name=/^(trace|debug|info|warn|error|fatal)$/][callee.object.name=/^(logger|log|[a-z]+Log)$/][arguments.length>1][arguments.0.type=/^(Literal|TemplateLiteral)$/]",
             message:
               "pino expects logger.<level>({ ...fields }, 'message'). Put the fields object first and the message string second.",
+          },
+        ],
+        // Block imports from the deprecated ./logger shim. Use ./utils/logger instead.
+        "no-restricted-imports": [
+          "error",
+          {
+            patterns: [
+              {
+                group: ["./logger", "../logger", "../../logger"],
+                message: "Import from './utils/logger' instead. The './logger' shim is deprecated.",
+              },
+            ],
           },
         ],
       },

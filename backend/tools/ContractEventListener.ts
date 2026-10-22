@@ -25,7 +25,7 @@
 import { EventEmitter } from 'events';
 import { rpc } from '@stellar/stellar-sdk';
 import { config } from '../config';
-import { logger } from '../logger';
+import { logger } from '../utils/logger';
 import { sorobanServer } from '../rpc_client';
 
 export interface ContractEventListenerOptions {

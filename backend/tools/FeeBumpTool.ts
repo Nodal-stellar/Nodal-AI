@@ -14,7 +14,7 @@ import {
 import { z } from 'zod';
 import { config } from '../config';
 import { createAgentSigner, Signer } from '../signer';
-import { logger } from '../logger';
+import { logger } from '../utils/logger';
 import { resolveNetworkPassphrase, submitTransaction } from '../rpc_client';
 import { ValidationError } from '../errors';
 import { validateXDR } from '../types/xdr';
