@@ -91,13 +91,40 @@ export interface INonceStore {
  * All operations are synchronous at the SQLite level (better-sqlite3 API),
  * wrapped in Promise.resolve() to satisfy the async INonceStore interface
  * and keep call-sites uniform regardless of backend.
+ *
+ * IMPORTANT: The connection should be the shared one from persistence.getDb()
+ * to avoid opening multiple connections per process. See X402PaymentTool constructor.
  */
 export class SqliteNonceStore implements INonceStore {
   private db: Database.Database;
   private ready = false;
+  private ownsConnection: boolean;
 
-  constructor(db: Database.Database) {
-    this.db = db;
+  /**
+   * @param db - The SQLite database connection. If provided, this store will use
+   *            the shared connection. If not provided, a new connection is created
+   *            for backward compatibility (deprecated).
+   */
+  constructor(db?: Database.Database) {
+    if (db) {
+      this.db = db;
+      this.ownsConnection = false;
+    } else {
+      // Lazy import of config so tests can mock it
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { config } = require('./config') as typeof import('./config');
+      this.db = new Database(config.DB_PATH);
+      this.ownsConnection = true;
+    }
+  }
+
+  /**
+   * Close the connection if this store owns it. Does nothing if using a shared connection.
+   */
+  close(): void {
+    if (this.ownsConnection && this.db) {
+      this.db.close();
+    }
   }
 
   private ensureTable(): void {

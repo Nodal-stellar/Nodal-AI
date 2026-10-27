@@ -119,6 +119,10 @@ export function attachBreakerTelemetry<TArgs extends unknown[], TResult>(
       },
       'RPC circuit opened'
     );
+    alertBreakerOpen(name, {
+      failures: breaker.stats.failures,
+      successes: breaker.stats.successes,
+    });
   });
 
   breaker.on('halfOpen', () => {

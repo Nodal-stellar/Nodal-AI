@@ -5,6 +5,9 @@
  * including the secondary mainnet spending cap guard.
  */
 
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { PayFiAgent, _resetSpendingTrackerForTests } from "../backend/agent";
+import { StellarPaymentTool } from "../backend/tools/StellarPaymentTool";
 import { describe, it, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   PayFiAgent,
@@ -210,6 +213,10 @@ vi.mock('../backend/webhook', () => ({
 
 vi.mock('../backend/persistence', () => ({
   saveResult: vi.fn(),
+  saveSpendingRecord: vi.fn(),
+  deleteSpendingRecord: vi.fn(),
+  getSpendingRecordsSince: vi.fn(() => []),
+  pruneSpendingRecords: vi.fn(),
   appendAuditEntry: vi.fn(),
   savePendingApproval: vi.fn(),
   getPendingApproval: vi.fn(),
@@ -261,6 +268,11 @@ vi.mock('../backend/config', () => ({
     X402_ASSET_ISSUER: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
     MAX_RETRIES: 3,
     RETRY_DELAY_MS: 100,
+    // Set above MAINNET_SPENDING_CAP to exercise the secondary runtime guard
+    AGENT_SPENDING_LIMIT: "15000",
+    SPENDING_LIMITS_MAP: new Map<string, string>(),
+    SPENDING_LIMITS_ALLOW_UNKNOWN: true,
+    SPENDING_WINDOW_MS: 86_400_000,
     MAX_CONCURRENT_TASKS: 10, // Set above MAINNET_SPENDING_CAP to exercise the secondary runtime guard
     AGENT_SPENDING_LIMIT: '15000',
     PAYMENT_DESTINATION_POLICY: 'open',
@@ -283,6 +295,7 @@ describe('PayFiAgent — runSequence', () => {
   beforeEach(() => {
     spendingTracker.clear();
     vi.clearAllMocks();
+    _resetSpendingTrackerForTests();
     // Re-apply default mock implementation after clearAllMocks (clearMocks resets call history
     // but also clears mockReturnValue / mockResolvedValue set inside vi.mock factories).
     vi.mocked(StellarPaymentTool).mockImplementation(
@@ -476,6 +489,10 @@ describe('PayFiAgent — mainnet spending cap', () => {
   beforeEach(() => {
     spendingTracker.clear();
     vi.clearAllMocks();
+    _resetSpendingTrackerForTests();
+    vi.mocked(StellarPaymentTool).mockImplementation(() => ({
+      execute: vi.fn().mockResolvedValue({ txHash: "mock_hash", ledger: 1 }),
+    } as any));
     vi.mocked(StellarPaymentTool).mockImplementation(
       () =>
         ({
@@ -571,6 +588,10 @@ describe('AgentResult snapshot', () => {
   beforeEach(() => {
     spendingTracker.clear();
     vi.clearAllMocks();
+    _resetSpendingTrackerForTests();
+    vi.mocked(StellarPaymentTool).mockImplementation(() => ({
+      execute: vi.fn().mockResolvedValue({ txHash: "success_tx_hash", ledger: 1 }),
+    } as any));
     vi.mocked(StellarPaymentTool).mockImplementation(
       () =>
         ({
@@ -698,6 +719,10 @@ describe('PayFiAgent — new task types', () => {
   beforeEach(() => {
     spendingTracker.clear();
     vi.clearAllMocks();
+    _resetSpendingTrackerForTests();
+    vi.mocked(StellarPaymentTool).mockImplementation(() => ({
+      execute: vi.fn().mockResolvedValue({ txHash: "mock_hash", ledger: 1 }),
+    } as any));
     vi.mocked(StellarPaymentTool).mockImplementation(
       () =>
         ({

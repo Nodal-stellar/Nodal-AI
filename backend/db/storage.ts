@@ -71,6 +71,16 @@ export interface Storage {
 
   /** Nonce store sharing this storage's database. */
   nonceStore(): INonceStore;
+
+  /** MPP Session storage: save, load, and update channel states. */
+  saveMppSession(channelId: string, state: string): Promise<void>;
+  loadMppSession(channelId: string): Promise<string | undefined>;
+
+  /** X402 rate limiter: save, load, prune, and clear timestamp records. */
+  saveX402RateRecord(timestamp: number): Promise<void>;
+  loadX402RateRecords(sinceMs: number): Promise<number[]>;
+  pruneX402RateRecords(cutoffMs: number): Promise<void>;
+  clearX402RateRecords(): Promise<void>;
 }
 
 // ─── SQLite ───────────────────────────────────────────────────────────────────
@@ -149,6 +159,30 @@ export class SqliteStorage implements Storage {
 
   nonceStore(): INonceStore {
     return new SqliteNonceStore(persistence.getDb());
+  }
+
+  async saveMppSession(channelId: string, state: string): Promise<void> {
+    persistence.saveAgentState(`mpp_session:${channelId}`, state);
+  }
+
+  async loadMppSession(channelId: string): Promise<string | undefined> {
+    return persistence.loadAgentState(`mpp_session:${channelId}`);
+  }
+
+  async saveX402RateRecord(timestamp: number): Promise<void> {
+    persistence.saveX402RateRecord(timestamp);
+  }
+
+  async loadX402RateRecords(sinceMs: number): Promise<number[]> {
+    return persistence.loadX402RateRecords(sinceMs);
+  }
+
+  async pruneX402RateRecords(cutoffMs: number): Promise<void> {
+    persistence.pruneX402RateRecords(cutoffMs);
+  }
+
+  async clearX402RateRecords(): Promise<void> {
+    persistence.clearX402RateRecords();
   }
 }
 

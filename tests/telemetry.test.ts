@@ -7,8 +7,9 @@
  * directly rather than inferred from mocked SDK calls.
  */
 
-import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
-import { trace } from '@opentelemetry/api';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+import { context, trace } from '@opentelemetry/api';
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
@@ -28,7 +29,13 @@ vi.mock('../backend/config', () => ({
   },
 }));
 
-import { withSpan } from '../backend/telemetry';
+import {
+  withSpan,
+  markSpanError,
+  setTxHashAttribute,
+  extractTxHash,
+  SPAN_ATTR,
+} from '../backend/telemetry';
 
 // `trace.getTracer()` (called once at module load inside telemetry.ts) returns
 // a ProxyTracer that delegates to whatever provider is *currently* registered
@@ -42,6 +49,9 @@ beforeAll(() => {
     spanProcessors: [new SimpleSpanProcessor(exporter)],
   });
   trace.setGlobalTracerProvider(provider);
+  // withSpan() activates its span; a real context manager is needed for that
+  // to propagate across awaits (NodeSDK registers the same one in production).
+  context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
 });
 
 beforeEach(() => {
@@ -97,13 +107,7 @@ describe('withSpan', () => {
     expect(Object.keys(span!.attributes)).toHaveLength(0);
   });
 
-  // NOTE: withSpan() currently calls `tracer.startSpan(name)` without ever
-  // entering the started span's context (no `context.with(trace.setSpan(...))`
-  // / no `startActiveSpan`). That means nested withSpan() calls do NOT
-  // currently pick up the outer span as their parent — each becomes its own
-  // root span. This test documents that actual, current behaviour; it is not
-  // asserting this is desirable. See PR description for a flagged follow-up.
-  it('does not currently link nested calls as parent/child (documents existing gap)', async () => {
+  it('links nested calls as parent/child within one trace', async () => {
     await withSpan('outer', async () => {
       await withSpan('inner', async () => 'done');
     });
@@ -115,7 +119,87 @@ describe('withSpan', () => {
     const inner = spans.find((s) => s.name === 'inner')!;
 
     expect(outer.parentSpanContext).toBeUndefined();
-    expect(inner.parentSpanContext).toBeUndefined();
-    expect(inner.spanContext().traceId).not.toBe(outer.spanContext().traceId);
+    expect(inner.parentSpanContext?.spanId).toBe(outer.spanContext().spanId);
+    expect(inner.spanContext().traceId).toBe(outer.spanContext().traceId);
+  });
+
+  it('keeps an ERROR status set via markSpanError() when fn returns normally', async () => {
+    await withSpan('softFail', async (span) => {
+      markSpanError(span, 'task failed');
+      return { success: false };
+    });
+
+    const [span] = exporter.getFinishedSpans();
+    expect(span!.status.code).toBe(2); // SpanStatusCode.ERROR
+    expect(span!.status.message).toBe('task failed');
+  });
+});
+
+// ─── Task / tool span hierarchy (#823) ─────────────────────────────────────────
+
+describe('task and tool spans', () => {
+  afterEach(() => {
+    delete process.env.OTEL_REDACT_TX_HASH;
+  });
+
+  const runTask = () =>
+    withSpan(
+      'agent.executeTask',
+      async (taskSpan) => {
+        const data = await withSpan(
+          'tool.stellar_payment',
+          async (toolSpan) => {
+            const result = { hash: 'abc123', amount: '10', destination: 'GDEST' };
+            setTxHashAttribute(toolSpan, result);
+            return result;
+          },
+          { [SPAN_ATTR.TASK_TYPE]: 'stellar_payment', [SPAN_ATTR.CORRELATION_ID]: 'corr-1' }
+        );
+        setTxHashAttribute(taskSpan, data);
+        return data;
+      },
+      { [SPAN_ATTR.TASK_TYPE]: 'stellar_payment', [SPAN_ATTR.CORRELATION_ID]: 'corr-1' }
+    );
+
+  it('nests the tool span under the task span with task attributes', async () => {
+    await runTask();
+
+    const spans = exporter.getFinishedSpans();
+    const task = spans.find((s) => s.name === 'agent.executeTask')!;
+    const tool = spans.find((s) => s.name === 'tool.stellar_payment')!;
+
+    expect(tool.parentSpanContext?.spanId).toBe(task.spanContext().spanId);
+    for (const span of [task, tool]) {
+      expect(span.attributes[SPAN_ATTR.TASK_TYPE]).toBe('stellar_payment');
+      expect(span.attributes[SPAN_ATTR.CORRELATION_ID]).toBe('corr-1');
+      expect(span.attributes[SPAN_ATTR.TX_HASH]).toBe('abc123');
+    }
+  });
+
+  it('never records amounts or addresses on spans', async () => {
+    await runTask();
+
+    for (const span of exporter.getFinishedSpans()) {
+      const values = Object.values(span.attributes);
+      expect(values).not.toContain('10');
+      expect(values).not.toContain('GDEST');
+    }
+  });
+
+  it('omits the tx hash when OTEL_REDACT_TX_HASH=true', async () => {
+    process.env.OTEL_REDACT_TX_HASH = 'true';
+    await runTask();
+
+    for (const span of exporter.getFinishedSpans()) {
+      expect(span.attributes[SPAN_ATTR.TX_HASH]).toBeUndefined();
+    }
+  });
+
+  it('extracts the tx hash from the field names tools use', () => {
+    expect(extractTxHash({ hash: 'a' })).toBe('a');
+    expect(extractTxHash({ txHash: 'b' })).toBe('b');
+    expect(extractTxHash({ transactionHash: 'c' })).toBe('c');
+    expect(extractTxHash({ unsignedXDR: 'x' })).toBeUndefined();
+    expect(extractTxHash(null)).toBeUndefined();
   });
 });

@@ -1,0 +1,122 @@
+name: E2E
+
+# End-to-end tests against a local stellar/quickstart network (#825).
+#
+# tests/e2e/* used to run only by hand against testnet, so the escrow round
+# trip — exactly the test that catches integration breakage between the
+# contract and the SDK — never gated a merge. This job boots quickstart from
+# the `test-only` docker-compose profile (no agent HTTP server needed) and runs
+# the suite against it.
+#
+# Kept in its own workflow rather than ci.yml so its path filter and nightly
+# schedule do not change when ci.yml's jobs run (ci.yml's `mutation` job treats
+# any scheduled run as its weekly backstop).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'contracts/**'
+      - 'tests/e2e/**'
+      - 'docker-compose.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/e2e.yml'
+  # Nightly: catches breakage from a new stellar/quickstart image or upstream
+  # protocol change even when no PR touched the code.
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: e2e (stellar/quickstart)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      RUN_E2E: 'true'
+      E2E_REQUIRE_WASM: 'true'
+      HORIZON_URL: http://localhost:8000
+      SOROBAN_RPC_URL: http://localhost:8000/soroban/rpc
+      E2E_NETWORK_PASSPHRASE: 'Standalone Network ; February 2017'
+      E2E_FRIENDBOT_URL: http://localhost:8000/friendbot
+      # docker compose interpolates the whole file, and the `agent` service
+      # marks these as required. The agent is not started here, so any
+      # non-empty placeholder satisfies the interpolation.
+      AGENT_SECRET_KEY: unused-by-e2e
+      X402_ASSET_ISSUER: unused-by-e2e
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pull/boot quickstart first: it is the slowest step, so it warms up
+      # while the WASM and node_modules are prepared below.
+      - name: Start stellar/quickstart (test-only profile)
+        run: docker compose --profile test-only up -d stellar-quickstart
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+
+      # See ci.yml's test-rust job: rustup reads ./rust-toolchain.toml.
+      - name: Install Rust
+        run: rustup show
+
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/escrow/target
+          key: e2e-cargo-${{ runner.os }}-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+
+      - name: Build escrow WASM
+        run: cargo build --locked --manifest-path contracts/escrow/Cargo.toml --target wasm32-unknown-unknown --release
+
+      - run: npm ci
+
+      # The compose healthcheck only covers Horizon; Friendbot and Soroban RPC
+      # come up later, and the tests need both.
+      - name: Wait for quickstart (Horizon, Friendbot, Soroban RPC)
+        run: |
+          for i in $(seq 1 60); do
+            horizon=$(curl -s -o /dev/null -w '%{http_code}' "$HORIZON_URL" || true)
+            # Friendbot answers 400 without ?addr= once it is up.
+            friendbot=$(curl -s -o /dev/null -w '%{http_code}' "$E2E_FRIENDBOT_URL" || true)
+            rpc=$(curl -s -X POST "$SOROBAN_RPC_URL" -H 'Content-Type: application/json' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' || true)
+            if [ "$horizon" = "200" ] && [[ "$friendbot" =~ ^[24] ]] && [[ "$rpc" == *'"healthy"'* ]]; then
+              echo "quickstart ready after $((i * 5))s"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "quickstart did not become ready in time" >&2
+          docker compose logs stellar-quickstart | tail -100
+          exit 1
+
+      # The escrow suite is self-contained (it funds its own accounts through
+      # quickstart's Friendbot). The x402 round trip is not run here yet: it
+      # drives PayFiAgent, whose config only accepts testnet/mainnet/futurenet
+      # passphrases, so it cannot sign for a standalone network.
+      - name: Run E2E tests
+        run: npm run test:e2e:escrow
+
+      - name: Quickstart logs on failure
+        if: failure()
+        run: docker compose logs stellar-quickstart | tail -200
+
+      - name: Stop quickstart
+        if: always()
+        run: docker compose --profile test-only down -v

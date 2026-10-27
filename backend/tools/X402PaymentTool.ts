@@ -6,7 +6,6 @@
 import { Horizon } from '@stellar/stellar-sdk';
 import { z } from 'zod';
 import { createHash } from 'crypto';
-import Database from 'better-sqlite3';
 import { config } from '../config';
 import { createAgentSigner, Signer } from '../signer';
 import { horizonServer, withRetry } from '../rpc_client';
@@ -18,6 +17,8 @@ import { INonceStore, SqliteNonceStore, MAX_NONCE_TTL_MS } from '../nonce_store'
 import { getStorage } from '../db/storage';
 import { TransactionFailureError } from '../errors';
 import { stellarPublicKeySchema } from '../utils/stellarSchemas';
+import { x402RateLimiter } from '../x402_rate_limiter';
+import { getDb } from '../persistence';
 
 
 /**
@@ -131,20 +132,16 @@ function assertAcceptableChallengeTerms(challenge: X402Challenge): void {
 
 // ─── Tool implementation ──────────────────────────────────────────────────────
 
-const RATE_LIMIT_WINDOW_MS = 60_000;
-
 export class X402PaymentTool {
   private nonceStore: INonceStore;
   private paymentTool: StellarPaymentTool;
   private signer: Signer;
   private horizonServer: Horizon.Server;
-  private paymentCount = 0;
-  private windowStart = Date.now();
 
   /**
    * @param signer      - Signs payments; defaults to the agent signer.
    * @param nonceStore  - Pluggable nonce store.  Defaults to SqliteNonceStore
-   *                      backed by the shared agent.db file, or to the shared
+   *                      backed by the shared agent.db connection, or to the shared
    *                      Postgres store when STORAGE_BACKEND=postgres.  Inject
    *                      an InMemoryNonceStore (or a custom implementation of
    *                      INonceStore) in tests.
@@ -157,7 +154,7 @@ export class X402PaymentTool {
       nonceStore ??
       (config.STORAGE_BACKEND === 'postgres'
         ? getStorage().nonceStore()
-        : new SqliteNonceStore(new Database(config.DB_PATH)));
+        : new SqliteNonceStore(getDb()));
   }
 
   /**
@@ -188,16 +185,11 @@ export class X402PaymentTool {
    *   Stellar payment fails.
    */
   async respond(rawChallenge: unknown): Promise<X402PaymentProof> {
-    const now = Date.now();
-    if (now - this.windowStart >= RATE_LIMIT_WINDOW_MS) {
-      this.paymentCount = 0;
-      this.windowStart = now;
-    }
-
-    if (this.paymentCount >= config.MAX_X402_PAYMENTS_PER_MINUTE) {
+    // Check rate limit using the persistent sliding-window limiter
+    const allowed = await x402RateLimiter.check();
+    if (!allowed) {
       throw new Error('x402: rate limit exceeded');
     }
-    this.paymentCount++;
 
     const challenge = X402ChallengeSchema.parse(rawChallenge);
 
@@ -269,6 +261,9 @@ export class X402PaymentTool {
       .catch((err) =>
         logger.warn({ error: String(err) }, 'x402: nonce pruning failed (non-fatal)')
       );
+
+    // Record the payment in the rate limiter
+    await x402RateLimiter.record();
 
     let signedAt: string;
     try {

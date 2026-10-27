@@ -11,6 +11,25 @@
  */
 
 // Updated imports
+import { EventEmitter } from "events";
+import { config } from "./config";
+import { logger } from "./logger";
+import { saveResult } from "./persistence";
+import { StellarPaymentTool } from "./tools/StellarPaymentTool";
+import { SorobanInvokeTool } from "./tools/SorobanInvokeTool";
+import { X402PaymentTool, X402Challenge } from "./tools/X402PaymentTool";
+import { AccountInfoTool } from "./tools/AccountInfoTool";
+import { TrustlineTool } from "./tools/TrustlineTool";
+import { MultiSigPaymentTool } from "./tools/MultiSigPaymentTool";
+import { BatchPaymentTool } from "./tools/BatchPaymentTool";
+import { horizonServer } from "./rpc_client";
+import { createLogger, generateCorrelationId } from "./utils/logger";
+import { SpendingTracker, assetKey } from "./spending_tracker";
+
+// ── Module-level singleton tracker shared across all agent instances ──────────
+// NOTE: For process-wide spending enforcement, the tracker is a module singleton.
+// Tests that need isolation should call _resetSpendingTrackerForTests().
+const spendingTracker = new SpendingTracker();
 import { EventEmitter } from 'events';
 import { createHash, randomUUID } from 'crypto';
 import { rpc } from '@stellar/stellar-sdk';
@@ -84,9 +103,13 @@ import { taskContext, type AgentEvents } from './events';
 export { spendingTracker };
 export type { AgentEvents };
 
-// ─── Spending limit guard ─────────────────────────────────────────────────────
-
 /**
+ * Reset the module-level SpendingTracker singleton.
+ * FOR TESTING ONLY — clears in-memory entries between tests.
+ * @internal
+ */
+export function _resetSpendingTrackerForTests(): void {
+  spendingTracker._resetForTests();
  * Check that a payment amount does not exceed the configured per-payment and
  * mainnet spending caps, then **reserve** the amount against the cumulative
  * rolling-window limit.
@@ -194,6 +217,14 @@ function taskAmount(task: AgentTask): string | null {
   return typeof amount === 'string' ? amount : null;
 }
 
+export type TaskType =
+  | "stellar_payment"
+  | "soroban_invoke"
+  | "x402_respond"
+  | "account_info"
+  | "change_trust"
+  | "multisig_payment"
+  | "batch_payment";
 // ─── Task types ───────────────────────────────────────────────────────────────
 
 /** Task types handled by the tools PayFiAgent registers at construction. */
@@ -475,6 +506,35 @@ function optionalString(value: unknown): string | null {
 }
 
 /**
+ * Atomically reserve a spending amount for the given asset.
+ *
+ * Uses BigInt stroop arithmetic (no parseFloat).
+ * Per-asset limits are resolved from config.SPENDING_LIMITS_MAP.
+ * Unknown assets are denied unless SPENDING_LIMITS_ALLOW_UNKNOWN is true.
+ *
+ * @param amount      - The amount string from the task payload.
+ * @param assetCode   - Asset code (e.g. "XLM", "USDC").
+ * @param assetIssuer - G-address issuer; absent / empty for native XLM.
+ * @returns           A reservation id — pass to commitSpend() or rollbackSpend().
+ * @throws            If the amount is malformed, asset is denied, or limit exceeded.
+ */
+function reserveSpend(amount: unknown, assetCode?: unknown, assetIssuer?: unknown): string {
+  if (typeof amount !== "string") {
+    // Let the tool's own Zod schema surface a better error; do not block here.
+    return "";
+  }
+  const code    = typeof assetCode   === "string" ? assetCode   : config.X402_ASSET_CODE;
+  const issuer  = typeof assetIssuer === "string" ? assetIssuer : config.X402_ASSET_ISSUER;
+  const key     = assetKey(code, issuer);
+  return spendingTracker.reserve(amount, key);
+}
+
+function commitSpend(reservationId: string): void {
+  if (reservationId) spendingTracker.commit(reservationId);
+}
+
+function rollbackSpend(reservationId: string): void {
+  if (reservationId) spendingTracker.rollback(reservationId);
  * Build the audit-log entry for a task that produced a signed transaction, or
  * `null` when the result carries no `txHash` (read-only tasks, simulations,
  * multisig envelopes still awaiting signatures). Friendbot transactions are
@@ -514,7 +574,6 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
   private readonly signer: Signer;
   private paymentTool: StellarPaymentTool;
   private sorobanTool: SorobanInvokeTool;
-  private sorobanQueryTool: SorobanQueryTool;
   private x402Tool: X402PaymentTool;
   /** x402 v2 fetch client — created lazily on first fetchPaid() call. */
   private _x402FetchClient: X402FetchClient | null = null;
@@ -567,6 +626,12 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
   constructor() {
     super();
 
+    // config.agentKeypair().secret() is the canonical way to obtain the signing secret.
+    // Direct access to config.AGENT_SECRET_KEY is intentionally blocked by the AgentConfig
+    // type (Omit<RawEnv, "AGENT_SECRET_KEY">); using agentKeypair() makes the access explicit.
+    this.paymentTool = new StellarPaymentTool(config.agentKeypair().secret());
+    this.sorobanTool = new SorobanInvokeTool(config.agentKeypair().secret());
+    this.x402Tool    = new X402PaymentTool(config.agentKeypair().secret());
     // Tools receive the agent-owned Signer, never the secret key itself, so the
     // raw secret is not copied into every tool instance.
     this.signer = createAgentSigner();
@@ -1146,6 +1211,22 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
     taskLog: ReturnType<typeof createLogger>
   ): Promise<AgentResult> {
     this.activeTasks++;
+    logger.info("Running task", { taskType: task.type });
+
+    // reservationId is non-empty only for payment tasks that were reserved
+    let reservationId = "";
+
+    try {
+      let data: AgentResultData | unknown;
+
+      switch (task.type) {
+        case "stellar_payment": {
+          const p = task.payload as Record<string, unknown>;
+          // Atomically reserve spend — throws if limit exceeded or asset denied
+          reservationId = reserveSpend(p?.amount, p?.assetCode, p?.assetIssuer);
+          data = await this.paymentTool.execute(task.payload);
+          commitSpend(reservationId);
+          break;
     this.emit('task:started', { taskType: task.type, correlationId });
     const startMs = Date.now();
 
@@ -1164,6 +1245,13 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
           assertDestinationsAllowed(task);
         }
 
+        case "x402_respond": {
+          const p = task.payload as Record<string, unknown>;
+          // Atomically reserve spend — throws if limit exceeded or asset denied
+          reservationId = reserveSpend(p?.amount, p?.assetCode, p?.assetIssuer);
+          data = await this.x402Tool.respond(task.payload);
+          commitSpend(reservationId);
+          break;
         if (VALUE_MOVING_TASK_TYPES.has(task.type) && !this.approvedTasks.has(task)) {
           const held = this.holdForApproval(task, correlationId);
           if (held) return held;
@@ -1362,6 +1450,12 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
           );
         }
 
+        case "batch_payment":
+          data = await this.batchPaymentTool.execute(task.payload);
+          break;
+
+        default:
+          throw new Error(`Unknown task type: ${(task as AgentTask).type}`);
         void dispatchWebhook(result);
 
         return result;
@@ -1397,6 +1491,24 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
       }
     };
 
+      logger.info("Task completed", { taskType: task.type });
+      const _data = data as AgentResultData | undefined;
+      const result: AgentResult = _data !== undefined
+        ? { success: true, taskType: task.type, data: _data }
+        : { success: true, taskType: task.type };
+      this.emit("task:complete", result);
+      saveResult({ ...result, timestamp: new Date().toISOString() });
+      return result;
+    } catch (err) {
+      // Roll back the reservation so the failed payment is not counted
+      rollbackSpend(reservationId);
+
+      const message = err instanceof Error ? err.message : String(err);
+      const safe = redactSecretString(message);
+      const sanitized = sanitizePayload(task.payload);
+      logger.error("Task failed", { taskType: task.type, error: safe, sanitizedPayload: sanitized });
+      const result: AgentResult = { success: false, taskType: task.type, error: safe };
+      this.emit("task:failed", result);
     // Build middleware chain: middleware[n] -> middleware[n-1] -> ... -> executeTask
     let chain: () => Promise<AgentResult> = executeTask;
     for (let i = this.middlewares.length - 1; i >= 0; i--) {
@@ -1413,6 +1525,7 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
         chain
       );
     } catch (err) {
+      failureAlerts.recordFailure(task.type);
       const durationMs = Date.now() - startMs;
       const safe = redactSecretString(describeError(err));
       const sanitized = sanitizePayload(task.payload);

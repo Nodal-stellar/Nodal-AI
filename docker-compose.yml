@@ -74,6 +74,10 @@ services:
       MAX_RETRIES:        ${MAX_RETRIES:-3}
       RETRY_DELAY_MS:     ${RETRY_DELAY_MS:-1500}
       NODE_ENV:           production
+      # Passed through only when set on the host (an empty value would fail
+      # config validation). Point at http://jaeger:4318 to trace into Jaeger.
+      OTLP_ENDPOINT:
+      OTEL_REDACT_TX_HASH:
     ports:
       - "3000:3000"
     healthcheck:

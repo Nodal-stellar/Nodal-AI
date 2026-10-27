@@ -58,6 +58,10 @@ Which task type(s) does this feature touch, or does it introduce a new one?
 - [ ] `network_status`
 - [ ] `offer_book`
 - [ ] `soroban_storage`
+- [ ] `set_options`
+- [ ] `soroban_event_query`
+- [ ] `stellar_identity_auth`
+- [ ] `friendbot`
 - [ ] New task type (specify below)
 - [ ] Not task-specific (infrastructure, DX, docs, etc.)
 

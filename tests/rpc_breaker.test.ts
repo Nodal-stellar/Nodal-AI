@@ -35,6 +35,10 @@ vi.mock('../backend/utils/logger', () => ({
   generateCorrelationId: vi.fn(() => 'mock-id'),
 }));
 
+// #824 — an opening breaker must raise an alert, not just a log line.
+const { alertBreakerOpen } = vi.hoisted(() => ({ alertBreakerOpen: vi.fn() }));
+vi.mock('../backend/alerts', () => ({ alertBreakerOpen }));
+
 import {
   createRpcBreaker,
   attachBreakerTelemetry,
@@ -77,6 +81,22 @@ describe('RPC circuit breaker', () => {
     expect(breaker.opened).toBe(false);
     await driveToOpen(breaker as unknown as CircuitBreaker<unknown[], unknown>);
     expect(breaker.opened).toBe(true);
+
+    breaker.shutdown();
+  });
+
+  it('raises a breaker_open alert when the circuit opens (#824)', async () => {
+    const breaker = createRpcBreaker('test-alert', async () => {
+      throw new Error('upstream down');
+    });
+
+    await driveToOpen(breaker as unknown as CircuitBreaker<unknown[], unknown>);
+
+    expect(alertBreakerOpen).toHaveBeenCalledTimes(1);
+    expect(alertBreakerOpen).toHaveBeenCalledWith(
+      'test-alert',
+      expect.objectContaining({ failures: expect.any(Number) })
+    );
 
     breaker.shutdown();
   });

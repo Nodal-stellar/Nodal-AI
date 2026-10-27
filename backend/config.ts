@@ -269,6 +269,66 @@ const EnvSchema = z.object({
   // Webhook notifications
   WEBHOOK_URL: z.string().url().optional(),
   WEBHOOK_SECRET: z.string().min(1).optional(),
+  SPENDING_WINDOW_MS: z.coerce.number().int().min(0).default(86_400_000),
+  OTLP_ENDPOINT: z.string().url().optional(),
+
+  /**
+   * Per-asset spending limits encoded as a comma-separated string.
+   * Format: "ASSET_CODE:LIMIT[,ASSET_CODE:ISSUER:LIMIT,...]"
+   *
+   * Examples:
+   *   XLM:1000                                           – native XLM only
+   *   XLM:1000,USDC:GA5Z…:500                            – XLM + USDC
+   *   XLM:1000,USDC:GA5Z…:500,ALLOW_UNKNOWN:false        – deny unknown assets
+   *
+   * Rules:
+   *   - "XLM" (no issuer) refers to the native Stellar asset.
+   *   - Custom assets must include the 56-char G-address issuer.
+   *   - If omitted entirely, the global AGENT_SPENDING_LIMIT applies to every asset.
+   *   - Unknown assets (not listed) are DENIED by default unless
+   *     SPENDING_LIMITS_ALLOW_UNKNOWN=true is also set.
+   */
+  SPENDING_LIMITS: z
+    .string()
+    .optional()
+    .refine(
+      (val) => {
+        if (!val) return true;
+        // Validate each entry is either XLM:<limit> or CODE:ISSUER:<limit>
+        const entries = val.split(",");
+        const limitRe = /^[1-9]\d*(\.\d{1,7})?$/;
+        const g56Re   = /^G[A-Z2-7]{55}$/;
+        for (const entry of entries) {
+          const parts = entry.trim().split(":");
+          if (parts.length === 2) {
+            // XLM:<limit> or CODE:<limit>
+            const [, limit] = parts as [string, string];
+            if (!limitRe.test(limit)) return false;
+          } else if (parts.length === 3) {
+            // CODE:ISSUER:<limit>
+            const [, issuer, limit] = parts as [string, string, string];
+            if (!g56Re.test(issuer)) return false;
+            if (!limitRe.test(limit)) return false;
+          } else {
+            return false;
+          }
+        }
+        return true;
+      },
+      {
+        message:
+          "SPENDING_LIMITS must be a comma-separated list of " +
+          "'ASSET_CODE:LIMIT' (for XLM/native) or " +
+          "'ASSET_CODE:ISSUER:LIMIT' (for credit assets), " +
+          "e.g. 'XLM:1000,USDC:GA5Z…:500'",
+      }
+    ),
+
+  /** When true, assets not listed in SPENDING_LIMITS are allowed through (default: denied). */
+  SPENDING_LIMITS_ALLOW_UNKNOWN: z
+    .string()
+    .transform((v) => v.toLowerCase() === "true")
+    .default("false"),
   // Bearer token for the HTTP API (/status, /spending, /metrics, /approvals,
   // /admin/*). Falls back to WEBHOOK_SECRET when unset — deprecated.
   ADMIN_API_TOKEN: z.string().min(1).optional(),
@@ -556,6 +616,24 @@ export interface AgentConfig {
    * Defaults to 1_000_000 (0.1 XLM). Prevents resource-inflated fee attacks.
    */
   readonly MAX_SOROBAN_FEE_STROOPS: number;
+  readonly WEBHOOK_URL?: string;
+  readonly WEBHOOK_SECRET?: string;
+  readonly SPENDING_WINDOW_MS: number;
+  readonly OTLP_ENDPOINT?: string;
+
+  /**
+   * Parsed per-asset spending limits.
+   * Key: canonical asset key — "XLM" for native, or "CODE:ISSUER" for credit assets.
+   * Value: the limit as a string (e.g. "500.0000000").
+   * Empty map means only the global AGENT_SPENDING_LIMIT is used.
+   */
+  readonly SPENDING_LIMITS_MAP: ReadonlyMap<string, string>;
+
+  /**
+   * When true, assets not listed in SPENDING_LIMITS_MAP are allowed through.
+   * When false (default), unlisted assets are denied.
+   */
+  readonly SPENDING_LIMITS_ALLOW_UNKNOWN: boolean;
 
   /**
    * Maximum per-operation inclusion fee in stroops that estimateFee() will
@@ -766,6 +844,21 @@ function parseConfigAndDerive(): AgentConfig {
     }
   }
 
+  // ── Parse per-asset spending limits ────────────────────────────────────────
+  const spendingLimitsMap = new Map<string, string>();
+  if (raw.SPENDING_LIMITS) {
+    for (const entry of raw.SPENDING_LIMITS.split(",")) {
+      const parts = entry.trim().split(":");
+      if (parts.length === 2) {
+        // "NATIVE:1000" or "XLM:1000" — native/code only
+        const [code, limit] = parts as [string, string];
+        spendingLimitsMap.set(code.toUpperCase(), limit);
+      } else if (parts.length === 3) {
+        // "USDC:GA5Z…:500" — credit asset with issuer
+        const [code, issuer, limit] = parts as [string, string, string];
+        spendingLimitsMap.set(`${code.toUpperCase()}:${issuer}`, limit);
+      }
+    }
   // ── HTTP API auth guard ────────────────────────────────────────────────────
   // /status and /spending expose payment history and spending data. Without a
   // token the server would serve them to anyone, so mainnet refuses to start;
@@ -850,6 +943,7 @@ function parseConfigAndDerive(): AgentConfig {
     AGENT_SECRET_KEY: _secret,
     ALLOWED_X402_ORIGINS,
     AGENT_SECRET_KEY_ARN,
+    SPENDING_LIMITS: _rawLimits,
     OTLP_ENDPOINT,
     WEBHOOK_URL,
     WEBHOOK_SECRET,
@@ -870,6 +964,8 @@ function parseConfigAndDerive(): AgentConfig {
     MAX_X402_PAYMENTS_PER_MINUTE: raw.MAX_X402_PAYMENTS_PER_MINUTE,
     X402_NONCE_TTL_MS: raw.X402_NONCE_TTL_MS,
     MAX_SOROBAN_FEE_STROOPS: raw.MAX_SOROBAN_FEE_STROOPS,
+    SPENDING_LIMITS_MAP: spendingLimitsMap,
+    SPENDING_LIMITS_ALLOW_UNKNOWN: raw.SPENDING_LIMITS_ALLOW_UNKNOWN,
     PAYMENT_DESTINATIONS: paymentDestinations,
     X402_ASSET_CONTRACT: x402AssetContract,
     ...(ALLOWED_X402_ORIGINS ? { ALLOWED_X402_ORIGINS } : {}),
@@ -890,7 +986,7 @@ function parseConfigAndDerive(): AgentConfig {
     ...(raw.LLM_BASE_URL ? { LLM_BASE_URL: raw.LLM_BASE_URL } : {}),
     // Secret is captured in closure; never on the object
     agentKeypair: () => _keypair,
-  };
+  } as AgentConfig;
 
   // Startup banner — only safe fields
   process.stdout.write(

@@ -254,6 +254,46 @@ export class PostgresStorage implements Storage {
   nonceStore(): INonceStore {
     return new PostgresNonceStore(this.pool);
   }
+
+  // ─── MPP Sessions ───────────────────────────────────────────────────────────
+
+  async saveMppSession(channelId: string, state: string): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO agent_state (key, value) VALUES ($1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+      [`mpp_session:${channelId}`, state]
+    );
+  }
+
+  async loadMppSession(channelId: string): Promise<string | undefined> {
+    const { rows } = await this.pool.query(
+      `SELECT value FROM agent_state WHERE key = $1`,
+      [`mpp_session:${channelId}`]
+    );
+    return rows[0]?.value;
+  }
+
+  // ─── X402 Rate Limiter ───────────────────────────────────────────────────────
+
+  async saveX402RateRecord(timestamp: number): Promise<void> {
+    await this.pool.query(`INSERT INTO x402_rate_records (timestamp) VALUES ($1)`, [timestamp]);
+  }
+
+  async loadX402RateRecords(sinceMs: number): Promise<number[]> {
+    const { rows } = await this.pool.query(
+      `SELECT timestamp FROM x402_rate_records WHERE timestamp >= $1 ORDER BY timestamp ASC`,
+      [sinceMs]
+    );
+    return rows.map((r: { timestamp: number }) => r.timestamp);
+  }
+
+  async pruneX402RateRecords(cutoffMs: number): Promise<void> {
+    await this.pool.query(`DELETE FROM x402_rate_records WHERE timestamp < $1`, [cutoffMs]);
+  }
+
+  async clearX402RateRecords(): Promise<void> {
+    await this.pool.query(`DELETE FROM x402_rate_records`);
+  }
 }
 
 /**
