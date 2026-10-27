@@ -16,7 +16,7 @@ import {
 import { z } from 'zod';
 import { config, MAINNET_SPENDING_CAP } from '../config';
 import { createAgentSigner, Signer } from '../signer';
-import { logger } from '../logger';
+import { logger } from '../utils/logger';
 import {
   loadAccount,
   prepareSorobanTxWithEvents,

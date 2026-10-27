@@ -34,7 +34,7 @@ import { EventEmitter } from 'events';
 import { createHash, randomUUID } from 'crypto';
 import { rpc } from '@stellar/stellar-sdk';
 import { config, MAINNET_SPENDING_CAP } from './config';
-import { logger } from './logger';
+import { logger } from './utils/logger';
 import {
   saveResult,
   savePendingApproval,
