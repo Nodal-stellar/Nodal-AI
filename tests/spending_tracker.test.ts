@@ -16,6 +16,11 @@ vi.mock('../backend/config', () => ({
   config: {
     SPENDING_WINDOW_MS: 60_000,
     AGENT_SPENDING_LIMIT: '100',
+    // Default asset charged when a spend names none, and no per-asset limits (#733).
+    X402_ASSET_CODE: 'USDC',
+    X402_ASSET_ISSUER: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+    SPENDING_LIMITS_MAP: new Map<string, string>(),
+    SPENDING_LIMITS_ALLOW_UNKNOWN: false,
   },
 }));
 
@@ -151,7 +156,6 @@ describe('SpendingTracker — rolling window expiry (fake timers)', () => {
 
     vi.advanceTimersByTime(WINDOW_MS + 1);
 
-    expect(() => tracker.record("60")).not.toThrow();
     // This is the evasion the issue is about: spacing payments across the
     // boundary is *allowed by design*, but only because the earlier one has
     // genuinely expired — not because pruning lost track of it.

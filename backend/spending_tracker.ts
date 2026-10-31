@@ -414,7 +414,8 @@ export class SpendingTracker {
     // Persist before pushing so a crash right after cannot lose the spend.
     this.persist(entry);
     this.entries.push(entry);
-    this.checkAlerts(key);
+    // Reservations alert when committed (#824), like main's tracker.
+    if (committed) this.checkAlerts(key);
     return entry.id;
   }
 
