@@ -255,6 +255,16 @@ const EnvSchema = z.object({
 
   MAX_SOROBAN_FEE_STROOPS: z.coerce.number().int().min(100).default(1_000_000),
 
+  // Ceiling on the per-operation inclusion fee chosen by estimateFee() (#790),
+  // so surge pricing can never push a classic transaction's fee without bound.
+  MAX_FEE_STROOPS: z.coerce.number().int().min(100).default(100_000),
+
+  // Health check HTTP server
+  HEALTH_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+
+  // Nano node RPC endpoint used by NanoPaymentTool.
+  NANO_RPC_URL: z.string().url().default('http://127.0.0.1:7076'),
+
   // MCP server
   MCP_ALLOW_PAYMENTS: z
     .enum(['true', 'false'])
@@ -269,8 +279,6 @@ const EnvSchema = z.object({
   // Webhook notifications
   WEBHOOK_URL: z.string().url().optional(),
   WEBHOOK_SECRET: z.string().min(1).optional(),
-  SPENDING_WINDOW_MS: z.coerce.number().int().min(0).default(86_400_000),
-  OTLP_ENDPOINT: z.string().url().optional(),
 
   /**
    * Per-asset spending limits encoded as a comma-separated string.
@@ -523,7 +531,7 @@ export interface AgentConfig {
    * ```
    */
   readonly agentKeypair: () => Keypair;
-  readonly ALLOWED_X402_ORIGINS?: string;
+  readonly ALLOWED_X402_ORIGINS?: string | undefined;
   /**
    * Maximum amount a single x402 challenge may request. Challenges above it are rejected.
    * Optional — when unset only AGENT_SPENDING_LIMIT applies.
@@ -535,7 +543,7 @@ export interface AgentConfig {
    * known code (X402_ASSET_CODE) must use its configured issuer.
    */
   readonly X402_ALLOWED_ASSETS?: string | undefined;
-  readonly AGENT_SECRET_KEY_ARN?: string;
+  readonly AGENT_SECRET_KEY_ARN?: string | undefined;
 
   /**
    * When true, use the legacy x402 payment flow (SHA-256(nonce)[0:28] memo).
@@ -546,12 +554,12 @@ export interface AgentConfig {
    * Optional facilitator URL for x402 v2 verification/settlement.
    * When set, the buyer and seller flows use this facilitator.
    */
-  readonly X402_FACILITATOR_URL?: string;
+  readonly X402_FACILITATOR_URL?: string | undefined;
   /**
    * Optional API key for the x402 facilitator.
    * Sent as `Authorization: Bearer <key>` on every facilitator request.
    */
-  readonly X402_FACILITATOR_API_KEY?: string;
+  readonly X402_FACILITATOR_API_KEY?: string | undefined;
 
   /**
    * Which signing backend `createSigner()` returns.
@@ -616,10 +624,6 @@ export interface AgentConfig {
    * Defaults to 1_000_000 (0.1 XLM). Prevents resource-inflated fee attacks.
    */
   readonly MAX_SOROBAN_FEE_STROOPS: number;
-  readonly WEBHOOK_URL?: string;
-  readonly WEBHOOK_SECRET?: string;
-  readonly SPENDING_WINDOW_MS: number;
-  readonly OTLP_ENDPOINT?: string;
 
   /**
    * Parsed per-asset spending limits.
@@ -670,6 +674,9 @@ export interface AgentConfig {
    * Defaults to 3000.
    */
   readonly HEALTH_PORT: number;
+
+  /** Nano node RPC endpoint used by NanoPaymentTool (default: http://127.0.0.1:7076). */
+  readonly NANO_RPC_URL: string;
   readonly CONTRACT_EVENT_POLL_MS?: number | undefined;
   readonly WEBHOOK_URL?: string | undefined;
   readonly WEBHOOK_SECRET?: string | undefined;
@@ -697,21 +704,21 @@ export interface AgentConfig {
    * Optional - when not set, the AI layer is disabled.
    * Values: "openai", "anthropic", "mock"
    */
-  readonly LLM_PROVIDER?: 'openai' | 'anthropic' | 'mock';
+  readonly LLM_PROVIDER?: 'openai' | 'anthropic' | 'mock' | undefined;
 
   /**
    * Model identifier for the LLM provider.
    * Examples: "gpt-4o", "claude-3-sonnet-20240229"
    * Optional - each provider has its own default if not specified.
    */
-  readonly LLM_MODEL?: string;
+  readonly LLM_MODEL?: string | undefined;
 
   /**
    * Base URL for OpenAI-compatible APIs.
    * Useful for local models (Ollama, LM Studio) or proxy services.
    * Only applies when LLM_PROVIDER is "openai".
    */
-  readonly LLM_BASE_URL?: string;
+  readonly LLM_BASE_URL?: string | undefined;
 
   /**
    * Timeout for LLM requests in milliseconds.
@@ -768,8 +775,11 @@ async function fetchSecretFromArn(arn: string): Promise<string> {
   return res.SecretString;
 }
 
-function parseConfigAndDerive(): AgentConfig {
-  const result = EnvSchema.safeParse(process.env);
+function parseConfigAndDerive(
+  env: NodeJS.ProcessEnv = process.env,
+  { announce = true }: { announce?: boolean } = {}
+): AgentConfig {
+  const result = EnvSchema.safeParse(env);
 
   if (!result.success) {
     // Print structured errors — secret values are never echoed
@@ -859,6 +869,8 @@ function parseConfigAndDerive(): AgentConfig {
         spendingLimitsMap.set(`${code.toUpperCase()}:${issuer}`, limit);
       }
     }
+  }
+
   // ── HTTP API auth guard ────────────────────────────────────────────────────
   // /status and /spending expose payment history and spending data. Without a
   // token the server would serve them to anyone, so mainnet refuses to start;
@@ -948,6 +960,7 @@ function parseConfigAndDerive(): AgentConfig {
     WEBHOOK_URL,
     WEBHOOK_SECRET,
     DATABASE_URL,
+    LLM_API_KEY: _llmApiKey, // Secret - never exposed on config
     ...rest
   } = raw;
 
@@ -986,7 +999,9 @@ function parseConfigAndDerive(): AgentConfig {
     ...(raw.LLM_BASE_URL ? { LLM_BASE_URL: raw.LLM_BASE_URL } : {}),
     // Secret is captured in closure; never on the object
     agentKeypair: () => _keypair,
-  } as AgentConfig;
+  };
+
+  if (!announce) return cfg;
 
   // Startup banner — only safe fields
   process.stdout.write(
@@ -1142,18 +1157,46 @@ export function createLLMProvider(): ReturnType<typeof import('./ai/providers').
     return undefined;
   }
 
-  // Dynamically import to avoid circular dependencies
-  const { createLLMProvider: createProvider } = require('./ai/providers');
+  // Lazy require to avoid a circular dependency (ai/providers imports config).
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { createLLMProvider: createProvider } = require('./ai/providers') as typeof import('./ai/providers');
 
   return createProvider({
     provider: providerType,
-    model: process.env.LLM_MODEL,
+    // Empty selects each provider's own default model (`config.model || defaultModel`).
+    model: process.env.LLM_MODEL ?? '',
     apiKey: apiKey || '',
-    baseUrl: process.env.LLM_BASE_URL,
+    ...(process.env.LLM_BASE_URL ? { baseUrl: process.env.LLM_BASE_URL } : {}),
     timeoutMs: parseInt(process.env.LLM_TIMEOUT_MS || '60000', 10),
     maxRetries: 3,
   });
 }
+
+/**
+ * Testnet defaults served when the process has no Stellar configuration at all
+ * (#689) — e.g. docs generation, or a module imported only for its types.
+ *
+ * Built from EnvSchema's own defaults with a throwaway keypair, so it never
+ * holds a real key and cannot drift from the schema. Built on first use.
+ */
+const FALLBACK_CONFIG: AgentConfig = new Proxy({} as AgentConfig, {
+  get(_target, prop, receiver) {
+    _fallbackConfig ??= parseConfigAndDerive(
+      {
+        STELLAR_NETWORK: 'testnet',
+        HORIZON_URL: 'https://horizon-testnet.stellar.org',
+        SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org',
+        X402_ASSET_CODE: 'USDC',
+        X402_ASSET_ISSUER: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+        AGENT_SECRET_KEY: Keypair.random().secret(),
+        AGENT_SPENDING_LIMIT: '100',
+      },
+      { announce: false }
+    );
+    return Reflect.get(_fallbackConfig, prop, receiver);
+  },
+});
+let _fallbackConfig: AgentConfig | undefined;
 
 export const config = new Proxy({} as AgentConfig, {
   get(target, prop, receiver) {
@@ -1191,15 +1234,3 @@ export const config = new Proxy({} as AgentConfig, {
 // (suppressed by @ts-expect-error) to prove the property does not exist on the type.
 // @ts-expect-error — TS2551: Property 'AGENT_SECRET_KEY' does not exist on 'AgentConfig'
 declare const _configTypeGuard: AgentConfig["AGENT_SECRET_KEY"];
-// AgentConfig intentionally omits AGENT_SECRET_KEY.
-// The TypeScript error below proves AGENT_SECRET_KEY is NOT on the AgentConfig
-// type. The false && guard ensures this line is dead code at runtime — the
-// typeof check prevents a ReferenceError since _configTypeGuard is declaration-
-// only and has no runtime binding after TypeScript erasure.
-// @ts-expect-error — AGENT_SECRET_KEY must NOT be accessible on AgentConfig
-if (false) { void (undefined as any as AgentConfig).AGENT_SECRET_KEY; }
-// AgentConfig intentionally omits AGENT_SECRET_KEY via Omit<RawEnv, "AGENT_SECRET_KEY">.
-// The TypeScript assertion below is intentional — it proves AGENT_SECRET_KEY is NOT
-// on the AgentConfig type without emitting any runtime value access.
-type ConfigTypeGuard = AgentConfig;
-void ({} as ConfigTypeGuard);
