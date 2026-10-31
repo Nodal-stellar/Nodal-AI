@@ -82,7 +82,7 @@ export interface GenerationResponse {
   /** Finish reason */
   finishReason: 'stop' | 'length' | 'tool_calls' | 'content_filter' | null;
   /** Tool calls if the model requested function execution */
-  toolCalls?: ToolCall[];
+  toolCalls?: ToolCall[] | undefined;
   /** Usage statistics */
   usage: {
     promptTokens: number;
@@ -169,7 +169,7 @@ export interface SessionTokenUsage {
 export class LLMError extends Error {
   readonly kind: 'configuration' | 'rate_limit' | 'invalid_request' | 'server_error' | 'network_error' | 'timeout';
   readonly provider: string;
-  readonly statusCode?: number;
+  readonly statusCode?: number | undefined;
   readonly isRetryable: boolean;
 
   constructor(
@@ -177,8 +177,8 @@ export class LLMError extends Error {
     provider: string,
     message: string,
     options?: {
-      statusCode?: number;
-      isRetryable?: boolean;
+      statusCode?: number | undefined;
+      isRetryable?: boolean | undefined;
     }
   ) {
     super(message);

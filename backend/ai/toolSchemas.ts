@@ -10,7 +10,7 @@
  */
 
 import { z } from 'zod';
-import { fromZod } from 'zod-to-json-schema';
+import { zodToJsonSchema } from 'zod-to-json-schema';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -51,16 +51,19 @@ export interface ToolSchemaCollection {
 }
 
 // ─── Schema Generator ────────────────────────────────────────────────────────
+/** JSON Schema drafts zod-to-json-schema can emit, mapped to its target names. */
+const SCHEMA_TARGETS = {
+  'draft-07': 'jsonSchema7',
+  'draft-2019-09': 'jsonSchema2019-09',
+} as const;
 
 /**
  * Options for schema generation.
  */
 export interface GenerateSchemaOptions {
-  /** Include internal Zod metadata in the output */
-  includeInternal?: boolean;
   /** Target JSON Schema version (default: draft-07) */
-  targetSchema?: 'draft-04' | 'draft-06' | 'draft-07' | 'draft-2019-09' | 'draft-2020-12';
-  /** Base URL for $id references */
+  targetSchema?: keyof typeof SCHEMA_TARGETS;
+  /** Base path prepended to every $ref the generator emits */
   baseUri?: string;
 }
 
@@ -71,7 +74,7 @@ export interface GenerateSchemaOptions {
  * @returns Collection of tool schemas with metadata
  */
 export function generateToolSchemas(options: GenerateSchemaOptions = {}): ToolSchemaCollection {
-  const { includeInternal = false, targetSchema = 'draft-07', baseUri } = options;
+  const { targetSchema = 'draft-07', baseUri } = options;
 
   // Create a fresh set of tools to get their current schemas
   const tools = createBuiltinTools();
@@ -79,15 +82,9 @@ export function generateToolSchemas(options: GenerateSchemaOptions = {}): ToolSc
   const toolSchemas: ToolSchema[] = tools.map((tool) => {
     // Convert Zod schema to JSON Schema
     // We use the 'zod-to-json-schema' library which handles Zod-specific features
-    const jsonSchema = fromZod(tool.inputSchema as z.ZodType<unknown>, {
-      target: targetSchema,
-      includeInternal,
-      baseUri,
-      // Transform keys to snake_case for consistency
-      transform: (schema) => {
-        // The schema is already in the right format, but we can add transformations here if needed
-        return schema;
-      },
+    const jsonSchema = zodToJsonSchema(tool.inputSchema as z.ZodType<unknown>, {
+      target: SCHEMA_TARGETS[targetSchema],
+      ...(baseUri ? { basePath: [baseUri] } : {}),
     });
 
     return {
@@ -243,30 +240,32 @@ function main(): void {
     const result = validateSchemas();
 
     if (!result.valid) {
-      console.error('Schema validation failed:');
-      result.errors.forEach((err) => console.error(`  - ${err}`));
+      process.stderr.write('Schema validation failed:\n');
+      result.errors.forEach((err) => process.stderr.write(`  - ${err}\n`));
       process.exit(1);
     }
 
-    console.log('Schema validation passed');
-    console.log(`  Total tools: ${result.errors.length}`); // This will be overridden by validateSchemas result
+    process.stdout.write('Schema validation passed\n');
     process.exit(0);
   }
 
   // Generate schemas
   try {
     const outputPath = writeSchemasToFile();
-    console.log(`Generated tool schemas: ${outputPath}`);
+    process.stdout.write(`Generated tool schemas: ${outputPath}\n`);
 
     // Print summary
     const schemas = generateToolSchemas();
-    console.log(`\nSummary:`);
-    console.log(`  Total tools: ${schemas.stats.total_tools}`);
-    console.log(`  Value-moving tools: ${schemas.stats.value_moving_tools}`);
-    console.log(`  Tools with descriptions: ${schemas.stats.tools_with_descriptions}`);
-
+    process.stdout.write(
+      `\nSummary:\n` +
+        `  Total tools: ${schemas.stats.total_tools}\n` +
+        `  Value-moving tools: ${schemas.stats.value_moving_tools}\n` +
+        `  Tools with descriptions: ${schemas.stats.tools_with_descriptions}\n`
+    );
   } catch (err) {
-    console.error('Failed to generate schemas:', err instanceof Error ? err.message : String(err));
+    process.stderr.write(
+      `Failed to generate schemas: ${err instanceof Error ? err.message : String(err)}\n`
+    );
     process.exit(1);
   }
 }

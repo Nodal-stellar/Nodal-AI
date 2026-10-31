@@ -26,8 +26,8 @@ const log = createLogger('llm:openai');
 interface OpenAIMessage {
   role: Message['role'];
   content: string;
-  name?: string;
-  tool_call_id?: string;
+  name?: string | undefined;
+  tool_call_id?: string | undefined;
 }
 
 interface OpenAIToolCall {

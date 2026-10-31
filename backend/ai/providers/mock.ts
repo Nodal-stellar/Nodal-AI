@@ -37,7 +37,7 @@ export interface MockResponse {
 /**
  * Default mock responses for common scenarios.
  */
-export const DEFAULT_MOCK_RESPONSES: Record<string, MockResponse> = {
+export const DEFAULT_MOCK_RESPONSES = {
   // Simple text response
   default: {
     content: 'I understand your request. How can I help you with Stellar payments?',
@@ -80,7 +80,7 @@ export const DEFAULT_MOCK_RESPONSES: Record<string, MockResponse> = {
     content: 'I encountered an error processing your request.',
     finishReason: 'stop',
   },
-};
+} satisfies Record<string, MockResponse>;
 
 // ─── Mock Provider ─────────────────────────────────────────────────────────
 

@@ -75,7 +75,7 @@ const INJECTION_PATTERNS = [
 const INSTRUCTION_LIKE_PATTERNS = [
   // Command-like patterns
   /^(?:please\s+)?(?:do|execute|run|perform|complete)\s+\w+/im,
-  /^[\"\']?(?:do|execute|run|complete|perform)\s+the\s+following/im,
+  /^["']?(?:do|execute|run|complete|perform)\s+the\s+following/im,
   /^step\s+\d+:/m,
   /^command:/m,
   /^instruction:/m,
@@ -247,7 +247,7 @@ export function sanitizeOutput(
   output: string,
   options: SanitizeOutputOptions
 ): SanitizeOutputResult {
-  const { source, stripInstructions = true, markAsUntrusted = true } = options;
+  const { source, stripInstructions = true, markAsUntrusted: markUntrusted = true } = options;
 
   let sanitized = output;
   let instructionsStripped = false;
@@ -264,14 +264,14 @@ export function sanitizeOutput(
   // Strip instruction-like content
   if (stripInstructions) {
     const beforeLength = sanitized.length;
-    for (const pattern of INJECTION_LIKE_PATTERNS) {
+    for (const pattern of INSTRUCTION_LIKE_PATTERNS) {
       sanitized = sanitized.replace(pattern, '[INSTRUCTION STRIPPED]');
     }
     instructionsStripped = sanitized.length !== beforeLength;
   }
 
   // Mark as untrusted data
-  if (markAsUntrusted) {
+  if (markUntrusted) {
     sanitized = markAsUntrusted(sanitized, source);
   }
 
@@ -437,7 +437,7 @@ export function guardrailsMiddleware(
       }
 
       // Attach sanitized prompt to request for downstream use
-      (req as Record<string, unknown>).sanitizedPrompt = result.sanitized;
+      (req as Request & { sanitizedPrompt?: string }).sanitizedPrompt = result.sanitized;
     }
   }
 

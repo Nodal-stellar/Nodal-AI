@@ -26,7 +26,7 @@ const log = createLogger('llm:anthropic');
 interface AnthropicMessage {
   role: Message['role'];
   content: string | Array<AnthropicContentBlock>;
-  name?: string;
+  name?: string | undefined;
 }
 
 type AnthropicContentBlock =
