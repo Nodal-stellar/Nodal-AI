@@ -5,12 +5,10 @@
  * including the secondary mainnet spending cap guard.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { PayFiAgent, _resetSpendingTrackerForTests } from "../backend/agent";
-import { StellarPaymentTool } from "../backend/tools/StellarPaymentTool";
 import { describe, it, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   PayFiAgent,
+  _resetSpendingTrackerForTests,
   spendingTracker,
   VALUE_MOVING_TASK_TYPES,
   type TaskType,
@@ -46,6 +44,12 @@ import {
   decideApproval,
   expirePendingApprovals,
 } from '../backend/persistence';
+
+// Tool modules are mocked, so their input schemas are too: the registry just
+// needs something with a parse() that hands the payload through unchanged.
+const { passthroughSchema } = vi.hoisted(() => ({
+  passthroughSchema: { parse: (payload: unknown) => payload },
+}));
 
 vi.mock('../backend/tools/StellarPaymentTool', () => ({
   PaymentInputSchema: passthroughSchema,
@@ -213,8 +217,9 @@ vi.mock('../backend/webhook', () => ({
 
 vi.mock('../backend/persistence', () => ({
   saveResult: vi.fn(),
-  saveSpendingRecord: vi.fn(),
-  deleteSpendingRecord: vi.fn(),
+  saveTrackedSpendingRecord: vi.fn(),
+  deleteTrackedSpendingRecord: vi.fn(),
+  clearSpendingRecords: vi.fn(),
   getSpendingRecordsSince: vi.fn(() => []),
   pruneSpendingRecords: vi.fn(),
   appendAuditEntry: vi.fn(),
@@ -269,12 +274,11 @@ vi.mock('../backend/config', () => ({
     MAX_RETRIES: 3,
     RETRY_DELAY_MS: 100,
     // Set above MAINNET_SPENDING_CAP to exercise the secondary runtime guard
-    AGENT_SPENDING_LIMIT: "15000",
+    AGENT_SPENDING_LIMIT: '15000',
     SPENDING_LIMITS_MAP: new Map<string, string>(),
     SPENDING_LIMITS_ALLOW_UNKNOWN: true,
     SPENDING_WINDOW_MS: 86_400_000,
-    MAX_CONCURRENT_TASKS: 10, // Set above MAINNET_SPENDING_CAP to exercise the secondary runtime guard
-    AGENT_SPENDING_LIMIT: '15000',
+    MAX_CONCURRENT_TASKS: 10,
     PAYMENT_DESTINATION_POLICY: 'open',
     PAYMENT_DESTINATIONS: [],
     agentKeypair: () => ({
@@ -1092,11 +1096,6 @@ describe('PayFiAgent — payload sanitisation', () => {
     expect(result.error).not.toContain('SABCDEFGHIJKLMNOPQRSTUVWXYZ234567');
   });
 
-  it("recursively redacts nested sensitive keys in deeply nested objects", async () => {
-    const mockInstance = vi.mocked(StellarPaymentTool).mock.results[0]!.value;
-    mockInstance.execute.mockRejectedValueOnce(
-      new Error("simulated nested payload failure")
-    );
   it('recursively redacts nested sensitive keys in deeply nested objects', async () => {
     const mockInstance = vi.mocked(StellarPaymentTool).mock.results[0]?.value;
     if (!mockInstance) throw new Error('Mock instance not found');
@@ -1126,11 +1125,6 @@ describe('PayFiAgent — payload sanitisation', () => {
     expect(result.error).toBe('simulated nested payload failure');
   });
 
-  it("includes errorType in AgentResult for structured errors", async () => {
-    const mockInstance = vi.mocked(StellarPaymentTool).mock.results[0]!.value;
-    mockInstance.execute.mockRejectedValueOnce(
-      new ValidationError("Invalid payment parameters")
-    );
   it('includes errorType in AgentResult for structured errors', async () => {
     const mockInstance = vi.mocked(StellarPaymentTool).mock.results[0]?.value;
     if (!mockInstance) throw new Error('Mock instance not found');
