@@ -24,8 +24,10 @@ import { ValidationError } from '../errors';
 import { createLogger } from '../utils/logger';
 import { SubmitResultSchema, buildMemo } from './StellarPaymentTool';
 import { SOROBAN_TX_TIMEOUT } from './SorobanInvokeTool';
-import { stellarPublicKeySchema } from '../utils/stellarSchemas';
+import { baseAccountId } from '../utils/stellarSchemas';
 import { assertDestinationReady } from '../utils/destinationPreflight';
+import { paymentDestinationSchema, resolveDestination } from '../utils/destination';
+import { estimateFee, isInsufficientFeeError, submitFeeBumped } from '../fees';
 import { toStroops, fromStroops } from '../utils/amount';
 
 const log = createLogger('path-payment');
