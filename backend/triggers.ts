@@ -8,7 +8,7 @@
 import { PayFiAgent, AgentTask } from './agent';
 import { config } from './config';
 import { createLogger } from './utils/logger';
-import { db } from './db/client';
+import { getDb } from './persistence';
 
 const log = createLogger('triggers');
 
@@ -44,10 +44,12 @@ export interface Trigger {
  * Persist trigger to database.
  */
 async function saveTrigger(trigger: Trigger): Promise<void> {
-  await db.execute(
-    `INSERT OR REPLACE INTO triggers (id, source, filter, task, enabled, created_at, last_fired_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [
+  getDb()
+    .prepare(
+      `INSERT OR REPLACE INTO triggers (id, source, filter, task, enabled, created_at, last_fired_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
       trigger.id,
       trigger.source,
       JSON.stringify(trigger.filter),
@@ -55,8 +57,7 @@ async function saveTrigger(trigger: Trigger): Promise<void> {
       trigger.enabled ? 1 : 0,
       trigger.createdAt,
       trigger.lastFiredAt ?? null,
-    ]
-  );
+    );
 }
 
 /**
@@ -64,7 +65,7 @@ async function saveTrigger(trigger: Trigger): Promise<void> {
  */
 async function loadTriggers(): Promise<Trigger[]> {
   try {
-    const rows = await db.select<Array<{
+    const rows = getDb().prepare('SELECT * FROM triggers').all() as Array<{
       id: string;
       source: string;
       filter: string;
@@ -72,7 +73,7 @@ async function loadTriggers(): Promise<Trigger[]> {
       enabled: number;
       created_at: string;
       last_fired_at: string | null;
-    }>>('SELECT * FROM triggers');
+    }>;
     
     return rows.map(row => ({
       id: row.id,
@@ -81,7 +82,7 @@ async function loadTriggers(): Promise<Trigger[]> {
       task: JSON.parse(row.task),
       enabled: row.enabled === 1,
       createdAt: row.created_at,
-      lastFiredAt: row.last_fired_at ?? undefined,
+      ...(row.last_fired_at !== null ? { lastFiredAt: row.last_fired_at } : {}),
     }));
   } catch {
     // Table doesn't exist yet
@@ -94,19 +95,12 @@ async function loadTriggers(): Promise<Trigger[]> {
  */
 async function recordTriggerFired(triggerId: string, eventId: string): Promise<boolean> {
   const key = `trigger:${triggerId}:event:${eventId}`;
-  const existing = await db.select<Array<{ key: string }>>(
-    'SELECT key FROM trigger_events WHERE key = ?',
-    [key]
-  );
-  
-  if (existing.length > 0) return false; // Already fired for this event
-  
-  await db.execute(
-    'INSERT INTO trigger_events (key, fired_at) VALUES (?, ?)',
-    [key, new Date().toISOString()]
-  );
-  
-  return true;
+  // One atomic statement: of two concurrent deliveries of the same event only
+  // one inserts the row, so a check-then-insert race cannot fire it twice.
+  const info = getDb()
+    .prepare('INSERT OR IGNORE INTO trigger_events (key, fired_at) VALUES (?, ?)')
+    .run(key, new Date().toISOString());
+  return info.changes === 1; // 0 = already fired for this event
 }
 
 /**
@@ -259,7 +253,7 @@ export class TriggerManager {
    */
   async deleteTrigger(id: string): Promise<void> {
     this.triggers.delete(id);
-    await db.execute('DELETE FROM triggers WHERE id = ?', [id]);
+    getDb().prepare('DELETE FROM triggers WHERE id = ?').run(id);
     log.info({ triggerId: id }, 'Trigger deleted');
   }
 

@@ -2,11 +2,10 @@
  * backend/mcp/server.ts - Add npx nodal-ai mcp command entry
  */
 
+import { PayFiAgent } from '../agent';
 import { startMCPServer, startMCPHTTPServer } from './server';
 
 if (require.main === module) {
-  const { PayFiAgent } = require('../agent');
-  const { config } = require('../config');
 
   const agent = new PayFiAgent();
   const transport = process.env.MCP_TRANSPORT || 'stdio';

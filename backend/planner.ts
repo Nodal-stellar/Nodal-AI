@@ -196,8 +196,8 @@ function validateTaskPolicy(task: AgentTask): { valid: boolean; reason?: string 
  */
 export class Planner {
   private agent: PayFiAgent;
-  private llmEndpoint?: string;
-  private llmApiKey?: string;
+  private llmEndpoint?: string | undefined;
+  private llmApiKey?: string | undefined;
 
   constructor(agent: PayFiAgent, options: { llmEndpoint?: string; llmApiKey?: string } = {}) {
     this.agent = agent;
