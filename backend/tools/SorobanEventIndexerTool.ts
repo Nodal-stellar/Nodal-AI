@@ -61,7 +61,7 @@ export class SorobanEventIndexerTool {
     ];
 
     const response = await withBackoffGuard(() =>
-      withLocalRetry(
+      withLocalRetry<rpc.Api.GetEventsResponse>(
         () =>
           (rpcClient as any).sorobanServer.getEvents({
             startLedger: input.fromLedger,

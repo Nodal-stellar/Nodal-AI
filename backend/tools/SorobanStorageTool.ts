@@ -3,7 +3,7 @@
  * Tool for inspecting Soroban smart contract persistent storage entries.
  */
 
-import { Address, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
+import { Address, nativeToScVal, rpc, scValToNative, xdr } from '@stellar/stellar-sdk';
 import { z } from 'zod';
 import { config } from '../config';
 import { createLogger } from '../utils/logger';
@@ -182,7 +182,7 @@ export class SorobanStorageTool {
     });
 
     const response = await withBackoffGuard(() =>
-      withLocalRetry(
+      withLocalRetry<rpc.Api.GetLedgerEntriesResponse>(
         () => (rpcClient as any).sorobanServer.getLedgerEntries(...ledgerKeys),
         config.MAX_RETRIES,
         config.RETRY_DELAY_MS

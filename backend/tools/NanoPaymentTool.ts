@@ -17,6 +17,7 @@ import { z } from 'zod';
 import * as crypto from 'crypto';
 import { ValidationError } from '../errors';
 import { createLogger } from '../utils/logger';
+import { config } from '../config';
 
 const log = createLogger('nano-payment-tool');
 
@@ -68,11 +69,11 @@ export interface NanoAccountInfoResponse {
 
 export class NanoPaymentTool {
   private defaultRpcUrl: string;
-  private defaultSeed?: string;
+  private defaultSeed?: string | undefined;
 
   constructor(defaultSeed?: string, defaultRpcUrl?: string) {
     this.defaultSeed = defaultSeed;
-    this.defaultRpcUrl = defaultRpcUrl || process.env.NANO_RPC_URL || 'http://127.0.0.1:7076';
+    this.defaultRpcUrl = defaultRpcUrl || config.NANO_RPC_URL;
   }
 
   /**

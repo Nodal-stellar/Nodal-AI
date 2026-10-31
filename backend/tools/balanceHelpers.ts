@@ -10,12 +10,12 @@ import type { Horizon } from '@stellar/stellar-sdk';
  */
 export interface TypedBalance {
   assetType: 'native' | 'credit4' | 'credit12';
-  assetCode?: string;
-  assetIssuer?: string;
+  assetCode?: string | undefined;
+  assetIssuer?: string | undefined;
   balance: string;
-  limit?: string;
-  isAuthorized?: boolean;
-  isAuthorizedToMaintainLiabilities?: boolean;
+  limit?: string | undefined;
+  isAuthorized?: boolean | undefined;
+  isAuthorizedToMaintainLiabilities?: boolean | undefined;
 }
 
 /**
