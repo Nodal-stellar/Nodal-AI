@@ -153,14 +153,16 @@ export function nodalPaywall(
   const payTo = opts.payTo ?? config.AGENT_PUBLIC_KEY;
 
   // Build the facilitator client.  When an API key is configured we pass a
-  // createAuthHeaders factory; the path argument lets us return per-endpoint
-  // headers in the future (e.g. different keys for /verify vs /settle).
+  // createAuthHeaders factory, which returns headers keyed by facilitator
+  // endpoint (a flat headers object is rejected by @x402/core).
   const facilitatorClient = new HTTPFacilitatorClient({
     url: facilitatorUrl,
     ...(apiKey
       ? {
-          createAuthHeaders: (_path: string) =>
-            Promise.resolve({ headers: { Authorization: `Bearer ${apiKey}` } }),
+          createAuthHeaders: () => {
+            const headers = { Authorization: `Bearer ${apiKey}` };
+            return Promise.resolve({ verify: headers, settle: headers, supported: headers });
+          },
         }
       : {}),
   });
@@ -197,7 +199,6 @@ export function nodalPaywall(
 
 // ─── OpenAPI discovery document (Issue #781) ──────────────────────────────────
 
-import type { IncomingMessage, ServerResponse } from 'http';
 
 /** Where the discovery document is served. */
 export const OPENAPI_DISCOVERY_PATH = '/.well-known/openapi.json';

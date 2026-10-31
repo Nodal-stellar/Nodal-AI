@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'crypto';
+import type { Keypair } from '@stellar/stellar-sdk';
 import { config, AgentConfig } from '../backend/config';
 import { X402PaymentTool } from '../backend/tools/X402PaymentTool';
 import { createX402Middleware } from '../backend/x402/server';
@@ -20,12 +21,11 @@ vi.mock('../backend/config', () => {
     STELLAR_NETWORK: 'testnet',
     HORIZON_URL: 'https://horizon-testnet.stellar.org',
     SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org',
-    AGENT_SECRET_KEY: 'SADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP54X',
     AGENT_PUBLIC_KEY: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
     agentKeypair: () => ({
       publicKey: () => 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
       secret: () => 'SADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP54X',
-    }),
+    }) as unknown as Keypair,
     DB_PATH: ':memory:',
     STORAGE_BACKEND: 'sqlite' as const,
     X402_ASSET_CODE: 'USDC',
@@ -72,6 +72,9 @@ vi.mock('../backend/config', () => {
     // New x402 v2 config fields
     X402_USE_LEGACY: false,
     X402_FACILITATOR_URL: 'https://facilitator.example.com',
+    SPENDING_LIMITS_MAP: new Map<string, string>(),
+    SPENDING_LIMITS_ALLOW_UNKNOWN: false,
+    NANO_RPC_URL: 'http://127.0.0.1:7076',
   };
 
   return {
@@ -308,7 +311,9 @@ describe('x402 v2 Interoperability', () => {
       const { ExactStellarScheme } = await import('@x402/stellar');
       expect(ExactStellarScheme).toHaveBeenCalled();
       
-      const instance = ExactStellarScheme.mock.instances[0];
+      const instance = vi.mocked(ExactStellarScheme).mock.instances[0] as unknown as {
+        facilitatorUrl?: string;
+      };
       expect(instance.facilitatorUrl).toBe('https://facilitator.example.com');
     });
 
@@ -391,7 +396,9 @@ describe('x402 v2 Interoperability', () => {
     it('should validate X402_FACILITATOR_URL as valid URL', async () => {
       process.env.X402_FACILITATOR_URL = 'not-a-url';
       
-      expect(() => (await import('../backend/config')).config).toThrow();
+      await expect(
+        import('../backend/config').then((m) => m.config.X402_FACILITATOR_URL)
+      ).rejects.toThrow();
     });
 
     it('should accept valid URL for X402_FACILITATOR_URL', async () => {
@@ -426,7 +433,7 @@ describe('x402 v2 Interoperability', () => {
         signedAt: new Date().toISOString(),
       });
       
-      tool.respondV2 = respondV2Mock;
+      (tool as X402PaymentTool & { respondV2?: typeof respondV2Mock }).respondV2 = respondV2Mock;
       
       const challenge = createV2Challenge();
       await tool.respond(challenge);

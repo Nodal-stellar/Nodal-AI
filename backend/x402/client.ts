@@ -102,7 +102,7 @@ class NodalClientStellarSigner implements ClientStellarSigner {
     // Derive the ledger expiry: current ledger + buffer
     let validUntilLedgerSeq: number;
     try {
-      const latestLedger = await sorobanRpc.getLatestLedger();
+      const latestLedger = await sorobanServer.getLatestLedger();
       validUntilLedgerSeq = latestLedger.sequence + DEFAULT_AUTH_EXPIRY_LEDGERS;
     } catch {
       // If we cannot fetch the ledger, use a reasonable absolute value.
@@ -241,7 +241,7 @@ export interface X402FetchResult {
    * confirmed the payment.  `undefined` when no payment was required or the
    * server did not return a settlement header.
    */
-  settlement?: SettleResponse;
+  settlement?: SettleResponse | undefined;
 }
 
 /**
