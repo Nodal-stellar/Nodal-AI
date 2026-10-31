@@ -98,10 +98,6 @@ async function pollTx(
   for (let i = 0; i < maxAttempts; i++) {
     await new Promise((r) => setTimeout(r, intervalMs));
     const status = await server.getTransaction(hash);
-    if (status.status === "SUCCESS")
-      return status as rpc.Api.GetSuccessfulTransactionResponse;
-    if (status.status === "FAILED")
-      throw new Error(`Transaction failed: ${hash}`);
     if (status.status === 'SUCCESS') return status as rpc.Api.GetSuccessfulTransactionResponse;
     if (status.status === 'FAILED') throw new Error(`Transaction failed: ${hash}`);
   }
@@ -436,8 +432,6 @@ describe.skipIf(process.env.RUN_E2E !== 'true' || process.env.RUN_E2E_LEGACY !==
 
     const deployResult = await sendTx(sorobanServer, deployTx, deployerKp);
     contractId = (deployResult as any).returnValue?.address()?.contractId().toString("hex");
-    const deployResult = await sendTx(sorobanServer, deployTx);
-    contractId = (deployResult as any).returnValue?.address()?.contractId().toString('hex');
     expect(contractId).toBeDefined();
   }, 120_000);
 
@@ -476,12 +470,6 @@ describe.skipIf(process.env.RUN_E2E !== 'true' || process.env.RUN_E2E_LEGACY !==
     if (!contractId) return;
 
     const balanceBefore = await xlmBalance(recipientKp.publicKey());
-    const balanceBefore = await axios
-      .get(`${HORIZON_URL}/accounts/${recipientKp.publicKey()}`)
-      .then((r) => {
-        const xlm = r.data.balances.find((b: any) => b.asset_type === 'native');
-        return parseFloat(xlm?.balance ?? '0');
-      });
 
     const account = await sorobanServer.getAccount(deployerKp.publicKey());
     const tx = new TransactionBuilder(account, {
@@ -505,14 +493,6 @@ describe.skipIf(process.env.RUN_E2E !== 'true' || process.env.RUN_E2E_LEGACY !==
       .build();
 
     await expect(sendTx(sorobanServer, tx, deployerKp)).resolves.toBeDefined();
-    await expect(sendTx(sorobanServer, tx)).resolves.toBeDefined();
-
-    const balanceAfter = await axios
-      .get(`${HORIZON_URL}/accounts/${recipientKp.publicKey()}`)
-      .then((r) => {
-        const xlm = r.data.balances.find((b: any) => b.asset_type === 'native');
-        return parseFloat(xlm?.balance ?? '0');
-      });
 
     const balanceAfter = await xlmBalance(recipientKp.publicKey());
     expect(balanceAfter).toBeGreaterThan(balanceBefore);
@@ -526,12 +506,6 @@ describe.skipIf(process.env.RUN_E2E !== 'true' || process.env.RUN_E2E_LEGACY !==
     await new Promise((r) => setTimeout(r, 2000));
 
     const balanceBefore = await xlmBalance(recipientKp.publicKey());
-    const balanceBefore = await axios
-      .get(`${HORIZON_URL}/accounts/${recipientKp.publicKey()}`)
-      .then((r) => {
-        const xlm = r.data.balances.find((b: any) => b.asset_type === 'native');
-        return parseFloat(xlm?.balance ?? '0');
-      });
 
     const account = await sorobanServer.getAccount(deployerKp.publicKey());
     const initTx = new TransactionBuilder(account, {
@@ -582,14 +556,6 @@ describe.skipIf(process.env.RUN_E2E !== 'true' || process.env.RUN_E2E_LEGACY !==
       .build();
 
     await expect(sendTx(sorobanServer, releaseTx, arbiterKp)).resolves.toBeDefined();
-    await expect(sendTx(sorobanServer, releaseTx)).resolves.toBeDefined();
-
-    const balanceAfter = await axios
-      .get(`${HORIZON_URL}/accounts/${recipientKp.publicKey()}`)
-      .then((r) => {
-        const xlm = r.data.balances.find((b: any) => b.asset_type === 'native');
-        return parseFloat(xlm?.balance ?? '0');
-      });
 
     const balanceAfter = await xlmBalance(recipientKp.publicKey());
     expect(balanceAfter).toBeGreaterThan(balanceBefore);
@@ -603,12 +569,6 @@ describe.skipIf(process.env.RUN_E2E !== 'true' || process.env.RUN_E2E_LEGACY !==
     await new Promise((r) => setTimeout(r, 2000));
 
     const balanceBefore = await xlmBalance(refundKp.publicKey());
-    const balanceBefore = await axios
-      .get(`${HORIZON_URL}/accounts/${refundKp.publicKey()}`)
-      .then((r) => {
-        const xlm = r.data.balances.find((b: any) => b.asset_type === 'native');
-        return parseFloat(xlm?.balance ?? '0');
-      });
 
     const account = await sorobanServer.getAccount(refundKp.publicKey());
     const initTx = new TransactionBuilder(account, {
@@ -661,14 +621,6 @@ describe.skipIf(process.env.RUN_E2E !== 'true' || process.env.RUN_E2E_LEGACY !==
       .build();
 
     await expect(sendTx(sorobanServer, refundTx, refundKp)).resolves.toBeDefined();
-    await expect(sendTx(sorobanServer, refundTx)).resolves.toBeDefined();
-
-    const balanceAfter = await axios
-      .get(`${HORIZON_URL}/accounts/${refundKp.publicKey()}`)
-      .then((r) => {
-        const xlm = r.data.balances.find((b: any) => b.asset_type === 'native');
-        return parseFloat(xlm?.balance ?? '0');
-      });
 
     const balanceAfter = await xlmBalance(refundKp.publicKey());
     expect(balanceAfter).toBeGreaterThan(balanceBefore);
@@ -789,6 +741,4 @@ describe.skipIf(process.env.RUN_E2E !== 'true' || process.env.RUN_E2E_LEGACY !==
 
     await expect(sendTx(sorobanServer, refundTx, depositorKp)).rejects.toThrow();
   }, 120_000);
-  });
 });
-

@@ -69,6 +69,13 @@ describe('backend/index.ts graceful shutdown', () => {
     });
   }
 
+  /** Invoke the handler index.ts registered for `signal`. */
+  function fire(signal: string): void {
+    const handler = handlers[signal];
+    if (!handler) throw new Error(`no ${signal} handler registered`);
+    handler();
+  }
+
   beforeEach(() => {
     vi.resetModules();
     handlers = {};
@@ -85,7 +92,7 @@ describe('backend/index.ts graceful shutdown', () => {
     async (signal) => {
       await bootEntryPoint();
 
-      handlers[signal]();
+      fire(signal);
       await vi.waitFor(() => expect(exitSpy).toHaveBeenCalled());
 
       expect(mocks.drain).toHaveBeenCalledTimes(1);
@@ -103,7 +110,7 @@ describe('backend/index.ts graceful shutdown', () => {
   it('tears resources down in order: drain → pending tasks → health server → db → telemetry', async () => {
     await bootEntryPoint();
 
-    handlers.SIGTERM();
+    fire('SIGTERM');
     await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(0));
 
     const order = [
@@ -121,9 +128,9 @@ describe('backend/index.ts graceful shutdown', () => {
   it('ignores repeated signals once shutdown has started', async () => {
     await bootEntryPoint();
 
-    handlers.SIGTERM();
-    handlers.SIGINT();
-    handlers.SIGTERM();
+    fire('SIGTERM');
+    fire('SIGINT');
+    fire('SIGTERM');
     await vi.waitFor(() => expect(exitSpy).toHaveBeenCalled());
 
     expect(mocks.healthServerClose).toHaveBeenCalledTimes(1);
@@ -138,7 +145,7 @@ describe('backend/index.ts graceful shutdown', () => {
     );
     await bootEntryPoint();
 
-    handlers.SIGTERM();
+    fire('SIGTERM');
     await vi.waitFor(() => expect(exitSpy).toHaveBeenCalled());
 
     expect(mocks.healthServerClose).toHaveBeenCalledTimes(1);
