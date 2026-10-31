@@ -29,6 +29,8 @@ export interface Signer {
     validUntilLedgerSeq: number,
     networkPassphrase?: string
   ): Promise<xdr.SorobanAuthorizationEntry>;
+  /** Ed25519 signature over arbitrary bytes, e.g. an off-chain MPP channel commitment. */
+  sign(data: Buffer): Buffer;
 }
 
 /**
@@ -57,6 +59,10 @@ export class KeypairSigner implements Signer {
     networkPassphrase?: string
   ): Promise<xdr.SorobanAuthorizationEntry> {
     return authorizeEntry(entry, this.getKeypair(), validUntilLedgerSeq, networkPassphrase);
+  }
+
+  sign(data: Buffer): Buffer {
+    return this.getKeypair().sign(data);
   }
 }
 
