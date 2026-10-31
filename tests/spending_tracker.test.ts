@@ -19,11 +19,6 @@ vi.mock('../backend/config', () => ({
   },
 }));
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-// ─── Existing window-boundary tests (#243) ────────────────────────────────────
-
-describe("SpendingTracker window boundary", () => {
 const WINDOW_MS = 60_000; // 1 minute — passed explicitly to each tracker
 
 // ─── Basic record / limit checks ─────────────────────────────────────────────
