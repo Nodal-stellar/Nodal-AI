@@ -1,11 +1,13 @@
 /**
  * backend/persistence.ts
  *
- * SQLite-backed persistence for:
- *   1. AgentResult audit log  (agent_results table)
- *   2. SpendingTracker records (spending_records table) — used for rollback-safe
- *      persistence so that rolled-back reservations are not re-loaded after a
- *      process restart.
+ * SQLite-backed persistence for PayFiAgent:
+ *   1. AgentResult audit trail (agent_results)
+ *   2. SpendingTracker's rolling window (spending_records) — reservations are
+ *      addressable by id so a rolled-back spend is deleted rather than
+ *      reloaded after a process restart (#731).
+ *   3. The tamper-evident audit log, agent state, approvals, idempotency keys
+ *      and x402 rate records.
  *
  * The DB path is configured via DB_PATH (default: ./agent.db).
  * Pass ":memory:" for in-process testing via _setDb().
@@ -18,27 +20,8 @@ import { migrateSqlite } from './db/migrate';
 
 export type PersistedResult = AgentResult & { timestamp: string };
 
-/** A row in the spending_records table. */
-export interface SpendingRecord {
-  /** Unique reservation id — passed through from SpendingTracker.reserve(). */
-  readonly id: string;
-  /** ISO-8601 timestamp of when the reservation was created. */
-  readonly timestamp: string;
-  /** Amount as a canonical 7-decimal-place string (e.g. "100.0000000"). */
-  readonly amount: string;
-  /** Asset key: "XLM" for native, "CODE:ISSUER" for credit assets. */
-  readonly assetKey: string;
-}
-
 let _db: Database.Database | null = null;
 
-function getDb(): Database.Database {
-  if (!_db) {
-    // Lazy import of config so that tests can inject via _setDb() before any DB access
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { config } = require("./config") as typeof import("./config");
-    _db = new Database(config.DB_PATH);
-    initSchema(_db);
 /**
  * Bring the schema up to date by applying the numbered migrations in
  * `backend/db/migrations/` (#821).
@@ -48,106 +31,7 @@ function getDb(): Database.Database {
  * cannot drift apart.
  */
 function applySchema(db: Database.Database): void {
-  db.exec(`
-      CREATE TABLE IF NOT EXISTS agent_results (
-        id            INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp     TEXT    NOT NULL,
-        taskType      TEXT    NOT NULL,
-        success       INTEGER NOT NULL,
-        data          TEXT,
-        error         TEXT,
-        correlationId TEXT
-      )
-    `);
-  // Rolling spending window (#372). Kept here so the tracker survives a
-  // restart instead of silently resetting its cumulative total to zero.
-  db.exec(`
-      CREATE TABLE IF NOT EXISTS spending_records (
-        id        INTEGER PRIMARY KEY AUTOINCREMENT,
-        amount    REAL    NOT NULL,
-        timestamp INTEGER NOT NULL
-      )
-    `);
-  db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_spending_records_timestamp
-        ON spending_records (timestamp)
-    `);
-  // Operator-controlled agent state (e.g. the kill switch), kept across restarts.
-  db.exec(`
-      CREATE TABLE IF NOT EXISTS agent_state (
-        key   TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      )
-    `);
-  // Event-driven triggers for autonomous PayFi
-  db.exec(`
-      CREATE TABLE IF NOT EXISTS triggers (
-        id          TEXT PRIMARY KEY,
-        source      TEXT NOT NULL,
-        filter      TEXT NOT NULL,
-        task        TEXT NOT NULL,
-        enabled     INTEGER NOT NULL DEFAULT 1,
-        created_at  TEXT NOT NULL,
-        last_fired_at TEXT
-      )
-    `);
-  // Trigger event dedupe - prevents double execution on stream replay
-  db.exec(`
-      CREATE TABLE IF NOT EXISTS trigger_events (
-        key       TEXT PRIMARY KEY,
-        fired_at  TEXT NOT NULL
-  // Value-moving tasks held for a human decision (#736).
-  db.exec(`
-      CREATE TABLE IF NOT EXISTS pending_approvals (
-        id            TEXT    PRIMARY KEY,
-        taskType      TEXT    NOT NULL,
-        payload       TEXT    NOT NULL,
-        amount        TEXT    NOT NULL,
-        correlationId TEXT,
-        status        TEXT    NOT NULL,
-        createdAt     INTEGER NOT NULL,
-        expiresAt     INTEGER NOT NULL,
-        decidedAt     INTEGER
-      )
-    `);
-  // One row per approval decision (approved / denied / expired).
-  db.exec(`
-      CREATE TABLE IF NOT EXISTS approval_audit_log (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        approvalId TEXT    NOT NULL,
-        decision   TEXT    NOT NULL,
-        ts         INTEGER NOT NULL
-      )
-    `);
-  // Idempotent migration for databases created before correlationId existed.
-  const cols = db.prepare(`PRAGMA table_info(agent_results)`).all() as Array<{ name: string }>;
-  if (!cols.some((c) => c.name === 'correlationId')) {
-    db.exec(`ALTER TABLE agent_results ADD COLUMN correlationId TEXT`);
-  }
-  // Migration for errorType column
-  if (!cols.some((c) => c.name === 'errorType')) {
-    db.exec(`ALTER TABLE agent_results ADD COLUMN errorType TEXT`);
-  }
-  // Migration for durationMs column
-  if (!cols.some((c) => c.name === 'durationMs')) {
-    db.exec(`ALTER TABLE agent_results ADD COLUMN durationMs INTEGER`);
-  }
-  // Idempotency keys table (#payment-idempotency)
-  db.exec(`
-      CREATE TABLE IF NOT EXISTS idempotency_keys (
-        key             TEXT PRIMARY KEY,
-        payloadHash     TEXT NOT NULL,
-        taskType        TEXT NOT NULL,
-        status          TEXT NOT NULL,
-        result          TEXT NOT NULL,
-        createdAt       INTEGER NOT NULL,
-        expiresAt       INTEGER NOT NULL
-      )
-    `);
-  db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_idempotency_expires
-        ON idempotency_keys (expiresAt)
-    `);
+  migrateSqlite(db);
 }
 
 /**
@@ -165,28 +49,6 @@ export function getDb(): Database.Database {
   return _db;
 }
 
-/** Create tables if they don't exist. Called once on first DB open. */
-function initSchema(db: Database.Database): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS agent_results (
-      id        INTEGER PRIMARY KEY AUTOINCREMENT,
-      timestamp TEXT    NOT NULL,
-      taskType  TEXT    NOT NULL,
-      success   INTEGER NOT NULL,
-      data      TEXT,
-      error     TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS spending_records (
-      id        TEXT    PRIMARY KEY,
-      timestamp TEXT    NOT NULL,
-      amount    TEXT    NOT NULL,
-      assetKey  TEXT    NOT NULL
-    );
-  `);
-}
-
-// ─── agent_results ────────────────────────────────────────────────────────────
 /**
  * Close the live connection and drop the cached handle (#644).
  *
@@ -464,6 +326,90 @@ export function reserveSpendingRecord(
 /** Remove one spending record, e.g. to release a reservation whose submission failed. */
 export function deleteSpendingRecord(id: number): void {
   getDb().prepare(`DELETE FROM spending_records WHERE id = ?`).run(id);
+}
+
+/**
+ * A spend written by SpendingTracker, addressable by its reservation id
+ * (#731) and attributed to an asset (#733).
+ */
+export interface TrackedSpendingRecord {
+  /**
+   * Reservation id returned by SpendingTracker.reserve(). Rows written before
+   * migration 006 have none and are reported as `legacy-<rowid>`.
+   */
+  id: string;
+  /** "XLM" or "CODE:ISSUER"; null for rows written before migration 006. */
+  assetKey: string | null;
+  /** Exact amount in stroops (#734). */
+  stroops: bigint;
+  /** Epoch milliseconds. */
+  timestamp: number;
+}
+
+/**
+ * Persist one tracked spend. The legacy REAL `amount` column is filled in too
+ * so readers that predate migration 006 (e.g. {@link reserveSpendingRecord})
+ * still see it; `stroops` is the authoritative value.
+ */
+export function saveTrackedSpendingRecord(
+  record: TrackedSpendingRecord & { assetKey: string }
+): void {
+  getDb()
+    .prepare(
+      `INSERT INTO spending_records (amount, timestamp, reservation_id, asset_key, stroops)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    .run(
+      Number(record.stroops) / 10_000_000,
+      record.timestamp,
+      record.id,
+      record.assetKey,
+      record.stroops.toString()
+    );
+}
+
+/** Tracked spends at or after `sinceMs`, oldest first — legacy rows included. */
+export function getSpendingRecordsSince(sinceMs: number): TrackedSpendingRecord[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT id, amount, timestamp, reservation_id, asset_key, stroops
+       FROM spending_records WHERE timestamp >= ? ORDER BY timestamp ASC, id ASC`
+    )
+    .all(sinceMs) as Array<{
+    id: number;
+    amount: number;
+    timestamp: number;
+    reservation_id: string | null;
+    asset_key: string | null;
+    stroops: string | null;
+  }>;
+  return rows.map((r) => {
+    let stroops: bigint;
+    if (r.stroops !== null) {
+      stroops = BigInt(r.stroops);
+    } else {
+      // Legacy row: only the REAL column exists. 7 fixed decimals recovers the
+      // stroop value exactly for any amount a double can hold to that precision.
+      const [whole = '0', fraction = ''] = r.amount.toFixed(7).split('.');
+      stroops = BigInt(whole) * 10_000_000n + BigInt(fraction);
+    }
+    return {
+      id: r.reservation_id ?? `legacy-${r.id}`,
+      assetKey: r.asset_key,
+      stroops,
+      timestamp: r.timestamp,
+    };
+  });
+}
+
+/** Remove the row written for a reservation (#731). A missing row is a no-op. */
+export function deleteTrackedSpendingRecord(reservationId: string): void {
+  const legacy = /^legacy-(\d+)$/.exec(reservationId);
+  if (legacy) {
+    deleteSpendingRecord(Number(legacy[1]));
+    return;
+  }
+  getDb().prepare(`DELETE FROM spending_records WHERE reservation_id = ?`).run(reservationId);
 }
 
 /** Persist a single agent-state value, replacing any previous one. */
@@ -752,8 +698,6 @@ export function clearX402RateRecords(): void {
 /** Replace the underlying DB instance — used in tests to inject an in-memory DB. */
 export function _setDb(db: Database.Database | null): void {
   _db = db;
-  // Ensure schema exists on the injected DB as well
-  initSchema(db);
   if (_db) {
     applySchema(_db);
   }
