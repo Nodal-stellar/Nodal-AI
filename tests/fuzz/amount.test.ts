@@ -13,7 +13,17 @@
 
 import { describe, it, expect } from "vitest";
 import fc from "fast-check";
-import { toStroops, stroopsToString, STROOPS_PER_UNIT } from "../../backend/utils/amount";
+import {
+  toStroops,
+  stroopsToString,
+  STROOPS_PER_UNIT,
+  fromStroops,
+  compareAmounts,
+  isValidAmount,
+  tryToStroops,
+  STROOP_SCALE,
+  MAX_DECIMAL_PLACES,
+} from "../../backend/utils/amount";
 
 // ─── Unit tests ───────────────────────────────────────────────────────────────
 
@@ -165,6 +175,10 @@ describe("fuzz: toStroops round-trips via stroopsToString", () => {
       }),
       { numRuns: 500 }
     );
+  });
+});
+
+/**
  * Property-based fuzz tests for Stellar amount parsing and stroop conversion (Issue #830).
  *
  * Verifies critical safety properties across 10,000+ generated runs using fast-check:
@@ -175,18 +189,6 @@ describe("fuzz: toStroops round-trips via stroopsToString", () => {
  * 5. Rejection of NaN and non-numeric inputs
  * 6. Rejection of exponent / scientific notation forms
  */
-
-import { describe, it, expect } from 'vitest';
-import fc from 'fast-check';
-import {
-  toStroops,
-  fromStroops,
-  compareAmounts,
-  isValidAmount,
-  tryToStroops,
-  STROOP_SCALE,
-  MAX_DECIMAL_PLACES,
-} from '../../backend/utils/amount';
 
 const TEN_K_RUNS = 10_000;
 
