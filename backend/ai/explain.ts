@@ -111,8 +111,8 @@ const RESULT_CODE_TABLE: Record<string, Omit<ResultCodeEntry, 'code'>> = {
   },
   op_underfunded: {
     description:
-      'The source account does not hold enough of the asset being sent to complete the ' +
-      'operation after accounting for fees and minimum reserve.',
+      'The source account balance does not hold enough of the asset being sent to complete ' +
+      'the operation after accounting for fees and minimum reserve.',
     suggestedFix:
       'Check the account balance for the relevant asset. Add funds or reduce the send ' +
       'amount.',
