@@ -38,7 +38,8 @@ const INJECTION_PATTERNS = [
 
   // Payment/transfer injection attempts
   /pay\s+[\d.]+\s+\w+\s+to\s+[GABC]/i,
-  /transfer\s+[\d.]+\s+\w+/i,
+  /transfer\s+(?:of\s+)?[\d.]+\s+\w+/i,
+  /transfer\s+all\b/i,
   /send\s+\d+/i,
   /make\s+a\s+payment/i,
   /withdraw\s+[\d.]+/i,
@@ -50,7 +51,7 @@ const INJECTION_PATTERNS = [
   /grant\s+(me|user)\s+(admin|root)/i,
 
   // System prompt extraction
-  /(?:show|tell|print|reveal)\s+(me\s+)?(?:your\s+)?(?:system\s+)?prompt/i,
+  /(?:show|tell|print|reveal)\s+(me\s+)?(?:your\s+)?(?:system\s+)?(?:prompt|instructions?|rules?|guidelines?)/i,
   /how\s+(do|are)\s+you\s+(work|function)/i,
   /what\s+(are|is)\s+your\s+(instructions?|rules?|guidelines?)/i,
 
@@ -74,20 +75,28 @@ const INJECTION_PATTERNS = [
  */
 const INSTRUCTION_LIKE_PATTERNS = [
   // Command-like patterns
-  /^(?:please\s+)?(?:do|execute|run|perform|complete)\s+\w+/im,
-  /^["']?(?:do|execute|run|complete|perform)\s+the\s+following/im,
-  /^step\s+\d+:/m,
-  /^command:/m,
-  /^instruction:/m,
+  /^(?:please\s+)?(?:do|execute|run|perform|complete)\s+\w+/gim,
+  /^["']?(?:do|execute|run|complete|perform)\s+the\s+following/gim,
+  /^step\s+\d+:/gm,
+  /^command:/gm,
+  /^instruction:/gm,
+  // A polite imperative embedded mid-line, where the anchored patterns above
+  // cannot see it. "please" is required so ordinary data ("run 5") survives.
+  /\bplease\s+(?:do|execute|run|perform|complete)\s+[^"\n]*/gi,
 
   // Directive patterns
-  /^(?:you\s+)?(?:must|should|need\s+to|have\s+to)\s+\w+/im,
-  /^\s*-\s+(?:call|invoke|use|execute)\s+\w+/m,
-  /^\s*\*\s+(?:call|invoke|use|execute)\s+\w+/m,
+  /^(?:you\s+)?(?:must|should|need\s+to|have\s+to)\s+\w+/gim,
+  /^\s*-\s+(?:call|invoke|use|execute)\s+\w+/gm,
+  /^\s*\*\s+(?:call|invoke|use|execute)\s+\w+/gm,
+
+  // The value of an instruction-named JSON field (tool output is usually
+  // serialized JSON, so line-anchored patterns never reach it). Only the value
+  // is replaced, which keeps the surrounding JSON parseable.
+  /(?<="_?(?:instructions?|command|directive)"\s*:\s*")(?:[^"\\]|\\.)*(?=")/gi,
 
   // JSON-like directives (potential prompt injection)
-  /^\s*\{[\s\S]*"(?:action|command|instruction|do)"/m,
-  /^\s*\[.*"(?:action|command|instruction|do)".*\]/m,
+  /^\s*\{[\s\S]*"(?:action|command|instruction|do)"/gm,
+  /^\s*\[.*"(?:action|command|instruction|do)".*\]/gm,
 ];
 
 // ─── Sensitive data patterns for redaction ────────────────────────────────────
@@ -95,8 +104,11 @@ const INSTRUCTION_LIKE_PATTERNS = [
 const SENSITIVE_PATTERNS = [
   // Stellar secret keys (S...)
   /S[A-Z2-7]{55}/g,
-  // Generic API keys (various patterns)
-  /(?:api[_-]?key|apikey|api[_-]?secret)[=:]\s*["']?[\w-]{20,}["']?/gi,
+  // Generic API keys. `["']?` before the separator matches JSON, where the
+  // closing quote of the key sits between the name and the colon.
+  /(?:api[_-]?key|apikey|api[_-]?secret)["']?\s*[=:]\s*["']?[\w-]{20,}["']?/gi,
+  // Values of secret-named fields, whatever their format
+  /(?:secret(?:[_-]?key)?|private[_-]?key|seed)["']?\s*[=:]\s*["']?[\w-]{20,}["']?/gi,
   // Bearer tokens
   /Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi,
   // Private keys
@@ -163,17 +175,23 @@ export function sanitizeInput(
   let sanitized = input;
 
   // Check all injection patterns
-  const allPatterns = [...INJECTION_PATTERNS, ...customPatterns];
-
-  for (const pattern of allPatterns) {
+  for (const pattern of INJECTION_PATTERNS) {
     const matches = input.match(pattern);
     if (matches) {
-      const severity = classifySeverity(pattern, matches[0]);
       detections.push({
         pattern: pattern.source,
         matched: matches[0],
-        severity,
+        severity: classifySeverity(matches[0]),
       });
+    }
+  }
+
+  // A deployment adds a custom pattern precisely because it wants that text
+  // blocked, so a hit is always high severity.
+  for (const pattern of customPatterns) {
+    const matches = input.match(pattern);
+    if (matches) {
+      detections.push({ pattern: pattern.source, matched: matches[0], severity: 'high' });
     }
   }
 
@@ -254,20 +272,21 @@ export function sanitizeOutput(
   let sensitiveDataRedacted = false;
 
   // Redact sensitive data patterns
+  // Compare the text rather than calling .test(): these regexes are /g, so
+  // .test() keeps lastIndex between calls and would miss every other secret.
+  const beforeRedaction = sanitized;
   for (const pattern of SENSITIVE_PATTERNS) {
-    if (pattern.test(sanitized)) {
-      sanitized = sanitized.replace(pattern, '[REDACTED]');
-      sensitiveDataRedacted = true;
-    }
+    sanitized = sanitized.replace(pattern, '[REDACTED]');
   }
+  sensitiveDataRedacted = sanitized !== beforeRedaction;
 
   // Strip instruction-like content
   if (stripInstructions) {
-    const beforeLength = sanitized.length;
+    const beforeStripping = sanitized;
     for (const pattern of INSTRUCTION_LIKE_PATTERNS) {
       sanitized = sanitized.replace(pattern, '[INSTRUCTION STRIPPED]');
     }
-    instructionsStripped = sanitized.length !== beforeLength;
+    instructionsStripped = sanitized !== beforeStripping;
   }
 
   // Mark as untrusted data
@@ -347,10 +366,12 @@ export function buildIsolatedPrompt(
 /**
  * Classifies the severity of a detected pattern.
  */
-function classifySeverity(pattern: RegExp, matched: string): 'high' | 'medium' | 'low' {
-  // High severity: direct payment/instruction override
+function classifySeverity(matched: string): 'high' | 'medium' | 'low' {
+  // High severity: direct payment/instruction override. Matched against what
+  // INJECTION_PATTERNS actually capture ("ignore all previous instructions",
+  // "new instructions:"), not just the two-word form.
   if (
-    /pay|transfer|send|withdraw|ignore\s+instructions|disregard\s+instructions/i.test(
+    /pay|transfer|send|withdraw|^ignore\b|^disregard\b|^forget\b|^new\s+\w+:|^act\s+as\s+if|^pretend\b/i.test(
       matched
     )
   ) {
@@ -358,7 +379,7 @@ function classifySeverity(pattern: RegExp, matched: string): 'high' | 'medium' |
   }
 
   // Medium severity: privilege escalation, system prompt extraction
-  if (/admin|root|prompt|you\s+are/i.test(matched)) {
+  if (/admin|root|prompt|instructions?|rules?|guidelines?|you\s+are/i.test(matched)) {
     return 'medium';
   }
 
