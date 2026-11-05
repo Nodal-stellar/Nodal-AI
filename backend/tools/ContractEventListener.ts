@@ -71,9 +71,7 @@ export function listen(
   const onErrorCallback = normalizedOptions.onError;
 
   const pollIntervalMs =
-    normalizedOptions.pollIntervalMs ||
-    config.CONTRACT_EVENT_POLL_MS ||
-    config.RETRY_DELAY_MS * 2;
+    normalizedOptions.pollIntervalMs || config.CONTRACT_EVENT_POLL_MS || config.RETRY_DELAY_MS * 2;
 
   let reconnectAttempts = 0;
   let isStopped = false;

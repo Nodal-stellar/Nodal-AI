@@ -17,14 +17,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import {
-  Address,
-  BASE_FEE,
-  Keypair,
-  StrKey,
-  TransactionBuilder,
-  xdr,
-} from '@stellar/stellar-sdk';
+import { Address, BASE_FEE, Keypair, StrKey, TransactionBuilder, xdr } from '@stellar/stellar-sdk';
 import { z } from 'zod';
 import { config, MAINNET_SPENDING_CAP } from '../config';
 import { AgentPausedError, PolicyViolationError, ValidationError } from '../errors';
@@ -125,17 +118,21 @@ export interface MppSessionCredential {
 
 const NewSessionSchema = z.object({
   asset: z.string().refine(StrKey.isValidContract, 'asset must be a contract address'),
-  totalAmount: z.string().regex(/^[1-9]\d*$/, 'totalAmount must be a positive integer in base units'),
+  totalAmount: z
+    .string()
+    .regex(/^[1-9]\d*$/, 'totalAmount must be a positive integer in base units'),
   timeoutSeconds: z.number().int().positive(),
 });
 
 const ChannelStateSchema = z.object({
   id: z.string().uuid(),
   agent: z.string().refine(StrKey.isValidEd25519PublicKey, 'agent must be a G-address'),
-  participant: z.string().refine(
-    (v) => StrKey.isValidEd25519PublicKey(v) || StrKey.isValidContract(v),
-    'participant must be a Stellar account or contract address'
-  ),
+  participant: z
+    .string()
+    .refine(
+      (v) => StrKey.isValidEd25519PublicKey(v) || StrKey.isValidContract(v),
+      'participant must be a Stellar account or contract address'
+    ),
   asset: z.string().refine(StrKey.isValidContract, 'asset must be a contract address'),
   totalAmount: z.string(),
   agentBalance: z.string(),

@@ -139,17 +139,18 @@ async function main(): Promise<void> {
   try {
     // ── 4. Unpaid probe — shows the 402 challenge ─────────────────────────
     console.log('[4] Probing resource without payment...');
-    const { response: probeResp, settlement: probeSettlement } =
-      await agent.fetchPaid(resourceUrl).catch(() =>
+    const { response: probeResp, settlement: probeSettlement } = await agent
+      .fetchPaid(resourceUrl)
+      .catch(() =>
         // fetchPaid never throws on 402; but show raw 402 headers for demo
         fetch(resourceUrl).then((r) => ({ response: r, settlement: undefined }))
       );
     if (probeSettlement === undefined && !probeResp.ok) {
       const paymentRequired = probeResp.headers.get('PAYMENT-REQUIRED');
       if (paymentRequired) {
-        const pr = JSON.parse(
-          Buffer.from(paymentRequired, 'base64').toString('utf8')
-        ) as { accepts?: { scheme: string; network: string; amount: string }[] };
+        const pr = JSON.parse(Buffer.from(paymentRequired, 'base64').toString('utf8')) as {
+          accepts?: { scheme: string; network: string; amount: string }[];
+        };
         const first = pr.accepts?.[0];
         console.log(`    → 402 Payment Required`);
         if (first) {

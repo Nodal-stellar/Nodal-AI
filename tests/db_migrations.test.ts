@@ -82,9 +82,9 @@ describe('fresh database', () => {
     migrateSqlite(db);
 
     expect(migrateSqlite(db)).toEqual([]);
-    expect(
-      (db.prepare(`SELECT COUNT(*) AS n FROM schema_version`).get() as { n: number }).n
-    ).toBe(loadMigrations(SQLITE_MIGRATIONS_DIR).length);
+    expect((db.prepare(`SELECT COUNT(*) AS n FROM schema_version`).get() as { n: number }).n).toBe(
+      loadMigrations(SQLITE_MIGRATIONS_DIR).length
+    );
   });
 
   it('creates the audit log append-only', () => {

@@ -6,7 +6,6 @@ import { PayFiAgent } from '../agent';
 import { startMCPServer, startMCPHTTPServer } from './server';
 
 if (require.main === module) {
-
   const agent = new PayFiAgent();
   const transport = process.env.MCP_TRANSPORT || 'stdio';
 

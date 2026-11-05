@@ -212,4 +212,3 @@ export function getStorage(): Storage {
 export function _setStorage(storage: Storage | null): void {
   _storage = storage;
 }
-

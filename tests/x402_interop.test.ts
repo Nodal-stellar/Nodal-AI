@@ -28,10 +28,11 @@ vi.mock('../backend/config', () => {
     HORIZON_URL: 'https://horizon-testnet.stellar.org',
     SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org',
     AGENT_PUBLIC_KEY: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
-    agentKeypair: () => ({
-      publicKey: () => 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
-      secret: () => 'SADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP54X',
-    }) as unknown as Keypair,
+    agentKeypair: () =>
+      ({
+        publicKey: () => 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
+        secret: () => 'SADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP54X',
+      }) as unknown as Keypair,
     DB_PATH: ':memory:',
     STORAGE_BACKEND: 'sqlite' as const,
     X402_ASSET_CODE: 'USDC',
@@ -258,14 +259,14 @@ describe('x402 v2 Interoperability', () => {
     it('should use legacy SHA-256 memo flow when flag is enabled', async () => {
       // Set legacy mode
       process.env.X402_USE_LEGACY = '1';
-      
+
       const { X402PaymentTool } = await import('../backend/tools/X402PaymentTool');
       const tool = new X402PaymentTool();
-      
+
       const challenge = createValidChallenge();
-      
+
       const result = await tool.respond(challenge);
-      
+
       expect(result.protocol).toBe('x402');
       expect(result.txHash).toBe('legacy_tx_hash_123');
       expect(result.network).toBe('stellar:testnet');
@@ -274,14 +275,14 @@ describe('x402 v2 Interoperability', () => {
 
     it('should reject challenges with expired expiresAt', async () => {
       process.env.X402_USE_LEGACY = '1';
-      
+
       const { X402PaymentTool } = await import('../backend/tools/X402PaymentTool');
       const tool = new X402PaymentTool();
-      
+
       const challenge = createValidChallenge({
         expiresAt: new Date(Date.now() - 60_000).toISOString(),
       });
-      
+
       await expect(tool.respond(challenge)).rejects.toThrow('x402 challenge expired');
     });
   });
@@ -397,19 +398,19 @@ describe('x402 v2 Interoperability', () => {
 
     it('should create middleware that returns v2 challenges when X402_USE_LEGACY=false', async () => {
       delete process.env.X402_USE_LEGACY; // Use default (false)
-      
+
       const { createX402Middleware } = await import('../backend/x402/server');
       const middleware = createX402Middleware();
-      
+
       expect(middleware).toBeDefined();
     });
 
     it('should create legacy middleware that returns JSON when X402_USE_LEGACY=true', async () => {
       process.env.X402_USE_LEGACY = '1';
-      
+
       const { createX402Middleware } = await import('../backend/x402/server');
       const middleware = createX402Middleware();
-      
+
       expect(middleware).toBeDefined();
     });
   });
@@ -424,7 +425,7 @@ describe('x402 v2 Interoperability', () => {
 
     it('should have X402_USE_LEGACY default to false', async () => {
       delete process.env.X402_USE_LEGACY;
-      
+
       const { config } = await import('../backend/config');
       expect(config.X402_USE_LEGACY).toBe(false);
     });
@@ -439,7 +440,7 @@ describe('x402 v2 Interoperability', () => {
 
     it('should accept valid URL for X402_FACILITATOR_URL', async () => {
       process.env.X402_FACILITATOR_URL = 'https://facilitator.example.com';
-      
+
       const { config } = await import('../backend/config');
       expect(config.X402_FACILITATOR_URL).toBe('https://facilitator.example.com');
     });

@@ -20,7 +20,6 @@ import { stellarPublicKeySchema } from '../utils/stellarSchemas';
 import { x402RateLimiter } from '../x402_rate_limiter';
 import { getDb } from '../persistence';
 
-
 /**
  * Best-effort recovery of a transaction hash from a submission error.
  *
@@ -271,8 +270,8 @@ export class X402PaymentTool {
         withRetry(
           () => this.horizonServer.ledgers().ledger(ledger).call(),
           config.MAX_RETRIES,
-          config.RETRY_DELAY_MS,
-        ),
+          config.RETRY_DELAY_MS
+        )
       );
       signedAt = ledgerRecord.closed_at;
     } catch {
@@ -318,16 +317,16 @@ export class X402PaymentTool {
       withRetry(
         () => this.horizonServer.transactions().transaction(proof.txHash).call(),
         config.MAX_RETRIES,
-        config.RETRY_DELAY_MS,
-      ),
+        config.RETRY_DELAY_MS
+      )
     );
 
     const ops = await withBackoffGuard(() =>
       withRetry(
         () => this.horizonServer.operations().forTransaction(proof.txHash).call(),
         config.MAX_RETRIES,
-        config.RETRY_DELAY_MS,
-      ),
+        config.RETRY_DELAY_MS
+      )
     );
 
     const op = ops.records?.[0];

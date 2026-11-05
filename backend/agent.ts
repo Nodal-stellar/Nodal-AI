@@ -120,7 +120,12 @@ function assetObjectKey(asset: unknown): string {
 }
 
 /** Canonical asset key for an `assetCode` / `assetIssuer` payload pair. */
-function assetFieldsKey(code: unknown, issuer: unknown, defaultCode: string, defaultIssuer?: string): string {
+function assetFieldsKey(
+  code: unknown,
+  issuer: unknown,
+  defaultCode: string,
+  defaultIssuer?: string
+): string {
   return assetKey(
     typeof code === 'string' ? code : defaultCode,
     typeof issuer === 'string' ? issuer : defaultIssuer
@@ -208,10 +213,7 @@ function reserveSpendingLimit(spend: TaskSpend): string {
 
   // Layer 1: single-payment cap. With per-asset limits configured (#733) the
   // tracker applies the asset's own limit instead.
-  if (
-    config.SPENDING_LIMITS_MAP.size === 0 &&
-    stroops > toStroops(config.AGENT_SPENDING_LIMIT)
-  ) {
+  if (config.SPENDING_LIMITS_MAP.size === 0 && stroops > toStroops(config.AGENT_SPENDING_LIMIT)) {
     throw new Error(
       `Payment amount ${spend.amount} ${spend.assetKey} exceeds ` +
         `AGENT_SPENDING_LIMIT of ${config.AGENT_SPENDING_LIMIT}`
@@ -389,18 +391,47 @@ export interface Plan {
  * Payload types for each task type. Use with `AgentTask` for full type inference.
  */
 export type TaskPayloadMap = {
-  stellar_payment: { destination: string; amount: string; assetCode?: string; assetIssuer?: string; memo?: string };
+  stellar_payment: {
+    destination: string;
+    amount: string;
+    assetCode?: string;
+    assetIssuer?: string;
+    memo?: string;
+  };
   soroban_invoke: { contractId: string; method: string; args?: unknown[] };
   x402_respond: { challenge: unknown };
   account_info: { accountId?: string };
   change_trust: { assetCode: string; assetIssuer: string; limit?: string };
-  multisig_payment: { destination: string; amount: string; signatures: string[]; minSignatures?: number };
+  multisig_payment: {
+    destination: string;
+    amount: string;
+    signatures: string[];
+    minSignatures?: number;
+  };
   batch_payment: { payments: Array<{ destination: string; amount: string }> };
   balance_check: { accountId: string; assetCode?: string; assetIssuer?: string };
-  path_payment: { destination: string; sendAsset: string; sendAmount: string; destAsset: string; destAmount?: string };
+  path_payment: {
+    destination: string;
+    sendAsset: string;
+    sendAmount: string;
+    destAsset: string;
+    destAmount?: string;
+  };
   fee_bump: { innerTransactionXdr: string; feeAccount: string; baseFeeMultiplier?: number };
-  dex_offer: { selling: string; buying: string; amount: string; price: number; action: 'create' | 'update' | 'delete' };
-  liquidity_pool: { liquidityProviderAccount: string; reserveA: string; reserveB: string; amountA: string; amountB: string };
+  dex_offer: {
+    selling: string;
+    buying: string;
+    amount: string;
+    price: number;
+    action: 'create' | 'update' | 'delete';
+  };
+  liquidity_pool: {
+    liquidityProviderAccount: string;
+    reserveA: string;
+    reserveB: string;
+    amountA: string;
+    amountB: string;
+  };
   stellar_toml: { domain: string };
   data_entry: { key: string; value: string; contractId?: string };
   sequence_number: { accountId: string };
@@ -409,11 +440,22 @@ export type TaskPayloadMap = {
   soroban_deploy: { wasmHash: string; salt?: string };
   swap: { sourceAsset: string; destAsset: string; amount: string };
   account_history: { accountId: string; limit?: number };
-  set_options: { accountId: string; thresholds?: { lowThreshold?: number; medThreshold?: number; highThreshold?: number }; homeDomain?: string };
+  set_options: {
+    accountId: string;
+    thresholds?: { lowThreshold?: number; medThreshold?: number; highThreshold?: number };
+    homeDomain?: string;
+  };
   soroban_event_query: { contractId: string; startLedger?: number; eventTypes?: string[] };
   stellar_identity_auth: { accountId: string; callback?: string };
   friendbot: { accountId: string };
-  nano_payment: { recipient: string; amountRaw: string; senderAccount?: string; senderSeed?: string; rpcUrl?: string; skipPrecheck?: boolean };
+  nano_payment: {
+    recipient: string;
+    amountRaw: string;
+    senderAccount?: string;
+    senderSeed?: string;
+    rpcUrl?: string;
+    skipPrecheck?: boolean;
+  };
   soroban_query: { contractId: string; key: string };
   network_status: Record<string, never>;
   ledger_info: Record<string, never>;
@@ -434,7 +476,12 @@ export type TaskResultMap = {
   multisig_payment: { txHash: string; ledger: number };
   batch_payment: { txHashes: string[]; ledger: number };
   balance_check: { balances: Record<string, string> };
-  path_payment: { txHash: string; ledger: number; sourceBalanceDelta?: string; destBalanceDelta?: string };
+  path_payment: {
+    txHash: string;
+    ledger: number;
+    sourceBalanceDelta?: string;
+    destBalanceDelta?: string;
+  };
   fee_bump: { txHash: string; ledger: number };
   dex_offer: { offerId: string; txHash: string };
   liquidity_pool: { liquidityPoolId: string; txHash: string };
@@ -450,7 +497,14 @@ export type TaskResultMap = {
   soroban_event_query: { events: unknown[] };
   stellar_identity_auth: { token: string };
   friendbot: { txHash: string; accountId: string };
-  nano_payment: { blockHash: string; recipient: string; amountRaw: string; network: 'nano'; precheckPassed: boolean; timestamp: string };
+  nano_payment: {
+    blockHash: string;
+    recipient: string;
+    amountRaw: string;
+    network: 'nano';
+    precheckPassed: boolean;
+    timestamp: string;
+  };
   soroban_query: { value: unknown };
   network_status: { buildNumber: string; currentProtocolVersion: number; currentLedger: number };
   ledger_info: { sequence: number; totalCoins: string; baseFee: number };

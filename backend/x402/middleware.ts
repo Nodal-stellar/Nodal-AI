@@ -37,10 +37,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { z } from 'zod';
-import {
-  paymentMiddlewareFromConfig,
-  type SchemeRegistration,
-} from '@x402/express';
+import { paymentMiddlewareFromConfig, type SchemeRegistration } from '@x402/express';
 import { HTTPFacilitatorClient } from '@x402/core/server';
 import { ExactStellarScheme } from '@x402/stellar/exact/server';
 import { config } from '../config';
@@ -190,7 +187,13 @@ export function nodalPaywall(
   };
 
   log.info(
-    { network, payTo, price: opts.price, asset: opts.asset ?? config.X402_ASSET_CODE, facilitatorUrl },
+    {
+      network,
+      payTo,
+      price: opts.price,
+      asset: opts.asset ?? config.X402_ASSET_CODE,
+      facilitatorUrl,
+    },
     'nodalPaywall middleware created'
   );
 
@@ -198,7 +201,6 @@ export function nodalPaywall(
 }
 
 // ─── OpenAPI discovery document (Issue #781) ──────────────────────────────────
-
 
 /** Where the discovery document is served. */
 export const OPENAPI_DISCOVERY_PATH = '/.well-known/openapi.json';

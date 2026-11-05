@@ -92,10 +92,7 @@ class NodalClientStellarSigner implements ClientStellarSigner {
    * Bridge between @x402/stellar's SEP-43 signAuthEntry (XDR base64 in/out)
    * and Nodal's Signer.signAuthEntry (xdr.SorobanAuthorizationEntry in/out).
    */
-  async signAuthEntry(
-    entryXdr: string,
-    opts: { networkPassphrase: string }
-  ): Promise<string> {
+  async signAuthEntry(entryXdr: string, opts: { networkPassphrase: string }): Promise<string> {
     // Deserialise the incoming base64 XDR → SorobanAuthorizationEntry
     const entry = xdr.SorobanAuthorizationEntry.fromXDR(entryXdr, 'base64');
 
@@ -172,9 +169,7 @@ function assertAmountWithinLimits(amount: string): void {
   }
 
   if (config.X402_MAX_PRICE && parsed > parseFloat(config.X402_MAX_PRICE)) {
-    throw new Error(
-      `x402 v2: amount ${amount} exceeds X402_MAX_PRICE of ${config.X402_MAX_PRICE}`
-    );
+    throw new Error(`x402 v2: amount ${amount} exceeds X402_MAX_PRICE of ${config.X402_MAX_PRICE}`);
   }
 }
 
@@ -315,7 +310,10 @@ export class X402FetchClient {
     try {
       paymentRequired = this.httpClient.getPaymentRequiredResponse(
         (name) => probeResponse.headers.get(name),
-        await probeResponse.clone().json().catch(() => undefined)
+        await probeResponse
+          .clone()
+          .json()
+          .catch(() => undefined)
       );
     } catch (err) {
       throw new Error(
@@ -324,19 +322,15 @@ export class X402FetchClient {
     }
 
     // ── 3. Select a compatible requirement ───────────────────────────────────
-    const chosen = selectRequirements(
-      paymentRequired.accepts,
-      this.agentNetwork,
-      this.allowed
-    );
+    const chosen = selectRequirements(paymentRequired.accepts, this.agentNetwork, this.allowed);
 
     if (!chosen) {
       const networks = [...new Set(paymentRequired.accepts.map((r) => r.network))].join(', ');
       const assets = [...new Set(paymentRequired.accepts.map((r) => r.asset))].join(', ');
       throw new Error(
         `x402 v2: no compatible payment option for ${urlStr}. ` +
-        `Server accepts networks [${networks}], assets [${assets}]. ` +
-        `Agent is on ${this.agentNetwork} with asset contract ${config.X402_ASSET_CONTRACT}.`
+          `Server accepts networks [${networks}], assets [${assets}]. ` +
+          `Agent is on ${this.agentNetwork} with asset contract ${config.X402_ASSET_CONTRACT}.`
       );
     }
 
@@ -345,9 +339,7 @@ export class X402FetchClient {
     assertPayToAllowed(chosen.payTo, this.agentAddress);
 
     if (config.ALLOWED_X402_ORIGINS) {
-      const allowedOrigins = new Set(
-        config.ALLOWED_X402_ORIGINS.split(',').map((o) => o.trim())
-      );
+      const allowedOrigins = new Set(config.ALLOWED_X402_ORIGINS.split(',').map((o) => o.trim()));
       const hostname = new URL(urlStr).hostname;
       if (!allowedOrigins.has(hostname)) {
         throw new Error(`x402 v2: untrusted resource origin: ${hostname}`);

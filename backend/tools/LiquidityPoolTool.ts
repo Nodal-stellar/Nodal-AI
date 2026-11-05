@@ -3,11 +3,7 @@
  * Tool for depositing, withdrawing liquidity, and fetching pool info on Stellar.
  */
 
-import {
-  TransactionBuilder,
-  Operation,
-  BASE_FEE,
-} from '@stellar/stellar-sdk';
+import { TransactionBuilder, Operation, BASE_FEE } from '@stellar/stellar-sdk';
 import { z } from 'zod';
 import { config } from '../config';
 import { createAgentSigner, Signer } from '../signer';

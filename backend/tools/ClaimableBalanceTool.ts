@@ -3,13 +3,7 @@
  * Create and claim Stellar claimable balances.
  */
 
-import {
-  TransactionBuilder,
-  Operation,
-  Asset,
-  Claimant,
-  BASE_FEE,
-} from '@stellar/stellar-sdk';
+import { TransactionBuilder, Operation, Asset, Claimant, BASE_FEE } from '@stellar/stellar-sdk';
 import { z } from 'zod';
 import { config } from '../config';
 import { createAgentSigner, Signer } from '../signer';

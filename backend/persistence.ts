@@ -102,15 +102,15 @@ export function getResults(limit = 100, offset = 0): PersistedResult[] {
        FROM agent_results ORDER BY id DESC LIMIT ? OFFSET ?`
     )
     .all(limit, offset) as Array<{
-      timestamp: string;
-      taskType: string;
-      success: number;
-      data: string | null;
-      error: string | null;
-      errorType: string | null;
-      correlationId: string | null;
-      durationMs: number | null;
-    }>;
+    timestamp: string;
+    taskType: string;
+    success: number;
+    data: string | null;
+    error: string | null;
+    errorType: string | null;
+    correlationId: string | null;
+    durationMs: number | null;
+  }>;
 
   return rows.map((r) => {
     const result: PersistedResult = {
@@ -186,8 +186,7 @@ export function appendAuditEntry(entry: AuditEntry): AuditRow {
   const db = getDb();
   const append = db.transaction((e: AuditEntry): AuditRow => {
     const last = db.prepare(`SELECT hash FROM audit_log ORDER BY id DESC LIMIT 1`).get() as
-      | { hash: string }
-      | undefined;
+      { hash: string } | undefined;
     const prevHash = last?.hash ?? AUDIT_GENESIS_HASH;
     const hash = computeAuditHash(prevHash, e);
     const info = db
@@ -425,8 +424,7 @@ export function saveAgentState(key: string, value: string): void {
 /** Read a persisted agent-state value, or undefined when it was never set. */
 export function loadAgentState(key: string): string | undefined {
   const row = getDb().prepare(`SELECT value FROM agent_state WHERE key = ?`).get(key) as
-    | { value: string }
-    | undefined;
+    { value: string } | undefined;
   return row?.value;
 }
 
@@ -460,9 +458,7 @@ function toPendingApproval(row: ApprovalRow): PendingApproval {
 }
 
 /** Persist a newly held task in the `pending_approval` state. */
-export function savePendingApproval(
-  approval: Omit<PendingApproval, 'status' | 'decidedAt'>
-): void {
+export function savePendingApproval(approval: Omit<PendingApproval, 'status' | 'decidedAt'>): void {
   getDb()
     .prepare(
       `INSERT INTO pending_approvals
@@ -476,8 +472,7 @@ export function savePendingApproval(
 
 export function getPendingApproval(id: string): PendingApproval | undefined {
   const row = getDb().prepare(`SELECT * FROM pending_approvals WHERE id = ?`).get(id) as
-    | ApprovalRow
-    | undefined;
+    ApprovalRow | undefined;
   return row ? toPendingApproval(row) : undefined;
 }
 
@@ -563,9 +558,7 @@ export function getApprovalAuditLog(): ApprovalAuditRow[] {
  * Compute SHA-256 hash of the payload for idempotency comparison.
  */
 function computePayloadHash(payload: unknown): string {
-  return createHash('sha256')
-    .update(JSON.stringify(payload))
-    .digest('hex');
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
 
 /**

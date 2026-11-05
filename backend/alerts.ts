@@ -85,7 +85,11 @@ export class SlackNotifier implements Notifier {
   constructor(private readonly webhookUrl: string) {}
 
   async notify(event: AlertEvent): Promise<void> {
-    await axios.post(this.webhookUrl, { text: formatText(event) }, { timeout: NOTIFIER_TIMEOUT_MS });
+    await axios.post(
+      this.webhookUrl,
+      { text: formatText(event) },
+      { timeout: NOTIFIER_TIMEOUT_MS }
+    );
   }
 }
 
@@ -160,10 +164,7 @@ export async function emitAlert(event: AlertEvent): Promise<void> {
   const results = await Promise.allSettled(notifiers.map((n) => n.notify(event)));
   results.forEach((r, i) => {
     if (r.status === 'rejected') {
-      log.error(
-        { notifier: notifiers[i]?.name, error: String(r.reason) },
-        'Alert notifier failed'
-      );
+      log.error({ notifier: notifiers[i]?.name, error: String(r.reason) }, 'Alert notifier failed');
     }
   });
 }

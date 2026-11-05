@@ -6,11 +6,7 @@
  * This is the safe default for AI-agent read operations.
  */
 
-import {
-  TransactionBuilder,
-  Contract,
-  BASE_FEE,
-} from '@stellar/stellar-sdk';
+import { TransactionBuilder, Contract, BASE_FEE } from '@stellar/stellar-sdk';
 import { z } from 'zod';
 import { config } from '../config';
 import { createAgentSigner, Signer } from '../signer';

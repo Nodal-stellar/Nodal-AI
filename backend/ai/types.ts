@@ -36,10 +36,7 @@ export interface ToolDefinition {
   parameters: Record<string, unknown>;
 }
 
-export type ToolChoice = 
-  | { type: 'none' }
-  | { type: 'auto' }
-  | { type: 'tool'; name: string };
+export type ToolChoice = { type: 'none' } | { type: 'auto' } | { type: 'tool'; name: string };
 
 // ─── Generation Options ──────────────────────────────────────────────────────
 
@@ -107,10 +104,7 @@ export interface LLMProvider {
    * @param options - Generation options
    * @returns LLM response with content and metadata
    */
-  generate(
-    messages: Message[],
-    options?: GenerationOptions
-  ): Promise<GenerationResponse>;
+  generate(messages: Message[], options?: GenerationOptions): Promise<GenerationResponse>;
 
   /**
    * The provider name (e.g., 'openai', 'anthropic')
@@ -167,7 +161,13 @@ export interface SessionTokenUsage {
 // ─── Error Types ─────────────────────────────────────────────────────────────
 
 export class LLMError extends Error {
-  readonly kind: 'configuration' | 'rate_limit' | 'invalid_request' | 'server_error' | 'network_error' | 'timeout';
+  readonly kind:
+    | 'configuration'
+    | 'rate_limit'
+    | 'invalid_request'
+    | 'server_error'
+    | 'network_error'
+    | 'timeout';
   readonly provider: string;
   readonly statusCode?: number | undefined;
   readonly isRetryable: boolean;
@@ -186,7 +186,9 @@ export class LLMError extends Error {
     this.kind = kind;
     this.provider = provider;
     this.statusCode = options?.statusCode;
-    this.isRetryable = options?.isRetryable ?? (kind === 'rate_limit' || kind === 'network_error' || kind === 'timeout');
+    this.isRetryable =
+      options?.isRetryable ??
+      (kind === 'rate_limit' || kind === 'network_error' || kind === 'timeout');
     Object.setPrototypeOf(this, LLMError.prototype);
   }
 }

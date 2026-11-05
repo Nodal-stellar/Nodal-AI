@@ -213,7 +213,7 @@ function printResult(result: CheckResult): void {
   const icon = result.found ? '✓' : '✗';
   const required = result.required ? '' : ' (optional)';
   const version = result.version ? ` - ${result.version}` : '';
-  
+
   console.log(`${icon} ${result.name}${required}${version}`);
 
   if (result.error) {

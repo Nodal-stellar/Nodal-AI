@@ -150,8 +150,8 @@ async function ensureNativeSac(funder: Keypair): Promise<void> {
 /** Fetch the native XLM balance of an account via Horizon. */
 async function xlmBalance(address: string): Promise<number> {
   const resp = await axios.get(`${HORIZON_URL}/accounts/${address}`);
-  const xlm = resp.data.balances.find((b: any) => b.asset_type === "native");
-  return parseFloat(xlm?.balance ?? "0");
+  const xlm = resp.data.balances.find((b: any) => b.asset_type === 'native');
+  return parseFloat(xlm?.balance ?? '0');
 }
 
 // ─── Issue #446 — canonical E2E flow ─────────────────────────────────────────
@@ -162,188 +162,177 @@ async function xlmBalance(address: string): Promise<number> {
 //
 // Guarded behind RUN_E2E=true so it never runs in normal unit-test CI.
 
-describe.skipIf(process.env.RUN_E2E !== "true")("Escrow E2E — deploy → initialize → release (issue #446)", () => {
-  // Three independent accounts for the escrow triangle:
-  //   deployer  — pays for WASM upload & contract creation, acts as depositor
-  //   arbiter   — the trusted party who authorises release
-  //   recipient — receives the 10 XLM on successful release
-  let deployerKp: Keypair;
-  let arbiterKp: Keypair;
-  let recipientKp: Keypair;
-  let contractId: string;
+describe.skipIf(process.env.RUN_E2E !== 'true')(
+  'Escrow E2E — deploy → initialize → release (issue #446)',
+  () => {
+    // Three independent accounts for the escrow triangle:
+    //   deployer  — pays for WASM upload & contract creation, acts as depositor
+    //   arbiter   — the trusted party who authorises release
+    //   recipient — receives the 10 XLM on successful release
+    let deployerKp: Keypair;
+    let arbiterKp: Keypair;
+    let recipientKp: Keypair;
+    let contractId: string;
 
-  beforeAll(async () => {
-    deployerKp = Keypair.random();
-    arbiterKp = Keypair.random();
-    recipientKp = Keypair.random();
+    beforeAll(async () => {
+      deployerKp = Keypair.random();
+      arbiterKp = Keypair.random();
+      recipientKp = Keypair.random();
 
-    // Fund all three accounts via Friendbot in parallel
-    await Promise.all([
-      friendbot(deployerKp.publicKey()),
-      friendbot(arbiterKp.publicKey()),
-      friendbot(recipientKp.publicKey()),
-    ]);
+      // Fund all three accounts via Friendbot in parallel
+      await Promise.all([
+        friendbot(deployerKp.publicKey()),
+        friendbot(arbiterKp.publicKey()),
+        friendbot(recipientKp.publicKey()),
+      ]);
 
-    // Allow Horizon a moment to index the new accounts before we query them
-    await new Promise((r) => setTimeout(r, 5000));
+      // Allow Horizon a moment to index the new accounts before we query them
+      await new Promise((r) => setTimeout(r, 5000));
 
-    await ensureNativeSac(deployerKp);
-  }, 90_000);
+      await ensureNativeSac(deployerKp);
+    }, 90_000);
 
-  it("deploys the escrow WASM and creates a contract instance", async () => {
-    // In CI a missing WASM must fail loudly rather than skip the whole flow.
-    if (!fs.existsSync(WASM_PATH) && process.env.E2E_REQUIRE_WASM === 'true') {
-      throw new Error(`Escrow WASM not found at ${WASM_PATH}`);
-    }
-    if (!fs.existsSync(WASM_PATH)) {
-      console.warn(
-        "WASM not found — build first with:\n" +
-          "  cargo build --release --target wasm32-unknown-unknown\n" +
-          "  (in contracts/escrow)"
-      );
-      return;
-    }
+    it('deploys the escrow WASM and creates a contract instance', async () => {
+      // In CI a missing WASM must fail loudly rather than skip the whole flow.
+      if (!fs.existsSync(WASM_PATH) && process.env.E2E_REQUIRE_WASM === 'true') {
+        throw new Error(`Escrow WASM not found at ${WASM_PATH}`);
+      }
+      if (!fs.existsSync(WASM_PATH)) {
+        console.warn(
+          'WASM not found — build first with:\n' +
+            '  cargo build --release --target wasm32-unknown-unknown\n' +
+            '  (in contracts/escrow)'
+        );
+        return;
+      }
 
-    const wasm = fs.readFileSync(WASM_PATH);
-    const account = await sorobanServer.getAccount(deployerKp.publicKey());
+      const wasm = fs.readFileSync(WASM_PATH);
+      const account = await sorobanServer.getAccount(deployerKp.publicKey());
 
-    // Step 1: Upload WASM bytecode — returns a 32-byte hash
-    const uploadTx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(
-        // @ts-expect-error — uploadContractWasm is available via stellar-sdk xdr helpers
-        xdr.Operation.invokeHostFunction({
-          hostFunction: xdr.HostFunction.hostFunctionTypeUploadContractWasm(wasm),
-          auth: [],
-        })
-      )
-      .setTimeout(30)
-      .build();
+      // Step 1: Upload WASM bytecode — returns a 32-byte hash
+      const uploadTx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(
+          // @ts-expect-error — uploadContractWasm is available via stellar-sdk xdr helpers
+          xdr.Operation.invokeHostFunction({
+            hostFunction: xdr.HostFunction.hostFunctionTypeUploadContractWasm(wasm),
+            auth: [],
+          })
+        )
+        .setTimeout(30)
+        .build();
 
-    const uploadResult = await sendTx(sorobanServer, uploadTx, deployerKp);
-    const wasmHash: Buffer = (uploadResult as any).returnValue?.bytes();
-    expect(wasmHash).toBeDefined();
+      const uploadResult = await sendTx(sorobanServer, uploadTx, deployerKp);
+      const wasmHash: Buffer = (uploadResult as any).returnValue?.bytes();
+      expect(wasmHash).toBeDefined();
 
-    // Step 2: Create a contract instance from the uploaded WASM hash.
-    // Uses a zero salt so the contract ID is deterministically derived from
-    // the deployer address — useful for idempotent redeployments in tests.
-    const account2 = await sorobanServer.getAccount(deployerKp.publicKey());
-    const deployTx = new TransactionBuilder(account2, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(
-        // @ts-expect-error — createContract via xdr helpers
-        xdr.Operation.invokeHostFunction({
-          hostFunction: xdr.HostFunction.hostFunctionTypeCreateContract(
-            new xdr.CreateContractArgs({
-              contractIdPreimage:
-                xdr.ContractIdPreimage.contractIdPreimageFromAddress(
+      // Step 2: Create a contract instance from the uploaded WASM hash.
+      // Uses a zero salt so the contract ID is deterministically derived from
+      // the deployer address — useful for idempotent redeployments in tests.
+      const account2 = await sorobanServer.getAccount(deployerKp.publicKey());
+      const deployTx = new TransactionBuilder(account2, {
+        fee: BASE_FEE,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(
+          // @ts-expect-error — createContract via xdr helpers
+          xdr.Operation.invokeHostFunction({
+            hostFunction: xdr.HostFunction.hostFunctionTypeCreateContract(
+              new xdr.CreateContractArgs({
+                contractIdPreimage: xdr.ContractIdPreimage.contractIdPreimageFromAddress(
                   new xdr.ContractIdPreimageFromAddress({
-                    address: Address.fromString(
-                      deployerKp.publicKey()
-                    ).toScAddress(),
+                    address: Address.fromString(deployerKp.publicKey()).toScAddress(),
                     salt: Buffer.alloc(32),
                   })
                 ),
-              executable: xdr.ContractExecutable.contractExecutableWasm(wasmHash),
-            })
-          ),
-          auth: [],
-        })
-      )
-      .setTimeout(30)
-      .build();
+                executable: xdr.ContractExecutable.contractExecutableWasm(wasmHash),
+              })
+            ),
+            auth: [],
+          })
+        )
+        .setTimeout(30)
+        .build();
 
-    const deployResult = await sendTx(sorobanServer, deployTx, deployerKp);
-    contractId = (deployResult as any)
-      .returnValue?.address()
-      ?.contractId()
-      .toString("hex");
-    expect(contractId).toBeDefined();
-    expect(typeof contractId).toBe("string");
-  }, 120_000);
+      const deployResult = await sendTx(sorobanServer, deployTx, deployerKp);
+      contractId = (deployResult as any).returnValue?.address()?.contractId().toString('hex');
+      expect(contractId).toBeDefined();
+      expect(typeof contractId).toBe('string');
+    }, 120_000);
 
-  it("initializes the escrow with 10 XLM (depositor=deployer, arbiter, recipient)", async () => {
-    if (!contractId) {
-      console.warn("No contractId — deploy test must have passed first");
-      return;
-    }
+    it('initializes the escrow with 10 XLM (depositor=deployer, arbiter, recipient)', async () => {
+      if (!contractId) {
+        console.warn('No contractId — deploy test must have passed first');
+        return;
+      }
 
-    // Fetch current ledger time to compute a valid future expiry timestamp.
-    // The contract's InvalidExpiry guard rejects expiry <= ledger timestamp.
-    const ledger = await sorobanServer.getLatestLedger();
-    // ledger.sequence gives the block number; use a generous future epoch offset
-    // by computing current unix time + EXPIRY_OFFSET_SECONDS.
-    const expiryTimestamp = BigInt(Math.floor(Date.now() / 1000) + EXPIRY_OFFSET_SECONDS);
+      // Fetch current ledger time to compute a valid future expiry timestamp.
+      // The contract's InvalidExpiry guard rejects expiry <= ledger timestamp.
+      const ledger = await sorobanServer.getLatestLedger();
+      // ledger.sequence gives the block number; use a generous future epoch offset
+      // by computing current unix time + EXPIRY_OFFSET_SECONDS.
+      const expiryTimestamp = BigInt(Math.floor(Date.now() / 1000) + EXPIRY_OFFSET_SECONDS);
 
-    // Arguments are encoded by the typed escrow client, so a wrong name, order
-    // or type is a compile error rather than a simulation failure.
-    // amount is in stroops (1 XLM = 10_000_000 stroops), so 10 XLM = 100_000_000n
-    const TEN_XLM_STROOPS = 100_000_000n;
-    const init = escrowCall.initialize({
-      depositor: deployerKp.publicKey(),
-      recipient: recipientKp.publicKey(),
-      arbiter: arbiterKp.publicKey(),
-      token: NATIVE_TOKEN_CONTRACT_ID, // XLM SAC
-      amount: TEN_XLM_STROOPS, // 10 XLM
-      expiry: expiryTimestamp, // 1 hour from now
-    });
+      // Arguments are encoded by the typed escrow client, so a wrong name, order
+      // or type is a compile error rather than a simulation failure.
+      // amount is in stroops (1 XLM = 10_000_000 stroops), so 10 XLM = 100_000_000n
+      const TEN_XLM_STROOPS = 100_000_000n;
+      const init = escrowCall.initialize({
+        depositor: deployerKp.publicKey(),
+        recipient: recipientKp.publicKey(),
+        arbiter: arbiterKp.publicKey(),
+        token: NATIVE_TOKEN_CONTRACT_ID, // XLM SAC
+        amount: TEN_XLM_STROOPS, // 10 XLM
+        expiry: expiryTimestamp, // 1 hour from now
+      });
 
-    const account = await sorobanServer.getAccount(deployerKp.publicKey());
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(
-        new Contract(contractId).call(init.method, ...init.args)
-      )
-      .setTimeout(30)
-      .build();
+      const account = await sorobanServer.getAccount(deployerKp.publicKey());
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(new Contract(contractId).call(init.method, ...init.args))
+        .setTimeout(30)
+        .build();
 
-    // Deployer is the depositor — they authorize the XLM transfer into the contract
-    await expect(
-      sendTx(sorobanServer, tx, deployerKp)
-    ).resolves.toBeDefined();
-  }, 60_000);
+      // Deployer is the depositor — they authorize the XLM transfer into the contract
+      await expect(sendTx(sorobanServer, tx, deployerKp)).resolves.toBeDefined();
+    }, 60_000);
 
-  it("arbiter releases funds and recipient receives 10 XLM", async () => {
-    if (!contractId) {
-      console.warn("No contractId — earlier tests must have passed first");
-      return;
-    }
+    it('arbiter releases funds and recipient receives 10 XLM', async () => {
+      if (!contractId) {
+        console.warn('No contractId — earlier tests must have passed first');
+        return;
+      }
 
-    // Snapshot recipient balance before the release
-    const balanceBefore = await xlmBalance(recipientKp.publicKey());
+      // Snapshot recipient balance before the release
+      const balanceBefore = await xlmBalance(recipientKp.publicKey());
 
-    // Only the stored arbiter can call release — signed by arbiterKp
-    const release = escrowCall.release({ arbiter: arbiterKp.publicKey() });
-    const account = await sorobanServer.getAccount(arbiterKp.publicKey());
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(
-        new Contract(contractId).call(release.method, ...release.args)
-      )
-      .setTimeout(30)
-      .build();
+      // Only the stored arbiter can call release — signed by arbiterKp
+      const release = escrowCall.release({ arbiter: arbiterKp.publicKey() });
+      const account = await sorobanServer.getAccount(arbiterKp.publicKey());
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(new Contract(contractId).call(release.method, ...release.args))
+        .setTimeout(30)
+        .build();
 
-    // Transaction is sourced from and signed by the arbiter account
-    await expect(
-      sendTx(sorobanServer, tx, arbiterKp)
-    ).resolves.toBeDefined();
+      // Transaction is sourced from and signed by the arbiter account
+      await expect(sendTx(sorobanServer, tx, arbiterKp)).resolves.toBeDefined();
 
-    // Assert recipient received 10 XLM
-    const balanceAfter = await xlmBalance(recipientKp.publicKey());
+      // Assert recipient received 10 XLM
+      const balanceAfter = await xlmBalance(recipientKp.publicKey());
 
-    // 10 XLM = 10.0 — allow a small epsilon for fees/rounding in Horizon display
-    expect(balanceAfter).toBeGreaterThan(balanceBefore);
-    expect(balanceAfter - balanceBefore).toBeGreaterThanOrEqual(9.9);
-  }, 60_000);
-});
+      // 10 XLM = 10.0 — allow a small epsilon for fees/rounding in Horizon display
+      expect(balanceAfter).toBeGreaterThan(balanceBefore);
+      expect(balanceAfter - balanceBefore).toBeGreaterThanOrEqual(9.9);
+    }, 60_000);
+  }
+);
 
 // ─── Legacy E2E suite (pre-issue-#446) ───────────────────────────────────────
 //
@@ -363,382 +352,383 @@ let contractId: string;
 describe.skipIf(process.env.RUN_E2E !== 'true' || process.env.RUN_E2E_LEGACY !== 'true')(
   'Escrow E2E — testnet (legacy)',
   () => {
-  beforeAll(async () => {
-    deployerKp = Keypair.random();
-    recipientKp = Keypair.random();
+    beforeAll(async () => {
+      deployerKp = Keypair.random();
+      recipientKp = Keypair.random();
 
-    // Fund both keypairs via Friendbot
-    await Promise.all([friendbot(deployerKp.publicKey()), friendbot(recipientKp.publicKey())]);
+      // Fund both keypairs via Friendbot
+      await Promise.all([friendbot(deployerKp.publicKey()), friendbot(recipientKp.publicKey())]);
 
-    // Small pause to let Horizon index the funded accounts
-    await new Promise((r) => setTimeout(r, 5000));
-  }, 60_000);
+      // Small pause to let Horizon index the funded accounts
+      await new Promise((r) => setTimeout(r, 5000));
+    }, 60_000);
 
-  it('deploys the escrow WASM and creates a contract instance', async () => {
-    if (!fs.existsSync(WASM_PATH)) {
-      console.warn(
-        'WASM not found — skipping deploy (run `cargo build --release --target wasm32-unknown-unknown`)'
-      );
-      return;
-    }
+    it('deploys the escrow WASM and creates a contract instance', async () => {
+      if (!fs.existsSync(WASM_PATH)) {
+        console.warn(
+          'WASM not found — skipping deploy (run `cargo build --release --target wasm32-unknown-unknown`)'
+        );
+        return;
+      }
 
-    const wasm = fs.readFileSync(WASM_PATH);
-    const account = await sorobanServer.getAccount(deployerKp.publicKey());
+      const wasm = fs.readFileSync(WASM_PATH);
+      const account = await sorobanServer.getAccount(deployerKp.publicKey());
 
-    // 1. Upload WASM
-    const uploadTx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(
-        // @ts-expect-error — uploadContractWasm is available via stellar-sdk xdr helpers
-        xdr.Operation.invokeHostFunction({
-          hostFunction: xdr.HostFunction.hostFunctionTypeUploadContractWasm(wasm),
-          auth: [],
-        })
-      )
-      .setTimeout(30)
-      .build();
+      // 1. Upload WASM
+      const uploadTx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(
+          // @ts-expect-error — uploadContractWasm is available via stellar-sdk xdr helpers
+          xdr.Operation.invokeHostFunction({
+            hostFunction: xdr.HostFunction.hostFunctionTypeUploadContractWasm(wasm),
+            auth: [],
+          })
+        )
+        .setTimeout(30)
+        .build();
 
-    const uploadResult = await sendTx(sorobanServer, uploadTx, deployerKp);
-    const wasmHash: Buffer = (uploadResult as any).returnValue?.bytes();
-    expect(wasmHash).toBeDefined();
+      const uploadResult = await sendTx(sorobanServer, uploadTx, deployerKp);
+      const wasmHash: Buffer = (uploadResult as any).returnValue?.bytes();
+      expect(wasmHash).toBeDefined();
 
-    // 2. Create contract instance
-    const account2 = await sorobanServer.getAccount(deployerKp.publicKey());
-    const deployTx = new TransactionBuilder(account2, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(
-        // @ts-expect-error — createContract via xdr helpers
-        xdr.Operation.invokeHostFunction({
-          hostFunction: xdr.HostFunction.hostFunctionTypeCreateContract(
-            new xdr.CreateContractArgs({
-              contractIdPreimage: xdr.ContractIdPreimage.contractIdPreimageFromAddress(
-                new xdr.ContractIdPreimageFromAddress({
-                  address: Address.fromString(deployerKp.publicKey()).toScAddress(),
-                  salt: Buffer.alloc(32),
-                })
-              ),
-              executable: xdr.ContractExecutable.contractExecutableWasm(wasmHash),
-            })
-          ),
-          auth: [],
-        })
-      )
-      .setTimeout(30)
-      .build();
+      // 2. Create contract instance
+      const account2 = await sorobanServer.getAccount(deployerKp.publicKey());
+      const deployTx = new TransactionBuilder(account2, {
+        fee: BASE_FEE,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(
+          // @ts-expect-error — createContract via xdr helpers
+          xdr.Operation.invokeHostFunction({
+            hostFunction: xdr.HostFunction.hostFunctionTypeCreateContract(
+              new xdr.CreateContractArgs({
+                contractIdPreimage: xdr.ContractIdPreimage.contractIdPreimageFromAddress(
+                  new xdr.ContractIdPreimageFromAddress({
+                    address: Address.fromString(deployerKp.publicKey()).toScAddress(),
+                    salt: Buffer.alloc(32),
+                  })
+                ),
+                executable: xdr.ContractExecutable.contractExecutableWasm(wasmHash),
+              })
+            ),
+            auth: [],
+          })
+        )
+        .setTimeout(30)
+        .build();
 
-    const deployResult = await sendTx(sorobanServer, deployTx, deployerKp);
-    contractId = (deployResult as any).returnValue?.address()?.contractId().toString("hex");
-    expect(contractId).toBeDefined();
-  }, 120_000);
+      const deployResult = await sendTx(sorobanServer, deployTx, deployerKp);
+      contractId = (deployResult as any).returnValue?.address()?.contractId().toString('hex');
+      expect(contractId).toBeDefined();
+    }, 120_000);
 
-  it('initializes the escrow contract', async () => {
-    if (!contractId) return;
+    it('initializes the escrow contract', async () => {
+      if (!contractId) return;
 
-    const account = await sorobanServer.getAccount(deployerKp.publicKey());
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(
-        // @ts-expect-error — xdr low-level API
-        xdr.Operation.invokeHostFunction({
-          hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
-            new xdr.InvokeContractArgs({
-              contractAddress: Address.fromString(contractId).toScAddress(),
-              functionName: 'initialize',
-              args: [
-                nativeToScVal(deployerKp.publicKey(), { type: 'address' }),
-                nativeToScVal(recipientKp.publicKey(), { type: 'address' }),
-                nativeToScVal(10n, { type: 'i128' }),
-              ],
-            })
-          ),
-          auth: [],
-        })
-      )
-      .setTimeout(30)
-      .build();
+      const account = await sorobanServer.getAccount(deployerKp.publicKey());
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(
+          // @ts-expect-error — xdr low-level API
+          xdr.Operation.invokeHostFunction({
+            hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
+              new xdr.InvokeContractArgs({
+                contractAddress: Address.fromString(contractId).toScAddress(),
+                functionName: 'initialize',
+                args: [
+                  nativeToScVal(deployerKp.publicKey(), { type: 'address' }),
+                  nativeToScVal(recipientKp.publicKey(), { type: 'address' }),
+                  nativeToScVal(10n, { type: 'i128' }),
+                ],
+              })
+            ),
+            auth: [],
+          })
+        )
+        .setTimeout(30)
+        .build();
 
-    await expect(sendTx(sorobanServer, tx, deployerKp)).resolves.toBeDefined();
-  }, 60_000);
+      await expect(sendTx(sorobanServer, tx, deployerKp)).resolves.toBeDefined();
+    }, 60_000);
 
-  it('releases funds and confirms recipient balance increased', async () => {
-    if (!contractId) return;
+    it('releases funds and confirms recipient balance increased', async () => {
+      if (!contractId) return;
 
-    const balanceBefore = await xlmBalance(recipientKp.publicKey());
+      const balanceBefore = await xlmBalance(recipientKp.publicKey());
 
-    const account = await sorobanServer.getAccount(deployerKp.publicKey());
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(
-        // @ts-expect-error — xdr low-level API
-        xdr.Operation.invokeHostFunction({
-          hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
-            new xdr.InvokeContractArgs({
-              contractAddress: Address.fromString(contractId).toScAddress(),
-              functionName: 'release',
-              args: [],
-            })
-          ),
-          auth: [],
-        })
-      )
-      .setTimeout(30)
-      .build();
+      const account = await sorobanServer.getAccount(deployerKp.publicKey());
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(
+          // @ts-expect-error — xdr low-level API
+          xdr.Operation.invokeHostFunction({
+            hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
+              new xdr.InvokeContractArgs({
+                contractAddress: Address.fromString(contractId).toScAddress(),
+                functionName: 'release',
+                args: [],
+              })
+            ),
+            auth: [],
+          })
+        )
+        .setTimeout(30)
+        .build();
 
-    await expect(sendTx(sorobanServer, tx, deployerKp)).resolves.toBeDefined();
+      await expect(sendTx(sorobanServer, tx, deployerKp)).resolves.toBeDefined();
 
-    const balanceAfter = await xlmBalance(recipientKp.publicKey());
-    expect(balanceAfter).toBeGreaterThan(balanceBefore);
-  }, 60_000);
+      const balanceAfter = await xlmBalance(recipientKp.publicKey());
+      expect(balanceAfter).toBeGreaterThan(balanceBefore);
+    }, 60_000);
 
-  it('full lifecycle: initialize then release by arbiter', async () => {
-    if (!contractId) return;
+    it('full lifecycle: initialize then release by arbiter', async () => {
+      if (!contractId) return;
 
-    const arbiterKp = Keypair.random();
-    await friendbot(arbiterKp.publicKey());
-    await new Promise((r) => setTimeout(r, 2000));
+      const arbiterKp = Keypair.random();
+      await friendbot(arbiterKp.publicKey());
+      await new Promise((r) => setTimeout(r, 2000));
 
-    const balanceBefore = await xlmBalance(recipientKp.publicKey());
+      const balanceBefore = await xlmBalance(recipientKp.publicKey());
 
-    const account = await sorobanServer.getAccount(deployerKp.publicKey());
-    const initTx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(
-        // @ts-expect-error — xdr low-level API
-        xdr.Operation.invokeHostFunction({
-          hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
-            new xdr.InvokeContractArgs({
-              contractAddress: Address.fromString(contractId).toScAddress(),
-              functionName: 'initialize',
-              args: [
-                nativeToScVal(arbiterKp.publicKey(), { type: 'address' }),
-                nativeToScVal(recipientKp.publicKey(), { type: 'address' }),
-                nativeToScVal(5n, { type: 'i128' }),
-              ],
-            })
-          ),
-          auth: [],
-        })
-      )
-      .setTimeout(30)
-      .build();
+      const account = await sorobanServer.getAccount(deployerKp.publicKey());
+      const initTx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(
+          // @ts-expect-error — xdr low-level API
+          xdr.Operation.invokeHostFunction({
+            hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
+              new xdr.InvokeContractArgs({
+                contractAddress: Address.fromString(contractId).toScAddress(),
+                functionName: 'initialize',
+                args: [
+                  nativeToScVal(arbiterKp.publicKey(), { type: 'address' }),
+                  nativeToScVal(recipientKp.publicKey(), { type: 'address' }),
+                  nativeToScVal(5n, { type: 'i128' }),
+                ],
+              })
+            ),
+            auth: [],
+          })
+        )
+        .setTimeout(30)
+        .build();
 
-    await sendTx(sorobanServer, initTx, deployerKp);
+      await sendTx(sorobanServer, initTx, deployerKp);
 
-    const account2 = await sorobanServer.getAccount(arbiterKp.publicKey());
-    const releaseTx = new TransactionBuilder(account2, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(
-        // @ts-expect-error — xdr low-level API
-        xdr.Operation.invokeHostFunction({
-          hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
-            new xdr.InvokeContractArgs({
-              contractAddress: Address.fromString(contractId).toScAddress(),
-              functionName: 'release',
-              args: [],
-            })
-          ),
-          auth: [],
-        })
-      )
-      .setTimeout(30)
-      .build();
+      const account2 = await sorobanServer.getAccount(arbiterKp.publicKey());
+      const releaseTx = new TransactionBuilder(account2, {
+        fee: BASE_FEE,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(
+          // @ts-expect-error — xdr low-level API
+          xdr.Operation.invokeHostFunction({
+            hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
+              new xdr.InvokeContractArgs({
+                contractAddress: Address.fromString(contractId).toScAddress(),
+                functionName: 'release',
+                args: [],
+              })
+            ),
+            auth: [],
+          })
+        )
+        .setTimeout(30)
+        .build();
 
-    await expect(sendTx(sorobanServer, releaseTx, arbiterKp)).resolves.toBeDefined();
+      await expect(sendTx(sorobanServer, releaseTx, arbiterKp)).resolves.toBeDefined();
 
-    const balanceAfter = await xlmBalance(recipientKp.publicKey());
-    expect(balanceAfter).toBeGreaterThan(balanceBefore);
-  }, 120_000);
+      const balanceAfter = await xlmBalance(recipientKp.publicKey());
+      expect(balanceAfter).toBeGreaterThan(balanceBefore);
+    }, 120_000);
 
-  it('full lifecycle: initialize then refund by depositor after expiry', async () => {
-    if (!contractId) return;
+    it('full lifecycle: initialize then refund by depositor after expiry', async () => {
+      if (!contractId) return;
 
-    const refundKp = Keypair.random();
-    await friendbot(refundKp.publicKey());
-    await new Promise((r) => setTimeout(r, 2000));
+      const refundKp = Keypair.random();
+      await friendbot(refundKp.publicKey());
+      await new Promise((r) => setTimeout(r, 2000));
 
-    const balanceBefore = await xlmBalance(refundKp.publicKey());
+      const balanceBefore = await xlmBalance(refundKp.publicKey());
 
-    const account = await sorobanServer.getAccount(refundKp.publicKey());
-    const initTx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(
-        // @ts-expect-error — xdr low-level API
-        xdr.Operation.invokeHostFunction({
-          hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
-            new xdr.InvokeContractArgs({
-              contractAddress: Address.fromString(contractId).toScAddress(),
-              functionName: 'initialize',
-              args: [
-                nativeToScVal(refundKp.publicKey(), { type: 'address' }),
-                nativeToScVal(recipientKp.publicKey(), { type: 'address' }),
-                nativeToScVal(3n, { type: 'i128' }),
-              ],
-            })
-          ),
-          auth: [],
-        })
-      )
-      .setTimeout(30)
-      .build();
+      const account = await sorobanServer.getAccount(refundKp.publicKey());
+      const initTx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(
+          // @ts-expect-error — xdr low-level API
+          xdr.Operation.invokeHostFunction({
+            hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
+              new xdr.InvokeContractArgs({
+                contractAddress: Address.fromString(contractId).toScAddress(),
+                functionName: 'initialize',
+                args: [
+                  nativeToScVal(refundKp.publicKey(), { type: 'address' }),
+                  nativeToScVal(recipientKp.publicKey(), { type: 'address' }),
+                  nativeToScVal(3n, { type: 'i128' }),
+                ],
+              })
+            ),
+            auth: [],
+          })
+        )
+        .setTimeout(30)
+        .build();
 
-    await sendTx(sorobanServer, initTx, refundKp);
+      await sendTx(sorobanServer, initTx, refundKp);
 
-    await new Promise((r) => setTimeout(r, 2000));
+      await new Promise((r) => setTimeout(r, 2000));
 
-    const account2 = await sorobanServer.getAccount(refundKp.publicKey());
-    const refundTx = new TransactionBuilder(account2, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(
-        // @ts-expect-error — xdr low-level API
-        xdr.Operation.invokeHostFunction({
-          hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
-            new xdr.InvokeContractArgs({
-              contractAddress: Address.fromString(contractId).toScAddress(),
-              functionName: 'refund',
-              args: [],
-            })
-          ),
-          auth: [],
-        })
-      )
-      .setTimeout(30)
-      .build();
+      const account2 = await sorobanServer.getAccount(refundKp.publicKey());
+      const refundTx = new TransactionBuilder(account2, {
+        fee: BASE_FEE,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(
+          // @ts-expect-error — xdr low-level API
+          xdr.Operation.invokeHostFunction({
+            hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
+              new xdr.InvokeContractArgs({
+                contractAddress: Address.fromString(contractId).toScAddress(),
+                functionName: 'refund',
+                args: [],
+              })
+            ),
+            auth: [],
+          })
+        )
+        .setTimeout(30)
+        .build();
 
-    await expect(sendTx(sorobanServer, refundTx, refundKp)).resolves.toBeDefined();
+      await expect(sendTx(sorobanServer, refundTx, refundKp)).resolves.toBeDefined();
 
-    const balanceAfter = await xlmBalance(refundKp.publicKey());
-    expect(balanceAfter).toBeGreaterThan(balanceBefore);
-  }, 120_000);
+      const balanceAfter = await xlmBalance(refundKp.publicKey());
+      expect(balanceAfter).toBeGreaterThan(balanceBefore);
+    }, 120_000);
 
-  it('release fails when called by non-arbiter', async () => {
-    if (!contractId) return;
+    it('release fails when called by non-arbiter', async () => {
+      if (!contractId) return;
 
-    const nonArbiterKp = Keypair.random();
-    await friendbot(nonArbiterKp.publicKey());
-    await new Promise((r) => setTimeout(r, 2000));
+      const nonArbiterKp = Keypair.random();
+      await friendbot(nonArbiterKp.publicKey());
+      await new Promise((r) => setTimeout(r, 2000));
 
-    const account = await sorobanServer.getAccount(deployerKp.publicKey());
-    const initTx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(
-        // @ts-expect-error — xdr low-level API
-        xdr.Operation.invokeHostFunction({
-          hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
-            new xdr.InvokeContractArgs({
-              contractAddress: Address.fromString(contractId).toScAddress(),
-              functionName: 'initialize',
-              args: [
-                nativeToScVal(deployerKp.publicKey(), { type: 'address' }),
-                nativeToScVal(recipientKp.publicKey(), { type: 'address' }),
-                nativeToScVal(2n, { type: 'i128' }),
-              ],
-            })
-          ),
-          auth: [],
-        })
-      )
-      .setTimeout(30)
-      .build();
+      const account = await sorobanServer.getAccount(deployerKp.publicKey());
+      const initTx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(
+          // @ts-expect-error — xdr low-level API
+          xdr.Operation.invokeHostFunction({
+            hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
+              new xdr.InvokeContractArgs({
+                contractAddress: Address.fromString(contractId).toScAddress(),
+                functionName: 'initialize',
+                args: [
+                  nativeToScVal(deployerKp.publicKey(), { type: 'address' }),
+                  nativeToScVal(recipientKp.publicKey(), { type: 'address' }),
+                  nativeToScVal(2n, { type: 'i128' }),
+                ],
+              })
+            ),
+            auth: [],
+          })
+        )
+        .setTimeout(30)
+        .build();
 
-    await sendTx(sorobanServer, initTx, deployerKp);
+      await sendTx(sorobanServer, initTx, deployerKp);
 
-    const account2 = await sorobanServer.getAccount(nonArbiterKp.publicKey());
-    const releaseTx = new TransactionBuilder(account2, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(
-        // @ts-expect-error — xdr low-level API
-        xdr.Operation.invokeHostFunction({
-          hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
-            new xdr.InvokeContractArgs({
-              contractAddress: Address.fromString(contractId).toScAddress(),
-              functionName: 'release',
-              args: [],
-            })
-          ),
-          auth: [],
-        })
-      )
-      .setTimeout(30)
-      .build();
+      const account2 = await sorobanServer.getAccount(nonArbiterKp.publicKey());
+      const releaseTx = new TransactionBuilder(account2, {
+        fee: BASE_FEE,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(
+          // @ts-expect-error — xdr low-level API
+          xdr.Operation.invokeHostFunction({
+            hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
+              new xdr.InvokeContractArgs({
+                contractAddress: Address.fromString(contractId).toScAddress(),
+                functionName: 'release',
+                args: [],
+              })
+            ),
+            auth: [],
+          })
+        )
+        .setTimeout(30)
+        .build();
 
-    await expect(sendTx(sorobanServer, releaseTx, nonArbiterKp)).rejects.toThrow();
-  }, 120_000);
+      await expect(sendTx(sorobanServer, releaseTx, nonArbiterKp)).rejects.toThrow();
+    }, 120_000);
 
-  it('refund fails before expiry', async () => {
-    if (!contractId) return;
+    it('refund fails before expiry', async () => {
+      if (!contractId) return;
 
-    const depositorKp = Keypair.random();
-    await friendbot(depositorKp.publicKey());
-    await new Promise((r) => setTimeout(r, 2000));
+      const depositorKp = Keypair.random();
+      await friendbot(depositorKp.publicKey());
+      await new Promise((r) => setTimeout(r, 2000));
 
-    const account = await sorobanServer.getAccount(depositorKp.publicKey());
-    const initTx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(
-        // @ts-expect-error — xdr low-level API
-        xdr.Operation.invokeHostFunction({
-          hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
-            new xdr.InvokeContractArgs({
-              contractAddress: Address.fromString(contractId).toScAddress(),
-              functionName: 'initialize',
-              args: [
-                nativeToScVal(depositorKp.publicKey(), { type: 'address' }),
-                nativeToScVal(recipientKp.publicKey(), { type: 'address' }),
-                nativeToScVal(4n, { type: 'i128' }),
-              ],
-            })
-          ),
-          auth: [],
-        })
-      )
-      .setTimeout(30)
-      .build();
+      const account = await sorobanServer.getAccount(depositorKp.publicKey());
+      const initTx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(
+          // @ts-expect-error — xdr low-level API
+          xdr.Operation.invokeHostFunction({
+            hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
+              new xdr.InvokeContractArgs({
+                contractAddress: Address.fromString(contractId).toScAddress(),
+                functionName: 'initialize',
+                args: [
+                  nativeToScVal(depositorKp.publicKey(), { type: 'address' }),
+                  nativeToScVal(recipientKp.publicKey(), { type: 'address' }),
+                  nativeToScVal(4n, { type: 'i128' }),
+                ],
+              })
+            ),
+            auth: [],
+          })
+        )
+        .setTimeout(30)
+        .build();
 
-    await sendTx(sorobanServer, initTx, depositorKp);
+      await sendTx(sorobanServer, initTx, depositorKp);
 
-    const account2 = await sorobanServer.getAccount(depositorKp.publicKey());
-    const refundTx = new TransactionBuilder(account2, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(
-        // @ts-expect-error — xdr low-level API
-        xdr.Operation.invokeHostFunction({
-          hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
-            new xdr.InvokeContractArgs({
-              contractAddress: Address.fromString(contractId).toScAddress(),
-              functionName: 'refund',
-              args: [],
-            })
-          ),
-          auth: [],
-        })
-      )
-      .setTimeout(30)
-      .build();
+      const account2 = await sorobanServer.getAccount(depositorKp.publicKey());
+      const refundTx = new TransactionBuilder(account2, {
+        fee: BASE_FEE,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })
+        .addOperation(
+          // @ts-expect-error — xdr low-level API
+          xdr.Operation.invokeHostFunction({
+            hostFunction: xdr.HostFunction.hostFunctionTypeInvokeContract(
+              new xdr.InvokeContractArgs({
+                contractAddress: Address.fromString(contractId).toScAddress(),
+                functionName: 'refund',
+                args: [],
+              })
+            ),
+            auth: [],
+          })
+        )
+        .setTimeout(30)
+        .build();
 
-    await expect(sendTx(sorobanServer, refundTx, depositorKp)).rejects.toThrow();
-  }, 120_000);
-});
+      await expect(sendTx(sorobanServer, refundTx, depositorKp)).rejects.toThrow();
+    }, 120_000);
+  }
+);

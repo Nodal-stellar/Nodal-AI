@@ -4,13 +4,7 @@
  * CREATE_ACCOUNT, and END_SPONSORING_FUTURE_RESERVES.
  */
 
-import {
-  Keypair,
-  TransactionBuilder,
-  Operation,
-  BASE_FEE,
-  xdr,
-} from '@stellar/stellar-sdk';
+import { Keypair, TransactionBuilder, Operation, BASE_FEE, xdr } from '@stellar/stellar-sdk';
 import { z } from 'zod';
 import { config } from '../config';
 import { createAgentSigner, Signer } from '../signer';

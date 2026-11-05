@@ -46,7 +46,9 @@ export function createX402Middleware(
 ): (req: Request, res: Response, next: NextFunction) => Promise<void> {
   // If legacy mode is enabled, return a simple middleware that returns JSON challenges
   if (config.X402_USE_LEGACY) {
-    logger.warn('x402: legacy mode enabled - using JSON challenge format for backward compatibility');
+    logger.warn(
+      'x402: legacy mode enabled - using JSON challenge format for backward compatibility'
+    );
     return createLegacyMiddleware(options);
   }
 
@@ -85,9 +87,9 @@ function createLegacyMiddleware(
 
       // Generate a unique nonce for this challenge
       const nonce = options.nonceGenerator?.() || generateNonce();
-      
+
       // Calculate expiry (default: 5 minutes from now)
-      const expiresAt = options.expiresIn 
+      const expiresAt = options.expiresIn
         ? new Date(Date.now() + options.expiresIn * 1000).toISOString()
         : new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
@@ -128,8 +130,11 @@ function createLegacyMiddleware(
         ],
       });
 
-      logger.debug({ url: req.url, amount, asset: `${assetCode}:${assetIssuer}` }, 'x402 legacy challenge issued');
-      
+      logger.debug(
+        { url: req.url, amount, asset: `${assetCode}:${assetIssuer}` },
+        'x402 legacy challenge issued'
+      );
+
       // Stop processing - we've handled the response
       return;
     } catch (err) {
@@ -148,11 +153,13 @@ function generateNonce(): string {
  * Extract the X402 challenge from a request's headers.
  * Used by sellers to verify payment proofs from buyers.
  */
-export function getX402ChallengeFromHeaders(headers: Record<string, string | string[]>): any | null {
-  const x402Version = Array.isArray(headers['x-x402-version']) 
-    ? headers['x-x402-version'][0] 
+export function getX402ChallengeFromHeaders(
+  headers: Record<string, string | string[]>
+): any | null {
+  const x402Version = Array.isArray(headers['x-x402-version'])
+    ? headers['x-x402-version'][0]
     : headers['x-x402-version'];
-  
+
   if (!x402Version) {
     return null;
   }
@@ -160,29 +167,27 @@ export function getX402ChallengeFromHeaders(headers: Record<string, string | str
   // v1 legacy format
   if (x402Version === '1') {
     return {
-      amount: Array.isArray(headers['x-x402-amount']) 
-        ? headers['x-x402-amount'][0] 
+      amount: Array.isArray(headers['x-x402-amount'])
+        ? headers['x-x402-amount'][0]
         : headers['x-x402-amount'],
-      assetCode: Array.isArray(headers['x-x402-asset']) 
-        ? headers['x-x402-asset'][0]?.split(':')[0] 
+      assetCode: Array.isArray(headers['x-x402-asset'])
+        ? headers['x-x402-asset'][0]?.split(':')[0]
         : headers['x-x402-asset']?.split(':')[0],
-      assetIssuer: Array.isArray(headers['x-x402-asset']) 
-        ? headers['x-x402-asset'][0]?.split(':')[1] 
+      assetIssuer: Array.isArray(headers['x-x402-asset'])
+        ? headers['x-x402-asset'][0]?.split(':')[1]
         : headers['x-x402-asset']?.split(':')[1],
-      payTo: Array.isArray(headers['pay']) 
-        ? headers['pay'][0] 
-        : headers['pay'],
-      nonce: Array.isArray(headers['x-x402-nonce']) 
-        ? headers['x-x402-nonce'][0] 
+      payTo: Array.isArray(headers['pay']) ? headers['pay'][0] : headers['pay'],
+      nonce: Array.isArray(headers['x-x402-nonce'])
+        ? headers['x-x402-nonce'][0]
         : headers['x-x402-nonce'],
-      expiresAt: Array.isArray(headers['x-x402-expires']) 
-        ? headers['x-x402-expires'][0] 
+      expiresAt: Array.isArray(headers['x-x402-expires'])
+        ? headers['x-x402-expires'][0]
         : headers['x-x402-expires'],
-      resource: Array.isArray(headers['x-x402-resource']) 
-        ? headers['x-x402-resource'][0] 
+      resource: Array.isArray(headers['x-x402-resource'])
+        ? headers['x-x402-resource'][0]
         : headers['x-x402-resource'],
-      network: Array.isArray(headers['x-x402-network']) 
-        ? headers['x-x402-network'][0] 
+      network: Array.isArray(headers['x-x402-network'])
+        ? headers['x-x402-network'][0]
         : headers['x-x402-network'],
     };
   }

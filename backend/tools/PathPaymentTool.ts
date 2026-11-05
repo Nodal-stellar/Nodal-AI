@@ -85,7 +85,6 @@ function toAsset(a: { code: string; issuer?: string | undefined }): Asset {
   return new Asset(a.code, a.issuer);
 }
 
-
 /**
  * The least a quoted `amount` may fall to under `bps` basis points of
  * slippage, rounded down to the stroop. Integer math, so no float error.

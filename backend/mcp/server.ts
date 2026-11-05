@@ -1,6 +1,6 @@
 /**
  * backend/mcp/server.ts
- * 
+ *
  * Model Context Protocol (MCP) server for Nodal AI.
  * Exposes tools over stdio and HTTP transports.
  */
@@ -37,16 +37,19 @@ export interface MCPResponse {
  */
 function getMCPTools(agent: PayFiAgent): MCPTool[] {
   const allowPayments = process.env.MCP_ALLOW_PAYMENTS === 'true';
-  
-  return agent.getTools().map(tool => ({
-    name: tool.name,
-    description: tool.description,
-    inputSchema: tool.inputSchema,
-    valueMoving: tool.valueMoving,
-  })).filter(tool => {
-    if (!tool.valueMoving) return true;
-    return allowPayments;
-  });
+
+  return agent
+    .getTools()
+    .map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      valueMoving: tool.valueMoving,
+    }))
+    .filter((tool) => {
+      if (!tool.valueMoving) return true;
+      return allowPayments;
+    });
 }
 
 function toolToMCPSchema(tool: MCPTool): object {
@@ -90,10 +93,14 @@ async function handleRequest(agent: PayFiAgent, request: MCPRequest): Promise<MC
         const args = params.arguments ?? {};
 
         const tools = getMCPTools(agent);
-        const tool = tools.find(t => t.name === toolName);
-        
+        const tool = tools.find((t) => t.name === toolName);
+
         if (!tool) {
-          return { jsonrpc: '2.0', id, error: { code: -32601, message: `Tool not found: ${toolName}` } };
+          return {
+            jsonrpc: '2.0',
+            id,
+            error: { code: -32601, message: `Tool not found: ${toolName}` },
+          };
         }
 
         if (tool.valueMoving && !VALUE_MOVING_TASK_TYPES.has(toolName as any)) {
@@ -103,14 +110,26 @@ async function handleRequest(agent: PayFiAgent, request: MCPRequest): Promise<MC
         const result = await agent.run({ type: toolName, payload: args });
 
         if (!result.success) {
-          return { jsonrpc: '2.0', id, error: { code: -32000, message: result.error ?? 'Execution failed' } };
+          return {
+            jsonrpc: '2.0',
+            id,
+            error: { code: -32000, message: result.error ?? 'Execution failed' },
+          };
         }
 
-        return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(result.data) }] } };
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: { content: [{ type: 'text', text: JSON.stringify(result.data) }] },
+        };
       }
 
       default:
-        return { jsonrpc: '2.0', id, error: { code: -32601, message: `Method not found: ${request.method}` } };
+        return {
+          jsonrpc: '2.0',
+          id,
+          error: { code: -32601, message: `Method not found: ${request.method}` },
+        };
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -126,7 +145,11 @@ export async function startMCPServer(agent: PayFiAgent): Promise<void> {
   log.info('Starting MCP stdio server');
 
   const readline = await import('readline');
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: false });
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    terminal: false,
+  });
 
   let buffer = '';
 

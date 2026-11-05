@@ -150,8 +150,7 @@ export class X402RateLimiter {
       count: this.inMemoryRecords.length,
       maxPayments: this.maxPayments,
       windowMs: this.windowMs,
-      oldestTimestamp:
-        this.inMemoryRecords.length > 0 ? this.inMemoryRecords[0]!.timestamp : null,
+      oldestTimestamp: this.inMemoryRecords.length > 0 ? this.inMemoryRecords[0]!.timestamp : null,
     };
   }
 

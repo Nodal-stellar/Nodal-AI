@@ -123,7 +123,10 @@ export class SessionStore {
     }
 
     session.messages.push({ ...message, timestamp: Date.now() });
-    log.debug({ sessionId, role: message.role, messageCount: session.messages.length }, 'Message added to session');
+    log.debug(
+      { sessionId, role: message.role, messageCount: session.messages.length },
+      'Message added to session'
+    );
   }
 
   /**

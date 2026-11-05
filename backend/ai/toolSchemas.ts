@@ -97,7 +97,9 @@ export function generateToolSchemas(options: GenerateSchemaOptions = {}): ToolSc
 
   // Calculate statistics
   const valueMovingCount = toolSchemas.filter((t) => t.value_moving).length;
-  const describedCount = toolSchemas.filter((t) => t.description && t.description.length > 0).length;
+  const describedCount = toolSchemas.filter(
+    (t) => t.description && t.description.length > 0
+  ).length;
 
   return {
     version: '1.0.0',
@@ -194,7 +196,9 @@ export function validateSchemas(): { valid: boolean; errors: string[] } {
       }
 
       if (tool.description && tool.description.length < 10) {
-        errors.push(`Tool '${tool.name}' has suspiciously short description (${tool.description.length} chars)`);
+        errors.push(
+          `Tool '${tool.name}' has suspiciously short description (${tool.description.length} chars)`
+        );
       }
 
       // Check that input_schema is valid JSON
@@ -214,7 +218,6 @@ export function validateSchemas(): { valid: boolean; errors: string[] } {
       const missing = schemas.stats.total_tools - schemas.stats.tools_with_descriptions;
       errors.push(`${missing} tool(s) missing descriptions`);
     }
-
   } catch (err) {
     errors.push(`Schema generation failed: ${err instanceof Error ? err.message : String(err)}`);
   }

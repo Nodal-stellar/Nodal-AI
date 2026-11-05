@@ -103,7 +103,7 @@ interface SpendingEntry {
  */
 export function assetKey(assetCode: string, assetIssuer?: string): string {
   const code = assetCode.trim().toUpperCase();
-  if (!assetIssuer || code === "XLM") return "XLM";
+  if (!assetIssuer || code === 'XLM') return 'XLM';
   return `${code}:${assetIssuer.trim()}`;
 }
 

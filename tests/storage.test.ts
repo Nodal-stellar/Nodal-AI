@@ -212,9 +212,7 @@ describe.each(backends)('Storage ($name)', (backend) => {
       await storage.saveSpendingRecord({ amount: 1.5, timestamp: 1_000 });
       await storage.saveSpendingRecord({ amount: 2.5, timestamp: 2_000 });
 
-      expect(await storage.loadSpendingRecords(1_500)).toEqual([
-        { amount: 2.5, timestamp: 2_000 },
-      ]);
+      expect(await storage.loadSpendingRecords(1_500)).toEqual([{ amount: 2.5, timestamp: 2_000 }]);
 
       await storage.pruneSpendingRecords(1_500);
       expect(await storage.loadSpendingRecords(0)).toEqual([{ amount: 2.5, timestamp: 2_000 }]);

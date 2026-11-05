@@ -34,10 +34,7 @@ import { SorobanDeployTool, SorobanDeployInputSchema } from './SorobanDeployTool
 import { SwapTool, SwapInputSchema } from './SwapTool';
 import { AccountHistoryTool, AccountHistoryInputSchema } from './AccountHistoryTool';
 import { SetOptionsTool, SetOptionsInputSchema } from './SetOptionsTool';
-import {
-  SorobanEventIndexerTool,
-  SorobanEventIndexerInputSchema,
-} from './SorobanEventIndexerTool';
+import { SorobanEventIndexerTool, SorobanEventIndexerInputSchema } from './SorobanEventIndexerTool';
 import { StellarIdentityTool, StellarIdentityInputSchema } from './StellarIdentityTool';
 import { CrossBorderPaymentTool, CrossBorderPaymentInputSchema } from './CrossBorderPaymentTool';
 import { FriendBotTool, FriendBotInputSchema } from './FriendBotTool';

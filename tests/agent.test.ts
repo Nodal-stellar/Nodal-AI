@@ -494,9 +494,12 @@ describe('PayFiAgent — mainnet spending cap', () => {
     spendingTracker.clear();
     vi.clearAllMocks();
     _resetSpendingTrackerForTests();
-    vi.mocked(StellarPaymentTool).mockImplementation(() => ({
-      execute: vi.fn().mockResolvedValue({ txHash: "mock_hash", ledger: 1 }),
-    } as any));
+    vi.mocked(StellarPaymentTool).mockImplementation(
+      () =>
+        ({
+          execute: vi.fn().mockResolvedValue({ txHash: 'mock_hash', ledger: 1 }),
+        }) as any
+    );
     vi.mocked(StellarPaymentTool).mockImplementation(
       () =>
         ({
@@ -597,9 +600,12 @@ describe('AgentResult snapshot', () => {
     spendingTracker.clear();
     vi.clearAllMocks();
     _resetSpendingTrackerForTests();
-    vi.mocked(StellarPaymentTool).mockImplementation(() => ({
-      execute: vi.fn().mockResolvedValue({ txHash: "success_tx_hash", ledger: 1 }),
-    } as any));
+    vi.mocked(StellarPaymentTool).mockImplementation(
+      () =>
+        ({
+          execute: vi.fn().mockResolvedValue({ txHash: 'success_tx_hash', ledger: 1 }),
+        }) as any
+    );
     vi.mocked(StellarPaymentTool).mockImplementation(
       () =>
         ({
@@ -728,9 +734,12 @@ describe('PayFiAgent — new task types', () => {
     spendingTracker.clear();
     vi.clearAllMocks();
     _resetSpendingTrackerForTests();
-    vi.mocked(StellarPaymentTool).mockImplementation(() => ({
-      execute: vi.fn().mockResolvedValue({ txHash: "mock_hash", ledger: 1 }),
-    } as any));
+    vi.mocked(StellarPaymentTool).mockImplementation(
+      () =>
+        ({
+          execute: vi.fn().mockResolvedValue({ txHash: 'mock_hash', ledger: 1 }),
+        }) as any
+    );
     vi.mocked(StellarPaymentTool).mockImplementation(
       () =>
         ({
@@ -1641,7 +1650,12 @@ describe('PayFiAgent — kill switch (#743)', () => {
     for (const type of ['stellar_payment', 'x402_respond', 'soroban_invoke', 'swap'] as const) {
       expect(VALUE_MOVING_TASK_TYPES.has(type)).toBe(true);
     }
-    for (const type of ['account_info', 'balance_check', 'soroban_query', 'stellar_toml'] as const) {
+    for (const type of [
+      'account_info',
+      'balance_check',
+      'soroban_query',
+      'stellar_toml',
+    ] as const) {
       expect(VALUE_MOVING_TASK_TYPES.has(type)).toBe(false);
     }
   });

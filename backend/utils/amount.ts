@@ -122,8 +122,8 @@ export function fromStroops(stroops: bigint): string {
  */
 export function stroopsToString(stroops: bigint): string {
   const units = stroops / STROOPS_PER_UNIT;
-  const frac  = stroops % STROOPS_PER_UNIT;
-  return `${units}.${String(frac).padStart(7, "0")}`;
+  const frac = stroops % STROOPS_PER_UNIT;
+  return `${units}.${String(frac).padStart(7, '0')}`;
 }
 
 /**

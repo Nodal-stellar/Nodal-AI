@@ -126,12 +126,7 @@ export const UNTRUSTED_DATA_SUFFIX = '\n[END UNTRUSTED DATA]\n';
  * Used for all tool outputs to prevent injection via data.
  */
 export function markAsUntrusted(text: string, source: string): string {
-  return (
-    UNTRUSTED_DATA_PREFIX +
-    `[Source: ${source}]\n` +
-    text +
-    UNTRUSTED_DATA_SUFFIX
-  );
+  return UNTRUSTED_DATA_PREFIX + `[Source: ${source}]\n` + text + UNTRUSTED_DATA_SUFFIX;
 }
 
 // ─── Input sanitization ───────────────────────────────────────────────────────
@@ -295,10 +290,7 @@ export function sanitizeOutput(
   }
 
   if (instructionsStripped || sensitiveDataRedacted) {
-    log.info(
-      { source, instructionsStripped, sensitiveDataRedacted },
-      'Tool output sanitized'
-    );
+    log.info({ source, instructionsStripped, sensitiveDataRedacted }, 'Tool output sanitized');
   }
 
   return {
@@ -413,9 +405,10 @@ export type ImmutableBehavior = (typeof POLICY_RULES.immutableBehaviors)[number]
  * Verifies that a proposed action doesn't violate immutable policies.
  * Tool outputs should never be able to change these behaviors.
  */
-export function enforcePolicyRules(
-  proposedAction: Record<string, unknown>
-): { allowed: boolean; violation?: ImmutableBehavior } {
+export function enforcePolicyRules(proposedAction: Record<string, unknown>): {
+  allowed: boolean;
+  violation?: ImmutableBehavior;
+} {
   for (const key of Object.keys(proposedAction)) {
     if (POLICY_RULES.immutableBehaviors.includes(key as ImmutableBehavior)) {
       log.warn(
@@ -436,11 +429,7 @@ import type { Request, Response, NextFunction } from 'express';
 /**
  * Express middleware for sanitizing incoming prompts.
  */
-export function guardrailsMiddleware(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): void {
+export function guardrailsMiddleware(req: Request, res: Response, next: NextFunction): void {
   // Only sanitize prompts sent to the AI endpoint
   if (req.path.startsWith('/ai/') || req.path.startsWith('/agent/run')) {
     const body = req.body as Record<string, unknown>;

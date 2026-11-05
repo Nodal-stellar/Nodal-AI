@@ -95,14 +95,20 @@ export class NanoPaymentTool {
       // Account is either open (valid account_info) or unopened/not found yet (which is acceptable for receiving a new open block)
       if (response.data && response.data.error) {
         if (response.data.error.toLowerCase().includes('account not found')) {
-          log.info({ recipient }, 'Recipient account is unopened; valid destination for open block');
+          log.info(
+            { recipient },
+            'Recipient account is unopened; valid destination for open block'
+          );
           return true;
         }
         log.warn({ recipient, error: response.data.error }, 'Recipient precheck returned notice');
       }
       return true;
     } catch (err) {
-      log.warn({ recipient, err }, 'Precheck network query failed, proceeding with format-validated address');
+      log.warn(
+        { recipient, err },
+        'Precheck network query failed, proceeding with format-validated address'
+      );
       return true;
     }
   }
@@ -160,7 +166,9 @@ export class NanoPaymentTool {
           subtype: 'send',
           block: {
             type: 'state',
-            account: input.senderAccount || 'nano_1nodalaiagent111111111111111111111111111111111111111111111111',
+            account:
+              input.senderAccount ||
+              'nano_1nodalaiagent111111111111111111111111111111111111111111111111',
             link: input.recipient,
             amount: input.amountRaw,
           },

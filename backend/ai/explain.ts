@@ -114,18 +114,15 @@ const RESULT_CODE_TABLE: Record<string, Omit<ResultCodeEntry, 'code'>> = {
       'The source account balance does not hold enough of the asset being sent to complete ' +
       'the operation after accounting for fees and minimum reserve.',
     suggestedFix:
-      'Check the account balance for the relevant asset. Add funds or reduce the send ' +
-      'amount.',
+      'Check the account balance for the relevant asset. Add funds or reduce the send ' + 'amount.',
   },
   op_src_no_trust: {
-    description:
-      'The source account does not have a trustline for the asset it is trying to send.',
+    description: 'The source account does not have a trustline for the asset it is trying to send.',
     suggestedFix:
       'Establish a trustline to the asset issuer from the source account before sending.',
   },
   op_no_trust: {
-    description:
-      'The destination account does not have a trustline for the asset being received.',
+    description: 'The destination account does not have a trustline for the asset being received.',
     suggestedFix:
       'Ask the destination account holder to establish a trustline to the asset issuer ' +
       'before sending.',

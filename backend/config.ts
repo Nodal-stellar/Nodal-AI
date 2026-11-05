@@ -303,11 +303,11 @@ export const EnvSchema = z.object({
       (val) => {
         if (!val) return true;
         // Validate each entry is either XLM:<limit> or CODE:ISSUER:<limit>
-        const entries = val.split(",");
+        const entries = val.split(',');
         const limitRe = /^[1-9]\d*(\.\d{1,7})?$/;
-        const g56Re   = /^G[A-Z2-7]{55}$/;
+        const g56Re = /^G[A-Z2-7]{55}$/;
         for (const entry of entries) {
-          const parts = entry.trim().split(":");
+          const parts = entry.trim().split(':');
           if (parts.length === 2) {
             // XLM:<limit> or CODE:<limit>
             const [, limit] = parts as [string, string];
@@ -325,7 +325,7 @@ export const EnvSchema = z.object({
       },
       {
         message:
-          "SPENDING_LIMITS must be a comma-separated list of " +
+          'SPENDING_LIMITS must be a comma-separated list of ' +
           "'ASSET_CODE:LIMIT' (for XLM/native) or " +
           "'ASSET_CODE:ISSUER:LIMIT' (for credit assets), " +
           "e.g. 'XLM:1000,USDC:GA5Z…:500'",
@@ -335,8 +335,8 @@ export const EnvSchema = z.object({
   /** When true, assets not listed in SPENDING_LIMITS are allowed through (default: denied). */
   SPENDING_LIMITS_ALLOW_UNKNOWN: z
     .string()
-    .transform((v) => v.toLowerCase() === "true")
-    .default("false"),
+    .transform((v) => v.toLowerCase() === 'true')
+    .default('false'),
   // Bearer token for the HTTP API (/status, /spending, /metrics, /approvals,
   // /admin/*). Falls back to WEBHOOK_SECRET when unset — deprecated.
   ADMIN_API_TOKEN: z.string().min(1).optional(),
@@ -365,10 +365,7 @@ export const EnvSchema = z.object({
   // AI layer: LLM provider for the planner (optional - disabled if not set)
 
   // LLM provider: openai, anthropic, or mock (for testing)
-  LLM_PROVIDER: z
-    .enum(['openai', 'anthropic', 'mock'])
-    .default('mock')
-    .optional(),
+  LLM_PROVIDER: z.enum(['openai', 'anthropic', 'mock']).default('mock').optional(),
 
   // Model identifier (e.g., gpt-4o, claude-3-sonnet-20240229)
   LLM_MODEL: z.string().min(1).optional(),
@@ -797,19 +794,21 @@ function parseConfigAndDerive(
   // On mainnet, both RPC endpoints MUST use HTTPS to prevent credential/data
   // exposure over unencrypted connections. Testnet and futurenet permit HTTP
   // for local devnets and CI environments.
-  if (raw.STELLAR_NETWORK === "mainnet") {
+  if (raw.STELLAR_NETWORK === 'mainnet') {
     const httpsErrors: string[] = [];
-    if (!raw.HORIZON_URL.startsWith("https://")) {
+    if (!raw.HORIZON_URL.startsWith('https://')) {
       httpsErrors.push(`  • HORIZON_URL: must use HTTPS on mainnet (got: ${raw.HORIZON_URL})`);
     }
-    if (!raw.SOROBAN_RPC_URL.startsWith("https://")) {
-      httpsErrors.push(`  • SOROBAN_RPC_URL: must use HTTPS on mainnet (got: ${raw.SOROBAN_RPC_URL})`);
+    if (!raw.SOROBAN_RPC_URL.startsWith('https://')) {
+      httpsErrors.push(
+        `  • SOROBAN_RPC_URL: must use HTTPS on mainnet (got: ${raw.SOROBAN_RPC_URL})`
+      );
     }
     if (httpsErrors.length > 0) {
       process.stderr.write(
         `\n❌ [Config] Mainnet requires HTTPS for all RPC endpoints:\n` +
-        httpsErrors.join("\n") +
-        `\n\nSee .env.example for reference.\n\n`
+          httpsErrors.join('\n') +
+          `\n\nSee .env.example for reference.\n\n`
       );
       process.exit(1);
     }
@@ -857,8 +856,8 @@ function parseConfigAndDerive(
   // ── Parse per-asset spending limits ────────────────────────────────────────
   const spendingLimitsMap = new Map<string, string>();
   if (raw.SPENDING_LIMITS) {
-    for (const entry of raw.SPENDING_LIMITS.split(",")) {
-      const parts = entry.trim().split(":");
+    for (const entry of raw.SPENDING_LIMITS.split(',')) {
+      const parts = entry.trim().split(':');
       if (parts.length === 2) {
         // "NATIVE:1000" or "XLM:1000" — native/code only
         const [code, limit] = parts as [string, string];
@@ -1149,7 +1148,8 @@ export function getLLMApiKey(): string | undefined {
  *     const response = await provider.generate(messages, options);
  *   }
  */
-export function createLLMProvider(): ReturnType<typeof import('./ai/providers').createLLMProvider> | undefined {
+export function createLLMProvider():
+  ReturnType<typeof import('./ai/providers').createLLMProvider> | undefined {
   const providerType = process.env.LLM_PROVIDER as 'openai' | 'anthropic' | 'mock' | undefined;
   const apiKey = process.env.LLM_API_KEY;
 
@@ -1158,8 +1158,9 @@ export function createLLMProvider(): ReturnType<typeof import('./ai/providers').
   }
 
   // Lazy require to avoid a circular dependency (ai/providers imports config).
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { createLLMProvider: createProvider } = require('./ai/providers') as typeof import('./ai/providers');
+  const { createLLMProvider: createProvider } =
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require('./ai/providers') as typeof import('./ai/providers');
 
   return createProvider({
     provider: providerType,
@@ -1234,4 +1235,4 @@ export const config = new Proxy({} as AgentConfig, {
 // on the config object. The line below causes a deliberate TS2551 compile error
 // (suppressed by @ts-expect-error) to prove the property does not exist on the type.
 // @ts-expect-error — TS2551: Property 'AGENT_SECRET_KEY' does not exist on 'AgentConfig'
-declare const _configTypeGuard: AgentConfig["AGENT_SECRET_KEY"];
+declare const _configTypeGuard: AgentConfig['AGENT_SECRET_KEY'];

@@ -302,9 +302,9 @@ describe('X402PaymentTool', () => {
     });
 
     it('rejects a fake-USDC challenge whose issuer differs from the configured one', async () => {
-      await expect(
-        tool.respond({ ...VALID_CHALLENGE, assetIssuer: FAKE_ISSUER })
-      ).rejects.toThrow(`x402: assetIssuer ${FAKE_ISSUER} is not a trusted issuer for USDC`);
+      await expect(tool.respond({ ...VALID_CHALLENGE, assetIssuer: FAKE_ISSUER })).rejects.toThrow(
+        `x402: assetIssuer ${FAKE_ISSUER} is not a trusted issuer for USDC`
+      );
       expect(mockPaymentTool.execute).not.toHaveBeenCalled();
     });
 

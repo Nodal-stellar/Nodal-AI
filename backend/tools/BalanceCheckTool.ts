@@ -16,10 +16,9 @@ export const BalanceCheckInputSchema = z.object({
   assetIssuer: z
     .string()
     .trim()
-    .refine(
-      (value) => !value || StrKey.isValidEd25519PublicKey(value),
-      { message: 'Invalid Stellar asset issuer' }
-    )
+    .refine((value) => !value || StrKey.isValidEd25519PublicKey(value), {
+      message: 'Invalid Stellar asset issuer',
+    })
     .optional(),
   /** Asset code (omit or use 'XLM' for native lumen balance) */
   assetCode: z.string().trim().min(1).optional(),

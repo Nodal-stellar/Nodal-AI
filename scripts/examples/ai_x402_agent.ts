@@ -91,17 +91,18 @@ async function createMockPaywallServer(): Promise<Server> {
 
       if (proof.protocol === 'x402' && proof.txHash && activeChallenge?.nonce === proof.nonce) {
         log.info('Valid X402PaymentProof verified -> 200 OK access granted');
-        
+
         // Generate fresh data for this request
         const dataKey = proof.nonce;
-        const data = `Premium AI Insights ${new Date().toISOString()}\n` +
-                    `Transaction: ${proof.txHash}\n` +
-                    `Payer: ${proof.payer}\n` +
-                    `Price: ${DATA_COST} ${ASSET_CODE}\n` +
-                    `Access granted at: ${new Date().toISOString()}`;
-        
+        const data =
+          `Premium AI Insights ${new Date().toISOString()}\n` +
+          `Transaction: ${proof.txHash}\n` +
+          `Payer: ${proof.payer}\n` +
+          `Price: ${DATA_COST} ${ASSET_CODE}\n` +
+          `Access granted at: ${new Date().toISOString()}`;
+
         paywalledDataCache.set(dataKey, data);
-        
+
         res.status(200).json({
           status: 'success',
           message: '🎉 Access Granted! Premium AI Model Insights & Dataset unlocked.',
@@ -115,7 +116,10 @@ async function createMockPaywallServer(): Promise<Server> {
         res.status(400).json({ error: 'Invalid payment proof' });
       }
     } catch (err) {
-      log.error({ error: err instanceof Error ? err.message : String(err) }, 'Malformed X-PAYMENT-PROOF header');
+      log.error(
+        { error: err instanceof Error ? err.message : String(err) },
+        'Malformed X-PAYMENT-PROOF header'
+      );
       res.status(400).json({ error: 'Malformed X-PAYMENT-PROOF header' });
     }
   });
@@ -153,7 +157,7 @@ interface AgentDecision {
 async function analyzeRequest(request: DataRequest): Promise<AgentDecision> {
   // Simulated AI analysis - in real-world scenario this would use an LLM
   // to analyze the request and determine if it requires payment
-  
+
   const analysis = {
     requestId: request.requestId,
     requestType: request.requestType,
@@ -195,7 +199,7 @@ async function requestWithAgent(
 ): Promise<AxiosResponse | null> {
   if (challenge) {
     log.info('Agent autonomously executing x402_respond task to pay for access...');
-    
+
     try {
       const agentResult: AgentResult = await agent.run({
         type: 'x402_respond' as const,
@@ -208,11 +212,14 @@ async function requestWithAgent(
       }
 
       const proof: X402PaymentProof = agentResult.data;
-      log.info({ 
-        txHash: proof.txHash, 
-        nonce: proof.nonce,
-        payer: proof.payer 
-      }, 'Payment settled! Generated X402PaymentProof');
+      log.info(
+        {
+          txHash: proof.txHash,
+          nonce: proof.nonce,
+          payer: proof.payer,
+        },
+        'Payment settled! Generated X402PaymentProof'
+      );
 
       // Retry the request with the payment proof
       const paidResponse = await axios.get(url, {
@@ -224,8 +231,10 @@ async function requestWithAgent(
 
       return paidResponse;
     } catch (err) {
-      log.error({ error: err instanceof Error ? err.message : String(err) }, 
-                'Error processing x402 payment');
+      log.error(
+        { error: err instanceof Error ? err.message : String(err) },
+        'Error processing x402 payment'
+      );
       return null;
     }
   } else {
@@ -236,8 +245,10 @@ async function requestWithAgent(
       });
       return response;
     } catch (err) {
-      log.error({ error: err instanceof Error ? err.message : String(err) }, 
-                'Error making initial request');
+      log.error(
+        { error: err instanceof Error ? err.message : String(err) },
+        'Error making initial request'
+      );
       return null;
     }
   }
@@ -266,7 +277,7 @@ async function main(): Promise<void> {
   // Initialize the agent
   console.log('[2] Initializing Nodal AI agent...');
   const agent = new PayFiAgent();
-  
+
   // Log agent configuration (without secrets)
   console.log(`    Agent public key: ${process.env.AGENT_PUBLIC_KEY || '(mock mode)'}`);
   console.log(`    Network: ${process.env.STELLAR_NETWORK || 'offline (mocked)'}`);
@@ -288,7 +299,7 @@ async function main(): Promise<void> {
     // Step 2: Agent analyzes the request
     console.log('[4] Agent analyzes request to determine payment requirements...');
     const decision = await analyzeRequest(request);
-    
+
     console.log('    Decision analysis:');
     console.log(`      - Requires payment: ${decision.requiresPayment}`);
     console.log(`      - Amount: ${decision.amount} ${decision.assetCode}`);
@@ -309,12 +320,14 @@ async function main(): Promise<void> {
     // Step 3: Agent attempts to access the resource
     console.log('[5] Agent attempts to access the paywalled resource...');
     const initialResponse = await requestWithAgent(agent, resourceUrl);
-    
+
     if (!initialResponse) {
       throw new Error('Failed to make initial request');
     }
 
-    console.log(`    Initial response status: ${initialResponse.status} ${initialResponse.statusText}`);
+    console.log(
+      `    Initial response status: ${initialResponse.status} ${initialResponse.statusText}`
+    );
     console.log('');
 
     // Step 4: Discover payment required (402 challenge)
@@ -330,7 +343,9 @@ async function main(): Promise<void> {
 
       // Step 5: Agent plans payment
       console.log('[6] Agent plans payment autonomously...');
-      console.log(`    Planning to pay ${decision.amount} ${decision.assetCode} to ${decision.reason}`);
+      console.log(
+        `    Planning to pay ${decision.amount} ${decision.assetCode} to ${decision.reason}`
+      );
       console.log('');
 
       // Step 6: Agent pays via x402
@@ -386,10 +401,11 @@ async function main(): Promise<void> {
     console.log('    Payment details:');
     console.log(`      - Amount: ${DATA_COST} ${ASSET_CODE}`);
     console.log(`      - Asset issuer: ${ASSET_ISSUER_KEYPAIR.publicKey()}`);
-    console.log(`      - Transaction: ${paywalledDataCache.size > 0 ? 'Simulated' : '(mock mode)'}`);
+    console.log(
+      `      - Transaction: ${paywalledDataCache.size > 0 ? 'Simulated' : '(mock mode)'}`
+    );
     console.log('═══════════════════════════════════════════════════════════════');
     console.log('');
-
   } finally {
     agent.destroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));

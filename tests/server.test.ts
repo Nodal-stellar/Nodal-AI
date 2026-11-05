@@ -110,7 +110,11 @@ import { getResults } from '../backend/persistence';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function makeReq(method: string, url: string, headers: Record<string, string> = {}): http.IncomingMessage {
+function makeReq(
+  method: string,
+  url: string,
+  headers: Record<string, string> = {}
+): http.IncomingMessage {
   return { method, url, headers } as http.IncomingMessage;
 }
 
@@ -476,9 +480,14 @@ describe('backend/server.ts — health check HTTP server', () => {
       const res = makeRes();
 
       capturedHandler!(
-        makeBodyReq('POST', '/approvals/appr-1', { decision: 'approve' }, {
-          authorization: 'Bearer nope',
-        }),
+        makeBodyReq(
+          'POST',
+          '/approvals/appr-1',
+          { decision: 'approve' },
+          {
+            authorization: 'Bearer nope',
+          }
+        ),
         res
       );
       await flush();
@@ -493,9 +502,14 @@ describe('backend/server.ts — health check HTTP server', () => {
       const res = makeRes();
 
       capturedHandler!(
-        makeBodyReq('POST', '/approvals/appr-1', { decision: 'approve' }, {
-          authorization: 'Bearer admin-secret',
-        }),
+        makeBodyReq(
+          'POST',
+          '/approvals/appr-1',
+          { decision: 'approve' },
+          {
+            authorization: 'Bearer admin-secret',
+          }
+        ),
         res
       );
       await flush();
@@ -511,9 +525,14 @@ describe('backend/server.ts — health check HTTP server', () => {
       const res = makeRes();
 
       capturedHandler!(
-        makeBodyReq('POST', '/approvals/appr-1', { decision: 'deny' }, {
-          authorization: 'Bearer admin-secret',
-        }),
+        makeBodyReq(
+          'POST',
+          '/approvals/appr-1',
+          { decision: 'deny' },
+          {
+            authorization: 'Bearer admin-secret',
+          }
+        ),
         res
       );
       await flush();

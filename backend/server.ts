@@ -146,7 +146,7 @@ function tokensMatch(given: string, expected: string): boolean {
 function isAuthenticated(req: http.IncomingMessage): boolean {
   const secret = apiToken();
   if (!secret) return config.STELLAR_NETWORK !== 'mainnet';
-  
+
   // Check Authorization header first
   const auth = req.headers['authorization'];
   if (auth) {
@@ -155,7 +155,7 @@ function isAuthenticated(req: http.IncomingMessage): boolean {
       return true;
     }
   }
-  
+
   // Check URL query parameter (for SSE, which doesn't support custom headers)
   const url = req.url;
   if (url) {
@@ -169,7 +169,7 @@ function isAuthenticated(req: http.IncomingMessage): boolean {
       // Invalid URL, continue to return false
     }
   }
-  
+
   return false;
 }
 
@@ -634,7 +634,7 @@ function handleStream(
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
+    Connection: 'keep-alive',
     'Access-Control-Allow-Origin': '*',
   });
 
