@@ -75,8 +75,8 @@ vi.mock('../backend/logger', () => ({
 }));
 
 vi.mock('../backend/utils/logger', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   createLogger: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })),
-  generateCorrelationId: vi.fn(() => "mock-correlation-id"),
   generateCorrelationId: vi.fn(() => 'mock-correlation-id'),
 }));
 
@@ -213,7 +213,8 @@ function makeSacTransferEvent(opts: {
 
   const contractEvent = new xdr.ContractEvent({
     ext: new ExtCtor(0),
-    contractId: Buffer.alloc(32),
+    // The SDK types Hash as Opaque[] ("workaround, cause unknown"); at runtime it is a 32-byte Buffer.
+    contractId: Buffer.alloc(32) as unknown as xdr.ContractId,
     type: xdr.ContractEventType.diagnostic(),
     body: new BodyCtor(0, v0),
   });

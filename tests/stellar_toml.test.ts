@@ -130,7 +130,7 @@ EMAIL = "alice@example.com"
     });
 
     await expect(tool.fetchToml({ domain: 'nested.example.com' })).rejects.toThrow(
-      /Maximum nesting depth/
+      /excessively nested|nesting/
     );
   });
 

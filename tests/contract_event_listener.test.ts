@@ -16,7 +16,7 @@ vi.mock('../backend/config', () => ({
   },
 }));
 
-vi.mock('../backend/logger', () => ({
+vi.mock('../backend/utils/logger', () => ({
   logger: {
     error: vi.fn(),
     info: vi.fn(),
@@ -96,7 +96,7 @@ describe('ContractEventListener', () => {
   });
 
   it('logs an error and keeps polling when getEvents rejects', async () => {
-    const { logger } = await import('../backend/logger');
+    const { logger } = await import('../backend/utils/logger');
     vi.mocked(rpcClient.sorobanServer.getEvents).mockRejectedValueOnce(
       new Error('RPC unavailable')
     );

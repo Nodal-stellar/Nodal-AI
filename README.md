@@ -145,7 +145,7 @@ Nodal AI includes a multi-stage Dockerfile and Docker Compose stack for local de
    ```
 
    This will spin up:
-   - `stellar-quickstart` at `http://localhost:8000` (Horizon) and `http://localhost:8001` (Soroban RPC).
+   - `stellar-quickstart` at `http://localhost:8000` (Horizon) and `http://localhost:8000/soroban/rpc` (Soroban RPC).
    - `agent` which automatically connects to the quickstart services once they are healthy.
 
 2. **Stop the services and clean up containers:**
@@ -721,7 +721,7 @@ Each value below is a `BuiltinTaskType` wired into `PayFiAgent.run()` in `backen
 | `sequence_number` | `SequenceNumberTool` | Fetch or bump the agent's current sequence number. |
 | `sponsored_account` | `SponsoredAccountTool` | Create a new Stellar account with sponsored reserves. |
 | `anchor_quote` | `AnchorQuoteTool` | Fetch an SEP-38 quote from an anchor for asset conversion. |
-| `inflation` | `InflationTool` | Set or query the account's inflation destination. |
+| `nano_payment` | `NanoPaymentTool` | Send a feeless Nano micro-payment (raw units). |
 | `soroban_deploy` | `SorobanDeployTool` | Upload WASM bytecode and instantiate Soroban smart contracts. |
 | `swap` | `SwapTool` | Perform atomic DEX asset swaps via strict-send path payments, with a slippage bound. |
 | `account_history` | `AccountHistoryTool` | Fetch paginated payment history for a Stellar account. Read-only. |

@@ -53,7 +53,8 @@ Which task type(s) does this feature touch, or does it introduce a new one?
 - [ ] `sequence_number`
 - [ ] `sponsored_account`
 - [ ] `anchor_quote`
-- [ ] `inflation`
+- [ ] `cross_border_payment`
+- [ ] `nano_payment`
 - [ ] `ledger_info`
 - [ ] `network_status`
 - [ ] `offer_book`

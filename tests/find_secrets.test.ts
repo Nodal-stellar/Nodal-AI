@@ -9,8 +9,8 @@ import { mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-const require = createRequire(import.meta.url);
-const { getAllowedKeys, findSecretKeys } = require('../scripts/find_secrets.js');
+const requireScript = createRequire(__filename);
+const { getAllowedKeys, findSecretKeys } = requireScript('../scripts/find_secrets.js');
 
 // Synthetic secret-shaped values, built at runtime to avoid tripping the pre-commit scanner.
 const ALLOWED = 'S' + 'A'.repeat(55);

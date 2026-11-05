@@ -1,41 +1,81 @@
 /**
  * backend/spending_tracker.ts
  *
- * Production-grade, atomic spending tracker with per-asset limits.
+ * Spending tracker that records each payment amount and maintains a rolling
+ * time window. It is used by the agent to enforce a cumulative spending limit
+ * within `config.SPENDING_WINDOW_MS`.
  *
- * Design goals (addresses GitHub issues #731–#734):
+ * ## Persistence (#372, #731)
+ * The window is mirrored to SQLite. Holding it only in memory meant a restart
+ * reset the cumulative total to zero, so an agent that was restarted — or that
+ * crashed and was restarted for it — could spend past its cap by starting over
+ * with a clean slate. Every accepted spend (`record()` or `reserve()`) is
+ * written immediately under its id and reloaded on construction.
  *
- *   #731 — Rollback deletes the persisted row
- *     reserve() writes a row to SQLite.  rollback() deletes it by id.
- *     After a restart, restore() reloads only committed rows (rows still in DB
- *     because rollback already deleted them).
+ * `release()` / `rollback()` delete the row they cancel, so a rolled-back spend
+ * does not reappear after a restart (#731). A reservation that was still in
+ * flight when the process died is reloaded and keeps counting
+ * (conservative-safe behaviour on crash).
  *
- *   #732 — Atomic reservation prevents race condition
- *     reserve() is a synchronous critical section: the check and the push happen
- *     in a single tick with no await between them.  SQLite uses
- *     BEGIN IMMEDIATE for the DB write so a concurrent Node process cannot
- *     interleave.  The in-process lock (busy flag) prevents re-entrancy while
- *     the synchronous DB write is in flight.
+ * Persistence is best-effort: if the database is unavailable the tracker still
+ * enforces the limit for the life of the process rather than refusing to run.
  *
- *   #733 — Per-asset limits
- *     Each reservation carries an assetKey ("XLM" for native, "CODE:ISSUER" for
- *     credit assets).  Limits are looked up from config.SPENDING_LIMITS_MAP.
- *     Unknown assets are denied by default (config.SPENDING_LIMITS_ALLOW_UNKNOWN).
+ * ## Record semantics (issue #730)
+ * `record()` computes the prospective total *before* mutating state. If adding
+ * the new amount would breach the limit the method throws *without* pushing the
+ * record. A rejected attempt therefore leaves `total()` unchanged and nothing
+ * is persisted.
  *
- *   #734 — BigInt stroop arithmetic
- *     All amount comparisons and accumulation use toStroops() → BigInt to avoid
- *     IEEE-754 precision loss.  parseFloat is never used on monetary values.
+ * ## Reserve / commit / release semantics (issue #729)
+ * For transaction-submission flows where the outcome is unknown at call-time,
+ * use the three-phase API instead of `record()`:
+ *
+ *   1. `reserve(amount)` → `reservationId`   – holds the amount against the
+ *      limit; throws if it would be exceeded.  State is provisional until
+ *      the reservation is either committed or released.
+ *   2. `commit(id)`                           – confirms a successful
+ *      submission; converts the provisional hold into a real record.
+ *   3. `release(id)`                          – cancels a failed/rejected
+ *      submission; removes the hold so the amount is not counted.
+ *
+ * ## Atomic reservation (issue #732)
+ * The limit check and the push happen synchronously with no await between
+ * them, so concurrent async tasks are serialised by the event loop and can
+ * never collectively overshoot. A re-entrancy guard rejects a nested call made
+ * from inside that critical section.
+ *
+ * ## Per-asset limits (issue #733)
+ * Each spend carries an asset key ("XLM" for native, "CODE:ISSUER" for credit
+ * assets — see {@link assetKey}); when a caller names none, the x402
+ * settlement asset is charged.
+ *   - `SPENDING_LIMITS` unset: `AGENT_SPENDING_LIMIT` caps the combined total
+ *     of every asset.
+ *   - `SPENDING_LIMITS` set: each listed asset is capped by its own limit.
+ *     Unlisted assets are denied unless `SPENDING_LIMITS_ALLOW_UNKNOWN=true`,
+ *     in which case `AGENT_SPENDING_LIMIT` caps each of them.
+ *
+ * ## BigInt stroop arithmetic (issue #734)
+ * Amounts are parsed with `toStroops()` and accumulated as BigInt stroops;
+ * `parseFloat` is never used for a comparison against the limit.
+ *
+ * ## Alerts (issue #824)
+ * Every accepted or rejected spend is checked against the configured alert
+ * thresholds (80% and 100% of the limit by default). Each threshold notifies
+ * once per window — see {@link alerts!SpendingAlertMonitor}.
  */
 
-import { randomUUID } from "crypto";
-import { config } from "./config";
+import { randomUUID } from 'crypto';
+import { config, MAINNET_SPENDING_CAP } from './config';
+import { logger } from './utils/logger';
+import { spendingAlerts } from './alerts';
 import {
-  saveSpendingRecord,
-  deleteSpendingRecord,
+  clearSpendingRecords,
+  deleteTrackedSpendingRecord,
   getSpendingRecordsSince,
   pruneSpendingRecords,
-} from "./persistence";
-import { toStroops, stroopsToString, STROOPS_PER_UNIT } from "./utils/amount";
+  saveTrackedSpendingRecord,
+} from './persistence';
+import { toStroops, stroopsToString, STROOPS_PER_UNIT } from './utils/amount';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -45,6 +85,8 @@ interface SpendingEntry {
   readonly stroops: bigint;
   readonly assetKey: string;
   readonly timestampMs: number;
+  /** False while a reservation waits for commit() or release() (#729). */
+  committed: boolean;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -61,8 +103,18 @@ interface SpendingEntry {
  */
 export function assetKey(assetCode: string, assetIssuer?: string): string {
   const code = assetCode.trim().toUpperCase();
-  if (!assetIssuer || code === "XLM") return "XLM";
+  if (!assetIssuer || code === 'XLM') return 'XLM';
   return `${code}:${assetIssuer.trim()}`;
+}
+
+/** The asset charged when a caller does not name one: the x402 settlement asset. */
+function defaultAssetKey(): string {
+  return assetKey(config.X402_ASSET_CODE, config.X402_ASSET_ISSUER);
+}
+
+/** True when SPENDING_LIMITS configures per-asset limits (#733). */
+function perAssetLimits(): boolean {
+  return config.SPENDING_LIMITS_MAP.size > 0;
 }
 
 /**
@@ -91,87 +143,25 @@ function limitForAsset(key: string): bigint | null {
   return toStroops(AGENT_SPENDING_LIMIT);
 }
 
+/** Stroops → whole units, for metrics, alerts and the number-valued queries. */
+function toUnits(stroops: bigint): number {
+  return Number(stroops) / Number(STROOPS_PER_UNIT);
+}
+
 // ─── SpendingTracker ──────────────────────────────────────────────────────────
 
-/**
- * Thread-safe (single-process) spending tracker with:
- *   - Per-asset limits
- *   - Atomic reserve / commit / rollback
- *   - SQLite-backed persistence (survives restarts)
- *   - BigInt stroop arithmetic (no parseFloat on monetary values)
- */
 export class SpendingTracker {
   private readonly windowMs: number;
 
-  /** In-memory committed + reserved entries within the rolling window. */
-  private readonly entries: SpendingEntry[] = [];
+  /** Committed records and open reservations inside the window, oldest first. */
+  private entries: SpendingEntry[] = [];
 
   /**
-   * In-process mutual exclusion flag.  Because better-sqlite3 is synchronous,
-   * reserve() is a true critical section: the check + push happen with no await
-   * gap, making concurrent JS tasks serialised at this point.
-   *
-   * The flag exists to guard against re-entrant calls on the same tick (e.g. a
-   * hook that calls reserve() inside a reserve() call chain).
+   * In-process mutual exclusion flag (#732). better-sqlite3 is synchronous, so
+   * a check + persist + push never yields; the flag guards against a re-entrant
+   * call made from inside that critical section on the same tick.
    */
   private _reserving = false;
-import { config } from './config';
-import { logger } from './logger';
-import { spendingAlerts } from './alerts';
-import {
-  clearSpendingRecords,
-  loadSpendingRecords,
-  pruneSpendingRecords,
-  saveSpendingRecord,
-} from './persistence';
-
-/**
- * Spending tracker that records each payment amount and maintains a rolling
- * time window. It is used by the agent to enforce a cumulative spending limit
- * within `config.SPENDING_WINDOW_MS`.
- *
- * The window is mirrored to SQLite (#372). Holding it only in memory meant a
- * restart reset the cumulative total to zero, so an agent that was restarted —
- * or that crashed and was restarted for it — could spend past its cap by
- * starting over with a clean slate. Records are reloaded on construction and
- * written on every `record()` / `commit()`.
- *
- * Persistence is best-effort: if the database is unavailable the tracker still
- * enforces the limit for the life of the process rather than refusing to run.
- *
- * ## Record semantics (issue #730)
- * `record()` computes the prospective total *before* mutating state. If adding
- * the new amount would breach the limit the method throws *without* pushing the
- * record. A rejected attempt therefore leaves `total()` unchanged and nothing
- * is persisted.
- *
- * ## Reserve / commit / release semantics (issue #729)
- * For transaction-submission flows where the outcome is unknown at call-time,
- * use the three-phase API instead of `record()`:
- *
- *   1. `reserve(amount)` → `reservationId`   – holds the amount against the
- *      limit; throws if it would be exceeded.  State is provisional until
- *      the reservation is either committed or released.
- *   2. `commit(id)`                           – confirms a successful
- *      submission; converts the provisional hold into a real record.
- *   3. `release(id)`                          – cancels a failed/rejected
- *      submission; removes the hold so the amount is not counted.
- *
- * A reservation that is neither committed nor released keeps the amount
- * reserved inside the current window (conservative-safe behaviour on crash).
- *
- * ## Alerts (issue #824)
- * Every accepted or rejected spend is checked against the configured alert
- * thresholds (80% and 100% of the limit by default). Each threshold notifies
- * once per window — see {@link alerts!SpendingAlertMonitor}.
- */
-export class SpendingTracker {
-  private readonly windowMs: number;
-  // Real committed records (issue #730 – never contains rejected amounts)
-  private records: { amount: number; timestamp: number }[] = [];
-  // Provisional holds – reserved but not yet committed or released (issue #729)
-  private reservations: Map<string, { amount: number; timestamp: number }> = new Map();
-  private nextReservationId = 0;
 
   constructor(windowMs: number = config.SPENDING_WINDOW_MS) {
     this.windowMs = windowMs;
@@ -180,140 +170,42 @@ export class SpendingTracker {
 
   /**
    * Load the unexpired part of the window left behind by a previous process.
+   *
+   * Idempotent: rows already held in memory are skipped, so calling it again
+   * after construction does not double-count.
    */
-  private restore(): void {
+  restore(): void {
     const cutoff = Date.now() - this.windowMs;
     try {
-      this.records = loadSpendingRecords(cutoff).map((r) => ({
-        amount: r.amount,
-        timestamp: r.timestamp,
-      }));
-      if (this.records.length > 0) {
+      const known = new Set(this.entries.map((e) => e.id));
+      let restored = 0;
+      for (const row of getSpendingRecordsSince(cutoff)) {
+        if (known.has(row.id)) continue;
+        this.entries.push({
+          id: row.id,
+          stroops: row.stroops,
+          // Rows written before per-asset tracking were charged to the default asset.
+          assetKey: row.assetKey ?? defaultAssetKey(),
+          timestampMs: row.timestamp,
+          committed: true,
+        });
+        restored++;
+      }
+      this.entries.sort((a, b) => a.timestampMs - b.timestampMs);
+      if (restored > 0) {
         logger.info(
-          {
-            records: this.records.length,
-            total: this.total(),
-          },
+          { records: restored, total: toUnits(this.sum(() => true)) },
           'Restored spending window from persistence'
         );
       }
+      // Rows committed before the last restart but now outside the window.
+      pruneSpendingRecords(cutoff);
     } catch (err) {
-      // No database, or it is unreadable — carry on with an empty window.
-      logger.warn(
-        {
-          error: String(err),
-        },
-        'Could not restore spending window; starting empty'
-      );
-      this.records = [];
+      // No database, or it is unreadable — carry on with what is in memory.
+      logger.warn({ error: String(err) }, 'Could not restore spending window; starting empty');
     }
   }
 
-  // ─── Public API ─────────────────────────────────────────────────────────────
-
-  /**
-   * Atomically reserve `amountStr` for `assetKey`.
-   *
-   * The check and the push are synchronous (no await between them), so
-   * concurrent async tasks are naturally serialised in the JS event loop.
-   * The SQLite write uses BEGIN IMMEDIATE, preventing interleave from another
-   * Node process sharing the same DB file.
-   *
-   * @param amountStr - Strict decimal string (e.g. "100" or "9.9999999").
-   * @param assetKeyStr - Canonical asset key from {@link assetKey()}.
-   * @returns A reservation id to pass to commit() or rollback().
-   * @throws When the amount is malformed, the asset is unknown/denied, or the
-   *         limit would be exceeded.
-   */
-  reserve(amountStr: string, assetKeyStr: string): string {
-    if (this._reserving) {
-      throw new Error("SpendingTracker: re-entrant reserve() call detected");
-    }
-    this._reserving = true;
-    try {
-      return this._doReserve(amountStr, assetKeyStr);
-    } finally {
-      this._reserving = false;
-    }
-  }
-
-  /**
-   * Confirm that a previously reserved payment completed successfully.
-   * The reservation stays in the in-memory window and the DB row remains until
-   * it expires and is pruned.
-   *
-   * @param id - Reservation id returned by reserve().
-   */
-  commit(id: string): void {
-    // Nothing to do in-memory — the entry is already tracked.
-    // Optionally prune expired entries to keep the array compact.
-    this._pruneOld(Date.now());
-  }
-
-  /**
-   * Cancel a previously reserved payment (e.g. tool execution failed).
-   *
-   * Removes the reservation from the in-memory window AND deletes the
-   * persisted DB row so it is not reloaded after a restart.
-   *
-   * @param id - Reservation id returned by reserve().
-   */
-  rollback(id: string): void {
-    const idx = this.entries.findIndex((e) => e.id === id);
-    if (idx !== -1) {
-      this.entries.splice(idx, 1);
-    }
-    // Delete the persisted row — this is the key fix for issue #731.
-    deleteSpendingRecord(id);
-  }
-
-  /**
-   * Return the total amount spent per asset within the current window.
-   * Useful for the /spending endpoint.
-   */
-  totals(): Map<string, bigint> {
-    const now = Date.now();
-    this._pruneOld(now);
-    const map = new Map<string, bigint>();
-    for (const entry of this.entries) {
-      map.set(entry.assetKey, (map.get(entry.assetKey) ?? 0n) + entry.stroops);
-    }
-    return map;
-  }
-
-  /**
-   * Total stroops spent for a single asset within the current window.
-   */
-  totalForAsset(key: string): bigint {
-    const now = Date.now();
-    this._pruneOld(now);
-    return this.entries
-      .filter((e) => e.assetKey === key)
-      .reduce((sum, e) => sum + e.stroops, 0n);
-  }
-
-  /**
-   * Restore persisted spending records from the DB into the in-memory window.
-   * Call once at process startup before accepting tasks.
-   */
-  restore(): void {
-    const cutoffMs = Date.now() - this.windowMs;
-    const cutoffIso = new Date(cutoffMs).toISOString();
-    const rows = getSpendingRecordsSince(cutoffIso);
-    for (const row of rows) {
-      let stroops: bigint;
-      try {
-        stroops = toStroops(row.amount);
-      } catch {
-        // Row has malformed amount — skip rather than crash on restart
-        continue;
-      }
-      this.entries.push({
-        id: row.id,
-        stroops,
-        assetKey: row.assetKey,
-        timestampMs: new Date(row.timestamp).getTime(),
-      });
   // ─── Issue #730: check-before-push ──────────────────────────────────────────
 
   /**
@@ -328,42 +220,51 @@ export class SpendingTracker {
    * successfully — recording before submission permanently counts a spend that
    * may never have happened (see #646).
    *
-   * @throws if the new cumulative total would exceed `config.AGENT_SPENDING_LIMIT`.
+   * Non-numeric input is ignored so callers can handle it themselves; a numeric
+   * but malformed amount (exponent, sign, more than 7 decimals) throws rather
+   * than letting a spend go uncounted.
+   *
+   * @throws if the new cumulative total would exceed the applicable limit.
    */
-  record(amountStr: string): void {
-    const amount = parseFloat(amountStr);
-    if (isNaN(amount)) return; // let callers handle invalid input
-    const now = Date.now();
-    this.pruneOld(now);
-
-    this.assertWithinLimit(amount);
-
-    const record = { amount, timestamp: now };
-    this.records.push(record);
-    this.persist(record);
-    this.checkAlerts(this.calculateTotal() + this.sumReserved());
+  record(amountStr: string, assetKeyStr: string = defaultAssetKey()): void {
+    if (isNaN(parseFloat(amountStr))) return; // let callers handle invalid input
+    this.exclusive(() => {
+      this.addEntry(amountStr, assetKeyStr, true);
+    });
   }
 
   /**
-   * Undo a previously recorded amount, used to roll back a spend that was
-   * recorded but whose transaction ultimately failed to submit (#646).
+   * Undo a spend whose transaction ultimately failed to submit.
    *
-   * Removes the most recent record matching `amountStr` within the active
-   * window. Best-effort: a missing record is a no-op so callers can safely
-   * invoke this from a failure path.
+   * Given a reservation id (#731), removes that spend — committed or not — and
+   * deletes its persisted row. Given an amount (#646), removes the most recent
+   * committed record of that amount within the active window.
+   *
+   * Best-effort: an unknown id or amount is a no-op, so callers can safely
+   * invoke this (repeatedly) from a failure path.
    */
-  rollback(amountStr: string): void {
-    const amount = parseFloat(amountStr);
-    if (isNaN(amount)) return;
-    const now = Date.now();
-    this.pruneOld(now);
-    for (let i = this.records.length - 1; i >= 0; i--) {
-      const rec = this.records[i];
-      if (rec && rec.amount === amount) {
-        this.records.splice(i, 1);
-        return;
+  rollback(idOrAmount: string): void {
+    this.pruneOld(Date.now());
+
+    let idx = this.entries.findIndex((e) => e.id === idOrAmount);
+    if (idx === -1 && !isNaN(parseFloat(idOrAmount))) {
+      let stroops: bigint | null = null;
+      try {
+        stroops = toStroops(idOrAmount);
+      } catch {
+        // Not a well-formed amount, so nothing can have been recorded for it.
+      }
+      for (let i = this.entries.length - 1; i >= 0 && stroops !== null; i--) {
+        const e = this.entries[i];
+        if (e && e.committed && e.stroops === stroops) {
+          idx = i;
+          break;
+        }
       }
     }
+
+    const [removed] = idx === -1 ? [] : this.entries.splice(idx, 1);
+    this.forget(removed?.id ?? idOrAmount);
   }
 
   // ─── Issue #729: reserve / commit / release ───────────────────────────────
@@ -376,131 +277,15 @@ export class SpendingTracker {
    * The reserved amount counts against the limit immediately so that
    * concurrent reservations cannot collectively exceed it.
    *
-   * @throws if the prospective total (committed + all current holds + amount)
-   *   would exceed `config.AGENT_SPENDING_LIMIT`.
+   * @param amountStr   - Strict decimal string (e.g. "100" or "9.9999999").
+   * @param assetKeyStr - Canonical asset key from {@link assetKey}; defaults
+   *                      to the x402 settlement asset.
+   * @throws When the amount is malformed, the asset is unknown/denied, or the
+   *   prospective total (committed + all current holds + amount) would exceed
+   *   the applicable limit.
    */
-  reserve(amountStr: string): string {
-    const amount = parseFloat(amountStr);
-    if (isNaN(amount)) {
-      throw new Error(`reserve() requires a valid numeric amount; got "${amountStr}"`);
-    }
-    const now = Date.now();
-    this.pruneOld(now);
-
-    const prospective = this.sumCommitted() + this.sumReserved() + amount;
-    const limit = parseFloat(config.AGENT_SPENDING_LIMIT);
-    if (!isNaN(prospective) && !isNaN(limit) && prospective > limit) {
-      throw new Error(`Cumulative spending ${prospective} exceeds limit ${limit}`);
-    this.persist({ amount, timestamp: now });
-    const total = this.total();
-    const limit = parseFloat(config.AGENT_SPENDING_LIMIT);
-    if (!isNaN(total) && !isNaN(limit)) {
-      if (total > limit * 0.8) {
-        logger.warn(
-          {
-            total,
-            limit,
-            percent: ((total / limit) * 100).toFixed(1),
-          },
-          'Approaching spending limit'
-        );
-      }
-      if (total > limit) {
-        throw new Error(`Cumulative spending ${total} exceeds limit ${limit}`);
-      }
-    }
-    // Prune any DB rows older than the window (they were committed before the
-    // last restart but are now outside the rolling window).
-    pruneSpendingRecords(cutoffIso);
-  }
-
-  // ─── Private helpers ─────────────────────────────────────────────────────────
-
-  private _doReserve(amountStr: string, assetKeyStr: string): string {
-    // 1. Parse amount — throws on invalid format (no parseFloat)
-    const stroops = toStroops(amountStr);
-
-    // 2. Look up limit — null means asset is denied
-    const limit = limitForAsset(assetKeyStr);
-    if (limit === null) {
-      throw new Error(
-        `Asset "${assetKeyStr}" is not in the per-asset spending limits and ` +
-        `SPENDING_LIMITS_ALLOW_UNKNOWN is false — payment denied`
-      );
-    }
-
-    // 3. Check single-payment mainnet cap FIRST (belt-and-suspenders, fast path)
-    if (config.STELLAR_NETWORK === "mainnet") {
-      const capStroops = BigInt(10_000) * STROOPS_PER_UNIT; // 10_000 units
-      if (stroops > capStroops) {
-        throw new Error(
-          `Payment amount ${amountStr} ${assetKeyStr} exceeds ` +
-          `mainnet spending cap of 10000`
-        );
-      }
-    }
-
-    const now = Date.now();
-    this._pruneOld(now);
-
-    // 4. Check cumulative limit BEFORE pushing (atomic check-then-act)
-    const current = this.totalForAsset(assetKeyStr);
-    const newTotal = current + stroops;
-
-    if (newTotal > limit) {
-      throw new Error(
-        `Cumulative spending for ${assetKeyStr} would reach ` +
-        `${stroopsToString(newTotal)} (limit: ${stroopsToString(limit)})`
-      );
-    }
-
-    // 4. Persist reservation BEFORE pushing to in-memory (atomic with SQLite BEGIN IMMEDIATE)
-    const id = randomUUID();
-    const timestamp = new Date(now).toISOString();
-    const amountNorm = stroopsToString(stroops); // canonical 7-decimal form
-
-    saveSpendingRecord({ id, timestamp, amount: amountNorm, assetKey: assetKeyStr });
-
-    // 5. Push to in-memory entries — limit was checked just above with no await gap
-    this.entries.push({ id, stroops, assetKey: assetKeyStr, timestampMs: now });
-
-    return id;
-  }
-
-  private _pruneOld(now: number): void {
-    const cutoff = now - this.windowMs;
-    // entries are in insertion order; prune from the front
-    while (this.entries.length > 0 && (this.entries[0]?.timestampMs ?? 0) < cutoff) {
-      this.entries.shift();
-  /**
-   * Undo a previously recorded amount, used to roll back a spend that was
-   * recorded but whose transaction ultimately failed to submit (#646).
-   *
-   * Removes the most recent record matching `amountStr` within the active
-   * window and deletes it from persistence. Best-effort: a missing record is a
-   * no-op so callers can safely invoke this from a failure path.
-   */
-  rollback(amountStr: string): void {
-    const amount = parseFloat(amountStr);
-    if (isNaN(amount)) return;
-    const now = Date.now();
-    this.pruneOld(now);
-    for (let i = this.records.length - 1; i >= 0; i--) {
-      const rec = this.records[i];
-      if (rec && rec.amount === amount) {
-        this.records.splice(i, 1);
-        try {
-          pruneSpendingRecords(now - this.windowMs);
-        } catch {
-          // Persistence is best-effort; the in-memory window is authoritative.
-        }
-        return;
-      }
-    }
-
-    const id = String(this.nextReservationId++);
-    this.reservations.set(id, { amount, timestamp: now });
-    return id;
+  reserve(amountStr: string, assetKeyStr: string = defaultAssetKey()): string {
+    return this.exclusive(() => this.addEntry(amountStr, assetKeyStr, false));
   }
 
   /**
@@ -511,17 +296,12 @@ export class SpendingTracker {
    * @throws if `id` does not correspond to an active reservation.
    */
   commit(id: string): void {
-    const reservation = this.reservations.get(id);
-    if (!reservation) {
-      throw new Error(`No active reservation with id "${id}"`);
-    }
-    this.reservations.delete(id);
-    // Preserve the original reservation timestamp so the window boundary is
+    this.pruneOld(Date.now());
+    const entry = this.openReservation(id);
+    // The original reservation timestamp is kept, so the window boundary is
     // calculated relative to when the payment was authorised, not submitted.
-    const record = { amount: reservation.amount, timestamp: reservation.timestamp };
-    this.records.push(record);
-    this.persist(record);
-    this.checkAlerts(this.calculateTotal() + this.sumReserved());
+    entry.committed = true;
+    this.checkAlerts(entry.assetKey);
   }
 
   /**
@@ -531,26 +311,43 @@ export class SpendingTracker {
    * @throws if `id` does not correspond to an active reservation.
    */
   release(id: string): void {
-    if (!this.reservations.has(id)) {
-      throw new Error(`No active reservation with id "${id}"`);
-    }
-    this.reservations.delete(id);
+    this.pruneOld(Date.now());
+    const entry = this.openReservation(id);
+    this.entries.splice(this.entries.indexOf(entry), 1);
+    this.forget(id);
   }
 
   // ─── Queries ──────────────────────────────────────────────────────────────
 
   /** Return the total committed amount within the current window. */
   total(): number {
-    const now = Date.now();
-    this.pruneOld(now);
-    return this.calculateTotal();
+    this.pruneOld(Date.now());
+    return toUnits(this.sum((e) => e.committed));
   }
 
   /** Return the total of committed + reserved amounts within the current window. */
   totalWithReserved(): number {
-    const now = Date.now();
-    this.pruneOld(now);
-    return this.calculateTotal() + this.sumReserved();
+    this.pruneOld(Date.now());
+    return toUnits(this.sum(() => true));
+  }
+
+  /**
+   * Committed + reserved stroops per asset within the current window.
+   * Useful for the /spending endpoint.
+   */
+  totals(): Map<string, bigint> {
+    this.pruneOld(Date.now());
+    const map = new Map<string, bigint>();
+    for (const entry of this.entries) {
+      map.set(entry.assetKey, (map.get(entry.assetKey) ?? 0n) + entry.stroops);
+    }
+    return map;
+  }
+
+  /** Committed + reserved stroops for a single asset within the current window. */
+  totalForAsset(key: string): bigint {
+    this.pruneOld(Date.now());
+    return this.sum((e) => e.assetKey === key);
   }
 
   /**
@@ -568,100 +365,169 @@ export class SpendingTracker {
     windowMs: number;
     oldestTimestamp: number | null;
   } {
-    const now = Date.now();
-    this.pruneOld(now);
+    this.pruneOld(Date.now());
+    const records = this.entries.filter((e) => e.committed);
     return {
-      total: this.calculateTotal(),
-      recordCount: this.records.length,
+      total: toUnits(this.sum((e) => e.committed)),
+      recordCount: records.length,
       windowMs: this.windowMs,
-      oldestTimestamp: this.records.length > 0 ? this.records[0]!.timestamp : null,
+      oldestTimestamp: records[0]?.timestampMs ?? null,
     };
   }
 
   // ─── Internals ────────────────────────────────────────────────────────────
 
-  /**
-   * Throw — without mutating state — if adding `amount` would breach the limit.
-   * A rejected attempt still counts as the limit being hit for alerting.
-   */
-  private assertWithinLimit(amount: number): void {
-    const prospective = this.calculateTotal() + this.sumReserved() + amount;
-    const limit = parseFloat(config.AGENT_SPENDING_LIMIT);
-    if (!isNaN(prospective) && !isNaN(limit) && prospective > limit) {
-      this.checkAlerts(prospective);
-      throw new Error(`Cumulative spending ${prospective} exceeds limit ${limit}`);
+  /** Run `fn` as the critical section guarded by the re-entrancy flag (#732). */
+  private exclusive<T>(fn: () => T): T {
+    if (this._reserving) {
+      throw new Error('SpendingTracker: re-entrant reserve() call detected');
+    }
+    this._reserving = true;
+    try {
+      return fn();
+    } finally {
+      this._reserving = false;
     }
   }
 
+  /**
+   * Check the limit, then persist and push one spend. The check and the push
+   * happen with no await between them (#732).
+   *
+   * @returns the new entry's id.
+   */
+  private addEntry(amountStr: string, key: string, committed: boolean): string {
+    // Throws on invalid format (no parseFloat)
+    const stroops = toStroops(amountStr);
+    const now = Date.now();
+    // Show the alert monitor the drained window, so a threshold fired in the
+    // previous window can fire again in this one ("once per window", #824).
+    if (this.pruneOld(now)) this.checkAlerts(key);
+
+    this.assertWithinLimit(stroops, key);
+
+    const entry: SpendingEntry = {
+      id: randomUUID(),
+      stroops,
+      assetKey: key,
+      timestampMs: now,
+      committed,
+    };
+    // Persist before pushing so a crash right after cannot lose the spend.
+    this.persist(entry);
+    this.entries.push(entry);
+    // Reservations alert when committed (#824), like main's tracker.
+    if (committed) this.checkAlerts(key);
+    return entry.id;
+  }
+
+  /**
+   * Throw — without mutating state — if adding `stroops` of `key` would breach
+   * the applicable limit. A rejected attempt still counts as the limit being
+   * hit for alerting.
+   */
+  private assertWithinLimit(stroops: bigint, key: string): void {
+    const limit = limitForAsset(key);
+    if (limit === null) {
+      throw new Error(
+        `Asset "${key}" is not in the per-asset spending limits and ` +
+          `SPENDING_LIMITS_ALLOW_UNKNOWN is false — payment denied`
+      );
+    }
+
+    // Single-payment mainnet cap (belt-and-suspenders for every caller).
+    if (
+      config.STELLAR_NETWORK === 'mainnet' &&
+      stroops > BigInt(MAINNET_SPENDING_CAP) * STROOPS_PER_UNIT
+    ) {
+      throw new Error(
+        `Payment amount ${stroopsToString(stroops)} ${key} exceeds ` +
+          `mainnet spending cap of ${MAINNET_SPENDING_CAP}`
+      );
+    }
+
+    const prospective = this.scopeTotal(key) + stroops;
+    if (prospective > limit) {
+      this.notify(prospective, limit);
+      throw new Error(
+        `Cumulative spending for ${perAssetLimits() ? key : 'all assets'} would reach ` +
+          `${stroopsToString(prospective)}, which exceeds limit ${stroopsToString(limit)}`
+      );
+    }
+  }
+
+  /** Committed + reserved stroops counted against the limit that applies to `key`. */
+  private scopeTotal(key: string): bigint {
+    return perAssetLimits() ? this.sum((e) => e.assetKey === key) : this.sum(() => true);
+  }
+
+  /** Raise threshold alerts for the window total that the limit for `key` covers. */
+  private checkAlerts(key: string): void {
+    const limit = limitForAsset(key);
+    if (limit !== null) this.notify(this.scopeTotal(key), limit);
+  }
+
   /** Raise threshold alerts (80% / 100% by default) for the given window total. */
-  private checkAlerts(total: number): void {
-    const limit = parseFloat(config.AGENT_SPENDING_LIMIT);
-    if (isNaN(total) || isNaN(limit)) return;
+  private notify(totalStroops: bigint, limitStroops: bigint): void {
+    const total = toUnits(totalStroops);
+    const limit = toUnits(limitStroops);
     if (total > limit * 0.8) {
-      logger.warn('Approaching spending limit', {
-        total,
-        limit,
-        percent: ((total / limit) * 100).toFixed(1),
-      });
+      logger.warn(
+        { total, limit, percent: ((total / limit) * 100).toFixed(1) },
+        'Approaching spending limit'
+      );
     }
     spendingAlerts.check(total, limit, this.windowMs);
   }
 
-  /**
-   * Calculate cumulative spending sum using BigInt stroop scaling (10_000_000n)
-   * to avoid floating-point addition rounding error accumulation across records.
-   */
-  private calculateTotal(): number {
-    const STROOP_SCALE = 10_000_000n;
-    const totalStroops = this.records.reduce((sum, r) => {
-      const str = r.amount.toFixed(7);
-      const [whole = '0', fraction = ''] = str.split('.');
-      const wholeBig = BigInt(whole);
-      const fracBig = BigInt(fraction.padEnd(7, '0').slice(0, 7));
-      const stroops =
-        wholeBig < 0n || str.startsWith('-')
-          ? wholeBig * STROOP_SCALE - fracBig
-          : wholeBig * STROOP_SCALE + fracBig;
-      return sum + stroops;
-    }, 0n);
-    return Number(totalStroops) / Number(STROOP_SCALE);
+  /** Reservation `id` if it is still open. @throws otherwise. */
+  private openReservation(id: string): SpendingEntry {
+    const entry = this.entries.find((e) => e.id === id && !e.committed);
+    if (!entry) {
+      throw new Error(`No active reservation with id "${id}"`);
+    }
+    return entry;
   }
 
-  private sumReserved(): number {
-    let sum = 0;
-    for (const r of this.reservations.values()) {
-      sum += r.amount;
+  private sum(include: (e: SpendingEntry) => boolean): bigint {
+    let sum = 0n;
+    for (const e of this.entries) {
+      if (include(e)) sum += e.stroops;
     }
     return sum;
   }
 
-  private persist(record: { amount: number; timestamp: number }): void {
+  private persist(entry: SpendingEntry): void {
     try {
-      saveSpendingRecord(record);
+      saveTrackedSpendingRecord({
+        id: entry.id,
+        assetKey: entry.assetKey,
+        stroops: entry.stroops,
+        timestamp: entry.timestampMs,
+      });
     } catch (err) {
       // A spend that cannot be written down still counts in this process.
       logger.warn({ error: String(err) }, 'Could not persist spending record');
     }
   }
 
-  private pruneOld(now: number): void {
-    const cutoff = now - this.windowMs;
-    // Prune committed records
-    let evicted = false;
-    while (this.records.length > 0) {
-      const first = this.records[0];
-      if (first && first.timestamp < cutoff) {
-        this.records.shift();
-        evicted = true;
-      } else {
-        break;
-      }
+  /** Delete the persisted row for a cancelled spend (#731). */
+  private forget(id: string): void {
+    try {
+      deleteTrackedSpendingRecord(id);
+    } catch {
+      // Persistence is best-effort; the in-memory window is authoritative.
     }
-    // Prune stale reservations (conservative: only remove when strictly expired)
-    for (const [id, r] of this.reservations.entries()) {
-      if (r.timestamp < cutoff) {
-        this.reservations.delete(id);
-      }
+  }
+
+  private pruneOld(now: number): boolean {
+    const cutoff = now - this.windowMs;
+    // Entries are kept in timestamp order; stale reservations are pruned too
+    // (conservative: only once strictly expired).
+    let evicted = false;
+    while (this.entries.length > 0 && (this.entries[0]?.timestampMs ?? 0) < cutoff) {
+      this.entries.shift();
+      evicted = true;
     }
     if (evicted) {
       try {
@@ -670,12 +536,12 @@ export class SpendingTracker {
         // Pruning is housekeeping; failing to do it must not block a payment.
       }
     }
+    return evicted;
   }
 
   /** Reset all state (committed records, reservations and alert thresholds). */
   clear(): void {
-    this.records = [];
-    this.reservations.clear();
+    this.entries = [];
     spendingAlerts.reset();
     try {
       clearSpendingRecords();

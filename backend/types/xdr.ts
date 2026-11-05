@@ -23,10 +23,9 @@ export const XDRPayloadSchema = z
   .string()
   .min(1, 'XDR payload must not be empty')
   .base64({ message: 'Invalid base64 encoding' })
-  .refine(
-    (raw) => Buffer.byteLength(raw, 'base64') <= MAX_XDR_BYTES,
-    { message: `Payload exceeds maximum XDR size of ${MAX_XDR_BYTES} bytes` },
-  );
+  .refine((raw) => Buffer.byteLength(raw, 'base64') <= MAX_XDR_BYTES, {
+    message: `Payload exceeds maximum XDR size of ${MAX_XDR_BYTES} bytes`,
+  });
 
 export type XDRPayload = z.infer<typeof XDRPayloadSchema>;
 

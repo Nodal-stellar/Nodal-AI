@@ -43,6 +43,10 @@ contracts/escrow/bindings/
 # OS / editor artefacts
 .DS_Store
 Thumbs.db
+# Default SQLite database (DB_PATH)
+agent.db
+agent.db-shm
+agent.db-wal
 .vscode/
 .idea/
 *.swp
@@ -68,7 +72,7 @@ tmp/
 temp/
 
 # Generated API docs (TypeDoc)
-docs/api/
+docs/public/api/
 
 # Internal change-tracking docs (not for distribution)
 docs/x402-v2-changes.md

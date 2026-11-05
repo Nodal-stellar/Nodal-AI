@@ -15,8 +15,8 @@ export const LedgerInfoInputSchema = z
   .object({
     forceRefresh: z.boolean().optional().default(false),
   })
-  .optional()
-  .default({});
+  // prefault: {} is parsed, so forceRefresh still gets its own default.
+  .prefault({});
 
 export type LedgerInfoInput = z.infer<typeof LedgerInfoInputSchema>;
 

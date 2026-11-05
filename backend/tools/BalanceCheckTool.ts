@@ -16,10 +16,9 @@ export const BalanceCheckInputSchema = z.object({
   assetIssuer: z
     .string()
     .trim()
-    .refine(
-      (value) => !value || StrKey.isValidEd25519PublicKey(value),
-      { message: 'Invalid Stellar asset issuer' }
-    )
+    .refine((value) => !value || StrKey.isValidEd25519PublicKey(value), {
+      message: 'Invalid Stellar asset issuer',
+    })
     .optional(),
   /** Asset code (omit or use 'XLM' for native lumen balance) */
   assetCode: z.string().trim().min(1).optional(),
@@ -44,7 +43,7 @@ export class BalanceCheckTool {
     const account = await loadAccount(input.publicKey);
     const balances = account.balances as any[];
 
-    const balance = findBalance(account, input.assetCode, input.assetIssuer);
+    const balance = findBalance(account, input.assetCode ?? 'XLM', input.assetIssuer);
     return balance?.balance ?? '0';
   }
 }

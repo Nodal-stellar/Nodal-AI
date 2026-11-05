@@ -14,8 +14,11 @@ import { logger } from '../utils/logger';
 import { loadAccount, resolveNetworkPassphrase, submitTransaction } from '../rpc_client';
 import { SOROBAN_TX_TIMEOUT } from './SorobanInvokeTool';
 import { createLogger } from '../utils/logger';
-import { stellarPublicKeySchema } from '../utils/stellarSchemas';
+import { baseAccountId } from '../utils/stellarSchemas';
 import { assertDestinationReady } from '../utils/destinationPreflight';
+import { paymentDestinationSchema, resolveDestination } from '../utils/destination';
+import { ValidationError } from '../errors';
+import { estimateFee, isInsufficientFeeError, submitFeeBumped } from '../fees';
 
 const log = createLogger('stellar-payment');
 

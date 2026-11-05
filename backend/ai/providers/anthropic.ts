@@ -26,7 +26,7 @@ const log = createLogger('llm:anthropic');
 interface AnthropicMessage {
   role: Message['role'];
   content: string | Array<AnthropicContentBlock>;
-  name?: string;
+  name?: string | undefined;
 }
 
 type AnthropicContentBlock =
@@ -94,11 +94,7 @@ export class AnthropicProvider implements LLMProvider {
     options: GenerationOptions = {}
   ): Promise<GenerationResponse> {
     if (!this.isConfigured()) {
-      throw new LLMError(
-        'configuration',
-        this.providerName,
-        'Anthropic API key not configured'
-      );
+      throw new LLMError('configuration', this.providerName, 'Anthropic API key not configured');
     }
 
     const model = this.config.model || this.defaultModel;
@@ -179,11 +175,7 @@ export class AnthropicProvider implements LLMProvider {
     }
 
     // All retries exhausted
-    throw lastError || new LLMError(
-      'server_error',
-      this.providerName,
-      'Max retries exhausted'
-    );
+    throw lastError || new LLMError('server_error', this.providerName, 'Max retries exhausted');
   }
 
   private convertMessages(messages: Message[]): AnthropicMessage[] {
@@ -266,10 +258,15 @@ export class AnthropicProvider implements LLMProvider {
         const message = errorData?.message || err.message;
 
         if (status === 401) {
-          throw new LLMError('configuration', this.providerName, `Authentication failed: ${message}`, {
-            statusCode: status,
-            isRetryable: false,
-          });
+          throw new LLMError(
+            'configuration',
+            this.providerName,
+            `Authentication failed: ${message}`,
+            {
+              statusCode: status,
+              isRetryable: false,
+            }
+          );
         }
 
         if (status === 429) {
@@ -309,9 +306,7 @@ export class AnthropicProvider implements LLMProvider {
     }
   }
 
-  private mapFinishReason(
-    reason: string | null
-  ): GenerationResponse['finishReason'] {
+  private mapFinishReason(reason: string | null): GenerationResponse['finishReason'] {
     switch (reason) {
       case 'end_turn':
         return 'stop';
@@ -342,10 +337,7 @@ export class AnthropicProvider implements LLMProvider {
 // ─── Factory Function ───────────────────────────────────────────────────────
 
 export function createAnthropicProvider(config: LLMConfig): LLMProvider {
-  log.info(
-    { model: config.model || 'claude-3-sonnet-20240229' },
-    'Creating Anthropic provider'
-  );
+  log.info({ model: config.model || 'claude-3-sonnet-20240229' }, 'Creating Anthropic provider');
 
   // Verify API key is not logged
   if (config.apiKey) {

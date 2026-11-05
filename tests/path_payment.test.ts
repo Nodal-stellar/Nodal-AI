@@ -42,6 +42,11 @@ vi.mock('../backend/config', () => {
   return {
     config: {
       STELLAR_NETWORK: 'testnet',
+      AGENT_SPENDING_LIMIT: '1000',
+      PAYMENT_DESTINATION_POLICY: 'open',
+      SPENDING_LIMITS_MAP: new Map<string, string>(),
+      SPENDING_LIMITS_ALLOW_UNKNOWN: false,
+      PAYMENT_DESTINATIONS: [],
       HORIZON_URL: 'https://horizon-testnet.stellar.org',
       SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org',
       X402_ASSET_CODE: 'USDC',

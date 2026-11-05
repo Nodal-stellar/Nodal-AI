@@ -10,7 +10,6 @@
  */
 
 import { z } from 'zod';
-import { fromZod } from 'zod-to-json-schema';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -51,17 +50,15 @@ export interface ToolSchemaCollection {
 }
 
 // ─── Schema Generator ────────────────────────────────────────────────────────
+/** JSON Schema drafts z.toJSONSchema can emit. */
+type SchemaTarget = 'draft-07' | 'draft-2020-12';
 
 /**
  * Options for schema generation.
  */
 export interface GenerateSchemaOptions {
-  /** Include internal Zod metadata in the output */
-  includeInternal?: boolean;
   /** Target JSON Schema version (default: draft-07) */
-  targetSchema?: 'draft-04' | 'draft-06' | 'draft-07' | 'draft-2019-09' | 'draft-2020-12';
-  /** Base URL for $id references */
-  baseUri?: string;
+  targetSchema?: SchemaTarget;
 }
 
 /**
@@ -71,23 +68,19 @@ export interface GenerateSchemaOptions {
  * @returns Collection of tool schemas with metadata
  */
 export function generateToolSchemas(options: GenerateSchemaOptions = {}): ToolSchemaCollection {
-  const { includeInternal = false, targetSchema = 'draft-07', baseUri } = options;
+  const { targetSchema = 'draft-07' } = options;
 
   // Create a fresh set of tools to get their current schemas
   const tools = createBuiltinTools();
 
   const toolSchemas: ToolSchema[] = tools.map((tool) => {
     // Convert Zod schema to JSON Schema
-    // We use the 'zod-to-json-schema' library which handles Zod-specific features
-    const jsonSchema = fromZod(tool.inputSchema as z.ZodType<unknown>, {
+    // io: 'input' because this describes what a caller sends, before transforms;
+    // unrepresentable: 'any' because refinements are enforced at runtime anyway.
+    const jsonSchema = z.toJSONSchema(tool.inputSchema as z.ZodType<unknown>, {
       target: targetSchema,
-      includeInternal,
-      baseUri,
-      // Transform keys to snake_case for consistency
-      transform: (schema) => {
-        // The schema is already in the right format, but we can add transformations here if needed
-        return schema;
-      },
+      io: 'input',
+      unrepresentable: 'any',
     });
 
     return {
@@ -100,7 +93,9 @@ export function generateToolSchemas(options: GenerateSchemaOptions = {}): ToolSc
 
   // Calculate statistics
   const valueMovingCount = toolSchemas.filter((t) => t.value_moving).length;
-  const describedCount = toolSchemas.filter((t) => t.description && t.description.length > 0).length;
+  const describedCount = toolSchemas.filter(
+    (t) => t.description && t.description.length > 0
+  ).length;
 
   return {
     version: '1.0.0',
@@ -197,7 +192,9 @@ export function validateSchemas(): { valid: boolean; errors: string[] } {
       }
 
       if (tool.description && tool.description.length < 10) {
-        errors.push(`Tool '${tool.name}' has suspiciously short description (${tool.description.length} chars)`);
+        errors.push(
+          `Tool '${tool.name}' has suspiciously short description (${tool.description.length} chars)`
+        );
       }
 
       // Check that input_schema is valid JSON
@@ -217,7 +214,6 @@ export function validateSchemas(): { valid: boolean; errors: string[] } {
       const missing = schemas.stats.total_tools - schemas.stats.tools_with_descriptions;
       errors.push(`${missing} tool(s) missing descriptions`);
     }
-
   } catch (err) {
     errors.push(`Schema generation failed: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -243,30 +239,32 @@ function main(): void {
     const result = validateSchemas();
 
     if (!result.valid) {
-      console.error('Schema validation failed:');
-      result.errors.forEach((err) => console.error(`  - ${err}`));
+      process.stderr.write('Schema validation failed:\n');
+      result.errors.forEach((err) => process.stderr.write(`  - ${err}\n`));
       process.exit(1);
     }
 
-    console.log('Schema validation passed');
-    console.log(`  Total tools: ${result.errors.length}`); // This will be overridden by validateSchemas result
+    process.stdout.write('Schema validation passed\n');
     process.exit(0);
   }
 
   // Generate schemas
   try {
     const outputPath = writeSchemasToFile();
-    console.log(`Generated tool schemas: ${outputPath}`);
+    process.stdout.write(`Generated tool schemas: ${outputPath}\n`);
 
     // Print summary
     const schemas = generateToolSchemas();
-    console.log(`\nSummary:`);
-    console.log(`  Total tools: ${schemas.stats.total_tools}`);
-    console.log(`  Value-moving tools: ${schemas.stats.value_moving_tools}`);
-    console.log(`  Tools with descriptions: ${schemas.stats.tools_with_descriptions}`);
-
+    process.stdout.write(
+      `\nSummary:\n` +
+        `  Total tools: ${schemas.stats.total_tools}\n` +
+        `  Value-moving tools: ${schemas.stats.value_moving_tools}\n` +
+        `  Tools with descriptions: ${schemas.stats.tools_with_descriptions}\n`
+    );
   } catch (err) {
-    console.error('Failed to generate schemas:', err instanceof Error ? err.message : String(err));
+    process.stderr.write(
+      `Failed to generate schemas: ${err instanceof Error ? err.message : String(err)}\n`
+    );
     process.exit(1);
   }
 }

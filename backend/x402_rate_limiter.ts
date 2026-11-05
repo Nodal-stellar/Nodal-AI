@@ -15,7 +15,7 @@
  */
 
 import { config } from './config';
-import { logger } from './logger';
+import { logger } from './utils/logger';
 import { getStorage } from './db/storage';
 
 /**
@@ -52,7 +52,7 @@ export class X402RateLimiter {
     try {
       const storage = getStorage();
       const records = await storage.loadX402RateRecords(Date.now() - this.windowMs);
-      this.inMemoryRecords = records;
+      this.inMemoryRecords = records.map((timestamp) => ({ timestamp }));
       this.loadedFromDb = true;
       if (records.length > 0) {
         logger.info(
@@ -150,8 +150,7 @@ export class X402RateLimiter {
       count: this.inMemoryRecords.length,
       maxPayments: this.maxPayments,
       windowMs: this.windowMs,
-      oldestTimestamp:
-        this.inMemoryRecords.length > 0 ? this.inMemoryRecords[0]!.timestamp : null,
+      oldestTimestamp: this.inMemoryRecords.length > 0 ? this.inMemoryRecords[0]!.timestamp : null,
     };
   }
 
@@ -173,12 +172,10 @@ export class X402RateLimiter {
 
     // Also prune from DB periodically (when records are evicted)
     if (evicted && this.loadedFromDb) {
-      try {
-        const storage = getStorage();
-        await storage.pruneX402RateRecords(cutoff);
-      } catch {
-        // Pruning is housekeeping; failing to do it must not block a payment.
-      }
+      // Pruning is housekeeping; failing to do it must not block a payment.
+      void getStorage()
+        .pruneX402RateRecords(cutoff)
+        .catch(() => undefined);
     }
   }
 

@@ -16,12 +16,7 @@ import {
   Operation,
   TransactionBuilder,
 } from '@stellar/stellar-sdk';
-import {
-  createSigner,
-  LocalSigner,
-  signTransaction,
-  VaultTransitSigner,
-} from '../backend/signers';
+import { createSigner, LocalSigner, signTransaction, VaultTransitSigner } from '../backend/signers';
 
 vi.mock('axios');
 

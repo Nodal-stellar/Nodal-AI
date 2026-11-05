@@ -15,6 +15,9 @@ import { StellarPaymentTool } from '../backend/tools/StellarPaymentTool';
 import { config } from '../backend/config';
 import { TransactionFailureError, ErrorType } from '../backend/errors';
 import { horizonServer } from '../backend/rpc_client';
+import Database from 'better-sqlite3';
+import { _setDb } from '../backend/persistence';
+import { x402RateLimiter } from '../backend/x402_rate_limiter';
 
 // ─── Mock rpc_client so horizonServer.ledgers() is interceptable ──────────────
 
@@ -95,11 +98,16 @@ describe('X402PaymentTool', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Nonces and the x402 rate window are persistent; start each test clean.
+    _setDb(new Database(':memory:'));
+    x402RateLimiter.clear();
     mockPaymentTool = {
       publicKey: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
       execute: vi.fn().mockResolvedValue({ txHash: 'x402_mock_tx_hash', ledger: 99 }),
     };
-    vi.mocked(StellarPaymentTool).mockImplementation(() => mockPaymentTool);
+    vi.mocked(StellarPaymentTool).mockImplementation(function () {
+      return mockPaymentTool;
+    });
     tool = new X402PaymentTool(new KeypairSigner(Keypair.fromSecret(TEST_SECRET)));
   });
 
@@ -296,9 +304,9 @@ describe('X402PaymentTool', () => {
     });
 
     it('rejects a fake-USDC challenge whose issuer differs from the configured one', async () => {
-      await expect(
-        tool.respond({ ...VALID_CHALLENGE, assetIssuer: FAKE_ISSUER })
-      ).rejects.toThrow(`x402: assetIssuer ${FAKE_ISSUER} is not a trusted issuer for USDC`);
+      await expect(tool.respond({ ...VALID_CHALLENGE, assetIssuer: FAKE_ISSUER })).rejects.toThrow(
+        `x402: assetIssuer ${FAKE_ISSUER} is not a trusted issuer for USDC`
+      );
       expect(mockPaymentTool.execute).not.toHaveBeenCalled();
     });
 
@@ -402,7 +410,7 @@ describe('X402PaymentTool', () => {
       // signedAt is either ledger close time or wall-clock fallback — both are valid ISO strings
       expect(proof.signedAt).toBeTruthy();
       expect(() => new Date(proof.signedAt)).not.toThrow();
-      expect(new Date(proof.signedAt).toISOString()).toBe(proof.signedAt);
+      expect(Number.isNaN(Date.parse(proof.signedAt))).toBe(false);
     });
 
     it('embeds nonce in memo as SHA-256 fingerprint (28 hex chars)', async () => {

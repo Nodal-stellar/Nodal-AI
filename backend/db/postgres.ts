@@ -169,7 +169,9 @@ export class PostgresStorage implements Storage {
   }
 
   async getAuditLog(): Promise<AuditRow[]> {
-    const { rows } = await this.pool.query(`SELECT ${AUDIT_COLUMNS} FROM audit_log ORDER BY id ASC`);
+    const { rows } = await this.pool.query(
+      `SELECT ${AUDIT_COLUMNS} FROM audit_log ORDER BY id ASC`
+    );
     return rows.map((r: AuditRow) => ({ ...r, id: Number(r.id) }));
   }
 
@@ -266,10 +268,9 @@ export class PostgresStorage implements Storage {
   }
 
   async loadMppSession(channelId: string): Promise<string | undefined> {
-    const { rows } = await this.pool.query(
-      `SELECT value FROM agent_state WHERE key = $1`,
-      [`mpp_session:${channelId}`]
-    );
+    const { rows } = await this.pool.query(`SELECT value FROM agent_state WHERE key = $1`, [
+      `mpp_session:${channelId}`,
+    ]);
     return rows[0]?.value;
   }
 

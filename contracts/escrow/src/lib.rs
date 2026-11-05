@@ -199,15 +199,7 @@ impl EscrowContract {
         expiry: u64,
     ) {
         Self::init_internal(
-            &env,
-            depositor,
-            recipient,
-            arbiter,
-            token,
-            amount,
-            expiry,
-            0,
-            None,
+            &env, depositor, recipient, arbiter, token, amount, expiry, 0, None,
         );
     }
 

@@ -18,6 +18,7 @@ const { mockOfferCall } = vi.hoisted(() => ({
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
 vi.mock('../backend/rpc_client', () => ({
+  withRetry: (fn: () => Promise<unknown>) => fn(),
   loadAccount: vi.fn(),
   submitTransaction: vi.fn(),
   horizonServer: {

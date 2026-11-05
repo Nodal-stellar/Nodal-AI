@@ -17,6 +17,7 @@ import { z } from 'zod';
 import * as crypto from 'crypto';
 import { ValidationError } from '../errors';
 import { createLogger } from '../utils/logger';
+import { config } from '../config';
 
 const log = createLogger('nano-payment-tool');
 
@@ -32,7 +33,8 @@ export const NanoPaymentInputSchema = z.object({
   amountRaw: z
     .string()
     .regex(/^\d+$/, 'amountRaw must be an unsigned integer string representing raw units')
-    .refine((v) => BigInt(v) > 0n, 'amountRaw must be greater than zero'),
+    // zod still runs this after a failed .regex(), and BigInt('0.001') throws.
+    .refine((v) => !/^\d+$/.test(v) || BigInt(v) > 0n, 'amountRaw must be greater than zero'),
   /** Optional sender account (nano_ address) */
   senderAccount: z.string().regex(NANO_ADDRESS_REGEX).optional(),
   /** Optional externalized seed / private key (hex string) */
@@ -68,11 +70,11 @@ export interface NanoAccountInfoResponse {
 
 export class NanoPaymentTool {
   private defaultRpcUrl: string;
-  private defaultSeed?: string;
+  private defaultSeed?: string | undefined;
 
   constructor(defaultSeed?: string, defaultRpcUrl?: string) {
     this.defaultSeed = defaultSeed;
-    this.defaultRpcUrl = defaultRpcUrl || process.env.NANO_RPC_URL || 'http://127.0.0.1:7076';
+    this.defaultRpcUrl = defaultRpcUrl || config.NANO_RPC_URL;
   }
 
   /**
@@ -93,14 +95,20 @@ export class NanoPaymentTool {
       // Account is either open (valid account_info) or unopened/not found yet (which is acceptable for receiving a new open block)
       if (response.data && response.data.error) {
         if (response.data.error.toLowerCase().includes('account not found')) {
-          log.info({ recipient }, 'Recipient account is unopened; valid destination for open block');
+          log.info(
+            { recipient },
+            'Recipient account is unopened; valid destination for open block'
+          );
           return true;
         }
         log.warn({ recipient, error: response.data.error }, 'Recipient precheck returned notice');
       }
       return true;
     } catch (err) {
-      log.warn({ recipient, err }, 'Precheck network query failed, proceeding with format-validated address');
+      log.warn(
+        { recipient, err },
+        'Precheck network query failed, proceeding with format-validated address'
+      );
       return true;
     }
   }
@@ -158,7 +166,9 @@ export class NanoPaymentTool {
           subtype: 'send',
           block: {
             type: 'state',
-            account: input.senderAccount || 'nano_1nodalaiagent111111111111111111111111111111111111111111111111',
+            account:
+              input.senderAccount ||
+              'nano_1nodalaiagent111111111111111111111111111111111111111111111111',
             link: input.recipient,
             amount: input.amountRaw,
           },

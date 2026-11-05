@@ -32,7 +32,7 @@ recordedOutput:
         asset: XLM
 ---
 id: multiturn-003
-description: Multi-step plan: trustline then payment
+description: "Multi-step plan: trustline then payment"
 prompt: "Add a trustline to USDC then send 50 USDC to Bob"
 expectedTaskTypes:
   - change_trust

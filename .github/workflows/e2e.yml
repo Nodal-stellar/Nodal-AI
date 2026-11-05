@@ -62,7 +62,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: npm
 
       # See ci.yml's test-rust job: rustup reads ./rust-toolchain.toml.

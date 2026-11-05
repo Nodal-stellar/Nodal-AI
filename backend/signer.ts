@@ -13,10 +13,17 @@ import {
   authorizeEntry,
   FeeBumpTransaction,
   Keypair,
+  Networks,
   Transaction,
   xdr,
 } from '@stellar/stellar-sdk';
 import { config } from './config';
+
+const PASSPHRASES = {
+  testnet: Networks.TESTNET,
+  mainnet: Networks.PUBLIC,
+  futurenet: Networks.FUTURENET,
+} as const;
 
 export interface Signer {
   /** G-address of the signing account. */
@@ -29,6 +36,8 @@ export interface Signer {
     validUntilLedgerSeq: number,
     networkPassphrase?: string
   ): Promise<xdr.SorobanAuthorizationEntry>;
+  /** Ed25519 signature over arbitrary bytes, e.g. an off-chain MPP channel commitment. */
+  sign(data: Buffer): Buffer;
 }
 
 /**
@@ -56,7 +65,16 @@ export class KeypairSigner implements Signer {
     validUntilLedgerSeq: number,
     networkPassphrase?: string
   ): Promise<xdr.SorobanAuthorizationEntry> {
-    return authorizeEntry(entry, this.getKeypair(), validUntilLedgerSeq, networkPassphrase);
+    return authorizeEntry(
+      entry,
+      this.getKeypair(),
+      validUntilLedgerSeq,
+      networkPassphrase ?? PASSPHRASES[config.STELLAR_NETWORK]
+    );
+  }
+
+  sign(data: Buffer): Buffer {
+    return this.getKeypair().sign(data);
   }
 }
 

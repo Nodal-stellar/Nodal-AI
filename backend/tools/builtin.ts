@@ -9,9 +9,10 @@
  */
 
 import { z } from 'zod';
-import { config } from '../config';
 import type { AgentTool } from './AgentTool';
+import { createAgentSigner, type Signer } from '../signer';
 import { StellarPaymentTool, PaymentInputSchema } from './StellarPaymentTool';
+import { NanoPaymentInputSchema, NanoPaymentTool } from './NanoPaymentTool';
 import { SorobanInvokeTool, SorobanInvokeInputSchema } from './SorobanInvokeTool';
 import { SorobanQueryTool, SorobanQueryInputSchema } from './SorobanQueryTool';
 import { X402PaymentTool, X402ChallengeSchema } from './X402PaymentTool';
@@ -33,10 +34,7 @@ import { SorobanDeployTool, SorobanDeployInputSchema } from './SorobanDeployTool
 import { SwapTool, SwapInputSchema } from './SwapTool';
 import { AccountHistoryTool, AccountHistoryInputSchema } from './AccountHistoryTool';
 import { SetOptionsTool, SetOptionsInputSchema } from './SetOptionsTool';
-import {
-  SorobanEventIndexerTool,
-  SorobanEventIndexerInputSchema,
-} from './SorobanEventIndexerTool';
+import { SorobanEventIndexerTool, SorobanEventIndexerInputSchema } from './SorobanEventIndexerTool';
 import { StellarIdentityTool, StellarIdentityInputSchema } from './StellarIdentityTool';
 import { CrossBorderPaymentTool, CrossBorderPaymentInputSchema } from './CrossBorderPaymentTool';
 import { FriendBotTool, FriendBotInputSchema } from './FriendBotTool';
@@ -54,34 +52,34 @@ function defineTool<I, O>(tool: AgentTool<I, O>): AgentTool<I, O> {
 const NoInputSchema = z.unknown();
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function createBuiltinTools(): AgentTool<any, any>[] {
-  // config.agentKeypair().secret() is the canonical way to obtain the signing secret.
-  // Direct access to config.AGENT_SECRET_KEY is intentionally blocked by the AgentConfig
-  // type (Omit<RawEnv, "AGENT_SECRET_KEY">); using agentKeypair() makes the access explicit.
-  const paymentTool = new StellarPaymentTool(config.agentKeypair().secret());
-  const sorobanTool = new SorobanInvokeTool(config.agentKeypair().secret());
-  const sorobanQueryTool = new SorobanQueryTool(config.agentKeypair().secret());
-  const x402Tool = new X402PaymentTool(config.agentKeypair().secret());
+export function createBuiltinTools(signer: Signer = createAgentSigner()): AgentTool<any, any>[] {
+  // Tools receive the agent-owned Signer, never the secret key itself, so the
+  // raw secret is not copied into every tool instance.
+  const nanoPaymentTool = new NanoPaymentTool();
+  const paymentTool = new StellarPaymentTool(signer);
+  const sorobanTool = new SorobanInvokeTool(signer);
+  const sorobanQueryTool = new SorobanQueryTool(signer);
+  const x402Tool = new X402PaymentTool(signer);
   const accountInfoTool = new AccountInfoTool();
-  const trustlineTool = new TrustlineTool(config.agentKeypair().secret());
-  const multiSigTool = new MultiSigPaymentTool(config.agentKeypair().secret());
-  const batchPaymentTool = new BatchPaymentTool(config.agentKeypair().secret());
+  const trustlineTool = new TrustlineTool(signer);
+  const multiSigTool = new MultiSigPaymentTool(signer);
+  const batchPaymentTool = new BatchPaymentTool(signer);
   const balanceCheckTool = new BalanceCheckTool();
-  const pathPaymentTool = new PathPaymentTool(config.agentKeypair().secret());
-  const feeBumpTool = new FeeBumpTool(config.agentKeypair().secret());
-  const dexOfferTool = new DexOfferTool(config.agentKeypair().secret());
-  const liquidityPoolTool = new LiquidityPoolTool(config.agentKeypair().secret());
+  const pathPaymentTool = new PathPaymentTool(signer);
+  const feeBumpTool = new FeeBumpTool(signer);
+  const dexOfferTool = new DexOfferTool(signer);
+  const liquidityPoolTool = new LiquidityPoolTool(signer);
   const stellarTomlTool = new StellarTomlTool();
-  const dataEntryTool = new DataEntryTool(config.agentKeypair().secret());
-  const sequenceNumberTool = new SequenceNumberTool(config.agentKeypair().secret());
-  const sponsoredAccountTool = new SponsoredAccountTool(config.agentKeypair().secret());
+  const dataEntryTool = new DataEntryTool(signer);
+  const sequenceNumberTool = new SequenceNumberTool(signer);
+  const sponsoredAccountTool = new SponsoredAccountTool(signer);
   const anchorQuoteTool = new AnchorQuoteTool();
   const sorobanDeployTool = new SorobanDeployTool();
-  const swapTool = new SwapTool(config.agentKeypair().secret());
+  const swapTool = new SwapTool(signer);
   const accountHistoryTool = new AccountHistoryTool();
-  const setOptionsTool = new SetOptionsTool(config.agentKeypair().secret());
+  const setOptionsTool = new SetOptionsTool(signer);
   const sorobanEventIndexerTool = new SorobanEventIndexerTool();
-  const stellarIdentityTool = new StellarIdentityTool(config.agentKeypair().secret());
+  const stellarIdentityTool = new StellarIdentityTool(signer);
   const crossBorderPaymentTool = new CrossBorderPaymentTool();
   const friendBotTool = new FriendBotTool();
   const ledgerInfoTool = new LedgerInfoTool();
@@ -90,6 +88,15 @@ export function createBuiltinTools(): AgentTool<any, any>[] {
   const sorobanStorageTool = new SorobanStorageTool();
 
   return [
+    defineTool({
+      name: 'nano_payment',
+      description:
+        'Send a feeless Nano micro-payment. Amounts are raw units; pre-checks that the ' +
+        'recipient account is open unless skipPrecheck is set.',
+      inputSchema: NanoPaymentInputSchema,
+      valueMoving: true,
+      execute: (input) => nanoPaymentTool.execute(input),
+    }),
     defineTool({
       name: 'stellar_payment',
       description:

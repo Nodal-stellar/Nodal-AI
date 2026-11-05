@@ -8,14 +8,7 @@
  * own value caps before invoking this tool.
  */
 
-import {
-  TransactionBuilder,
-  Operation,
-  Asset,
-  BASE_FEE,
-  Memo,
-  xdr,
-} from '@stellar/stellar-sdk';
+import { TransactionBuilder, Operation, Asset, BASE_FEE, Memo, xdr } from '@stellar/stellar-sdk';
 import { z } from 'zod';
 import { config } from '../config';
 import { createAgentSigner, Signer } from '../signer';

@@ -241,6 +241,12 @@ describe('payment tools with federation and muxed destinations', () => {
   });
 
   it('path-pays to a muxed M-address', async () => {
+    vi.mocked(rpcClient.loadAccount).mockImplementation(
+      async () =>
+        Object.assign(makeMockAccount(signer.publicKey()), {
+          balances: [{ asset_code: 'USDC', asset_issuer: USDC_ISSUER, balance: '0' }],
+        }) as never
+    );
     await new PathPaymentTool(signer).execute({
       destination: MUXED_DEST,
       sendAsset: { code: 'XLM' },

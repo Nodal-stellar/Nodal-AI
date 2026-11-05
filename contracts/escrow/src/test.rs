@@ -26,7 +26,9 @@
 mod tests {
     extern crate std;
 
-    use crate::{EscrowContract, EscrowContractClient, EscrowError, EscrowState, MIN_ROTATION_DELAY};
+    use crate::{
+        EscrowContract, EscrowContractClient, EscrowError, EscrowState, MIN_ROTATION_DELAY,
+    };
     use proptest::prelude::*;
     use soroban_sdk::{
         testutils::{Address as _, Events, Ledger},
@@ -1325,37 +1327,48 @@ mod tests {
     /// party, which the contract must reject without moving funds.
     #[derive(Clone, Debug)]
     enum Op {
-        Release { impostor: bool },
+        Release {
+            impostor: bool,
+        },
         /// `selector` picks the partial amount: 0 → zero (invalid),
         /// 255 → remaining + 1 (invalid), otherwise a fraction of remaining.
-        ReleasePartial { impostor: bool, selector: u8 },
-        Refund { impostor: bool },
+        ReleasePartial {
+            impostor: bool,
+            selector: u8,
+        },
+        Refund {
+            impostor: bool,
+        },
         Cancel {
             depositor_impostor: bool,
             arbiter_impostor: bool,
         },
         /// Depositor proposes candidate arbiter `candidate` (index into a pool).
-        ProposeArbiter { candidate: usize },
+        ProposeArbiter {
+            candidate: usize,
+        },
         AcceptRotation,
-        AdvanceTime { seconds: u64 },
+        AdvanceTime {
+            seconds: u64,
+        },
     }
 
     const ARBITER_CANDIDATES: usize = 3;
 
     fn op_strategy() -> impl Strategy<Value = Op> {
         prop_oneof![
-            any::<bool>().prop_map(|impostor| Op::Release { impostor }),
+            1 => any::<bool>().prop_map(|impostor| Op::Release { impostor }),
             3 => (any::<bool>(), any::<u8>())
                 .prop_map(|(impostor, selector)| Op::ReleasePartial { impostor, selector }),
-            any::<bool>().prop_map(|impostor| Op::Refund { impostor }),
-            (any::<bool>(), any::<bool>()).prop_map(|(depositor_impostor, arbiter_impostor)| {
+            1 => any::<bool>().prop_map(|impostor| Op::Refund { impostor }),
+            1 => (any::<bool>(), any::<bool>()).prop_map(|(depositor_impostor, arbiter_impostor)| {
                 Op::Cancel {
                     depositor_impostor,
                     arbiter_impostor,
                 }
             }),
-            (0..ARBITER_CANDIDATES).prop_map(|candidate| Op::ProposeArbiter { candidate }),
-            Just(Op::AcceptRotation),
+            1 => (0..ARBITER_CANDIDATES).prop_map(|candidate| Op::ProposeArbiter { candidate }),
+            1 => Just(Op::AcceptRotation),
             2 => (0..=2 * MIN_ROTATION_DELAY).prop_map(|seconds| Op::AdvanceTime { seconds }),
         ]
     }
@@ -1372,13 +1385,19 @@ mod tests {
     /// Collapse a generated `try_*` client result into the contract's own
     /// error type. Anything other than a contract error (a host trap, a
     /// conversion failure) is itself an invariant violation.
-    fn outcome<T, C: core::fmt::Debug, H: core::fmt::Debug>(
-        result: Result<Result<T, C>, Result<EscrowError, H>>,
-    ) -> Result<(), EscrowError> {
+    fn outcome<T, C: core::fmt::Debug, E, H: core::fmt::Debug>(
+        result: Result<Result<T, C>, Result<E, H>>,
+    ) -> Result<(), EscrowError>
+    where
+        E: TryInto<EscrowError>,
+        E::Error: core::fmt::Debug,
+    {
         match result {
             Ok(Ok(_)) => Ok(()),
             Ok(Err(e)) => panic!("return value conversion failed: {:?}", e),
-            Err(Ok(e)) => Err(e),
+            Err(Ok(e)) => Err(e
+                .try_into()
+                .expect("contract raised an error that is not an EscrowError")),
             Err(Err(e)) => panic!("contract trapped instead of returning an error: {:?}", e),
         }
     }
@@ -1425,11 +1444,17 @@ mod tests {
         for arbiter in arbiters {
             prop_assert_eq!(token.balance(arbiter), 0, "arbiter received funds");
         }
-        // I4 — only one of release or refund/cancel can ever pay out.
-        prop_assert!(
-            model.released == 0 || model.refunded == 0,
-            "funds paid to both recipient and depositor"
-        );
+        // I4 — no unit of the deposit is paid twice: a refund or cancel returns
+        // exactly what was not already released, and it settles the escrow.
+        if model.refunded > 0 {
+            prop_assert_eq!(
+                to_recipient + to_depositor,
+                model.deposited,
+                "refund did not pay exactly the unreleased remainder"
+            );
+            prop_assert_eq!(in_contract, 0, "refunded escrow still holds funds");
+            prop_assert!(model.sealed, "refund left the escrow open");
+        }
 
         let state = client.get_state();
         // I5 — sealed flag matches the model; a sealed escrow holds nothing.

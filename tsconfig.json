@@ -14,6 +14,15 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
+    // The @x402 packages publish their subpaths (and @x402/express its typings)
+    // only through package.json "exports", which the default node10 resolution
+    // of "module": "commonjs" ignores. Point the compiler at the same CJS
+    // typings those exports name; at runtime require() already honours exports.
+    "paths": {
+      "@x402/express": ["./node_modules/@x402/express/dist/cjs/index.d.ts"],
+      "@x402/core/*": ["./node_modules/@x402/core/dist/cjs/*/index.d.ts"],
+      "@x402/stellar/*": ["./node_modules/@x402/stellar/dist/cjs/*/index.d.ts"]
+    },
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
     "declarationMap": true,

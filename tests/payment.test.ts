@@ -869,4 +869,3 @@ describe('StellarPaymentTool — slow-network scenario with MockNetworkCondition
     ).rejects.toThrow(/HorizonTimeoutError/);
   });
 });
-

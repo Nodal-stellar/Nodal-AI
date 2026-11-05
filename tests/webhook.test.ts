@@ -150,13 +150,17 @@ describe('verifyWebhookSignature — timestamped signatures (issue #739)', () =>
   it('rejects a timestamp older than the default 300s tolerance', () => {
     const ts = now - 301;
     const sig = signWebhookPayload(ts, payload, secret);
-    expect(verifyWebhookSignature(payload, sig, secret, { timestamp: ts, nowSec: now })).toBe(false);
+    expect(verifyWebhookSignature(payload, sig, secret, { timestamp: ts, nowSec: now })).toBe(
+      false
+    );
   });
 
   it('rejects a timestamp too far in the future', () => {
     const ts = now + 301;
     const sig = signWebhookPayload(ts, payload, secret);
-    expect(verifyWebhookSignature(payload, sig, secret, { timestamp: ts, nowSec: now })).toBe(false);
+    expect(verifyWebhookSignature(payload, sig, secret, { timestamp: ts, nowSec: now })).toBe(
+      false
+    );
   });
 
   it('honours a custom toleranceSec', () => {
@@ -172,7 +176,9 @@ describe('verifyWebhookSignature — timestamped signatures (issue #739)', () =>
 
   it('rejects a replay that pairs an old signature with a fresh timestamp', () => {
     const sig = signWebhookPayload(now - 1000, payload, secret);
-    expect(verifyWebhookSignature(payload, sig, secret, { timestamp: now, nowSec: now })).toBe(false);
+    expect(verifyWebhookSignature(payload, sig, secret, { timestamp: now, nowSec: now })).toBe(
+      false
+    );
   });
 
   it('rejects a non-numeric timestamp', () => {
@@ -184,7 +190,9 @@ describe('verifyWebhookSignature — timestamped signatures (issue #739)', () =>
 
   it('does not accept a legacy body-only signature when a timestamp is supplied', () => {
     const sig = signPayload(payload, secret);
-    expect(verifyWebhookSignature(payload, sig, secret, { timestamp: now, nowSec: now })).toBe(false);
+    expect(verifyWebhookSignature(payload, sig, secret, { timestamp: now, nowSec: now })).toBe(
+      false
+    );
   });
 });
 

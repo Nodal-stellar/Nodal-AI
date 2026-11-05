@@ -165,7 +165,7 @@ describe('SorobanStorageTool', () => {
       durability: 'instance',
     });
 
-    expect(result.entries[0].value).toBe('instance_value');
+    expect(result.entries[0]?.value).toBe('instance_value');
     expect(rpcClient.sorobanServer.getLedgerEntries).toHaveBeenCalledTimes(1);
   });
 
@@ -182,7 +182,7 @@ describe('SorobanStorageTool', () => {
       durability: 'temporary',
     });
 
-    expect(result.entries[0].value).toBe('temp_val');
+    expect(result.entries[0]?.value).toBe('temp_val');
   });
 
   it('handles empty entries returned from RPC', async () => {

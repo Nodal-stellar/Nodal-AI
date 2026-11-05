@@ -24,7 +24,9 @@ const { passthroughSchema } = vi.hoisted(() => ({
 // ─── Mock tools ───────────────────────────────────────────────────────────────
 vi.mock('../backend/tools/StellarPaymentTool', () => ({
   PaymentInputSchema: passthroughSchema,
-  StellarPaymentTool: vi.fn().mockImplementation(() => ({ execute: vi.fn() })),
+  StellarPaymentTool: vi.fn().mockImplementation(function () {
+    return { execute: vi.fn() };
+  }),
 }));
 vi.mock('../backend/tools/SorobanInvokeTool', async () => {
   // Keep the real SorobanInvokeInputSchema — SorobanQueryTool.ts derives its
@@ -35,7 +37,9 @@ vi.mock('../backend/tools/SorobanInvokeTool', async () => {
   );
   return {
     ...actual,
-    SorobanInvokeTool: vi.fn().mockImplementation(() => ({ execute: vi.fn() })),
+    SorobanInvokeTool: vi.fn().mockImplementation(function () {
+      return { execute: vi.fn() };
+    }),
   };
 });
 vi.mock('../backend/tools/X402PaymentTool', async () => {
@@ -46,23 +50,33 @@ vi.mock('../backend/tools/X402PaymentTool', async () => {
   );
   return {
     ...actual,
-    X402PaymentTool: vi.fn().mockImplementation(() => ({ respond: vi.fn() })),
+    X402PaymentTool: vi.fn().mockImplementation(function () {
+      return { respond: vi.fn() };
+    }),
   };
 });
 vi.mock('../backend/tools/AccountInfoTool', () => ({
-  AccountInfoTool: vi.fn().mockImplementation(() => ({ fetch: vi.fn() })),
+  AccountInfoTool: vi.fn().mockImplementation(function () {
+    return { fetch: vi.fn() };
+  }),
 }));
 vi.mock('../backend/tools/TrustlineTool', () => ({
   TrustlineInputSchema: passthroughSchema,
-  TrustlineTool: vi.fn().mockImplementation(() => ({ execute: vi.fn(), checkTrustline: vi.fn() })),
+  TrustlineTool: vi.fn().mockImplementation(function () {
+    return { execute: vi.fn(), checkTrustline: vi.fn() };
+  }),
 }));
 vi.mock('../backend/tools/MultiSigPaymentTool', () => ({
   MultiSigInputSchema: passthroughSchema,
-  MultiSigPaymentTool: vi.fn().mockImplementation(() => ({ execute: vi.fn() })),
+  MultiSigPaymentTool: vi.fn().mockImplementation(function () {
+    return { execute: vi.fn() };
+  }),
 }));
 vi.mock('../backend/tools/BatchPaymentTool', () => ({
   BatchPaymentInputSchema: passthroughSchema,
-  BatchPaymentTool: vi.fn().mockImplementation(() => ({ execute: vi.fn() })),
+  BatchPaymentTool: vi.fn().mockImplementation(function () {
+    return { execute: vi.fn() };
+  }),
 }));
 
 vi.mock('../backend/rpc_client', () => ({
@@ -175,8 +189,8 @@ describe('PayFiAgent — stream (issue #107)', () => {
 
     expect(onChallenge).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalledWith(
-      'Dropped invalid x402 challenge memo',
-      expect.objectContaining({ error: expect.any(String) })
+      expect.objectContaining({ error: expect.any(String) }),
+      'Dropped invalid x402 challenge memo'
     );
 
     warnSpy.mockRestore();

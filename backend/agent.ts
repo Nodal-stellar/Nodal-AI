@@ -11,25 +11,6 @@
  */
 
 // Updated imports
-import { EventEmitter } from "events";
-import { config } from "./config";
-import { logger } from "./logger";
-import { saveResult } from "./persistence";
-import { StellarPaymentTool } from "./tools/StellarPaymentTool";
-import { SorobanInvokeTool } from "./tools/SorobanInvokeTool";
-import { X402PaymentTool, X402Challenge } from "./tools/X402PaymentTool";
-import { AccountInfoTool } from "./tools/AccountInfoTool";
-import { TrustlineTool } from "./tools/TrustlineTool";
-import { MultiSigPaymentTool } from "./tools/MultiSigPaymentTool";
-import { BatchPaymentTool } from "./tools/BatchPaymentTool";
-import { horizonServer } from "./rpc_client";
-import { createLogger, generateCorrelationId } from "./utils/logger";
-import { SpendingTracker, assetKey } from "./spending_tracker";
-
-// ── Module-level singleton tracker shared across all agent instances ──────────
-// NOTE: For process-wide spending enforcement, the tracker is a module singleton.
-// Tests that need isolation should call _resetSpendingTrackerForTests().
-const spendingTracker = new SpendingTracker();
 import { EventEmitter } from 'events';
 import { createHash, randomUUID } from 'crypto';
 import { rpc } from '@stellar/stellar-sdk';
@@ -37,6 +18,8 @@ import { config, MAINNET_SPENDING_CAP } from './config';
 import { logger } from './utils/logger';
 import {
   saveResult,
+  appendAuditEntry,
+  type AuditEntry,
   savePendingApproval,
   getPendingApproval,
   listPendingApprovals,
@@ -49,6 +32,7 @@ import {
 } from './persistence';
 import {
   AgentPausedError,
+  AgentShuttingDownError,
   ErrorType,
   PolicyViolationError,
   StructuredError,
@@ -88,11 +72,17 @@ import {
   StorageChangeEvent,
 } from './tools/ContractStorageWatcherTool';
 import { X402FetchClient, type X402FetchResult } from './x402/client';
+import type { AgentTool, ToolContext } from './tools/AgentTool';
+import { createBuiltinTools } from './tools/builtin';
+import { queueDepth, recordTask } from './metrics';
+import { withSpan, markSpanError, setTxHashAttribute, SPAN_ATTR } from './telemetry';
 
 import { horizonServer } from './rpc_client';
 import * as rpcClient from './rpc_client';
 import { createLogger, generateCorrelationId } from './utils/logger';
-import { spendingTracker } from './spending_tracker';
+import { spendingTracker, assetKey } from './spending_tracker';
+import { toStroops, tryToStroops, stroopsToString, STROOPS_PER_UNIT } from './utils/amount';
+import { failureAlerts } from './alerts';
 import { dispatchWebhook } from './webhook';
 import { createAgentSigner, Signer } from './signer';
 import { isPaused } from './kill_switch';
@@ -110,6 +100,98 @@ export type { AgentEvents };
  */
 export function _resetSpendingTrackerForTests(): void {
   spendingTracker._resetForTests();
+}
+
+// ─── Spending limit guard ─────────────────────────────────────────────────────
+
+/** One amount a value-moving task would spend, and the asset it is spent in (#733). */
+interface TaskSpend {
+  amount: string;
+  assetKey: string;
+}
+
+/** Canonical asset key for a `{ code, issuer }` payload object (path payments, DEX offers). */
+function assetObjectKey(asset: unknown): string {
+  const a = (asset ?? {}) as Record<string, unknown>;
+  return assetKey(
+    typeof a.code === 'string' ? a.code : 'XLM',
+    typeof a.issuer === 'string' ? a.issuer : undefined
+  );
+}
+
+/** Canonical asset key for an `assetCode` / `assetIssuer` payload pair. */
+function assetFieldsKey(
+  code: unknown,
+  issuer: unknown,
+  defaultCode: string,
+  defaultIssuer?: string
+): string {
+  return assetKey(
+    typeof code === 'string' ? code : defaultCode,
+    typeof issuer === 'string' ? issuer : defaultIssuer
+  );
+}
+
+/**
+ * What a value-moving task would spend against the rolling-window limit,
+ * one entry per asset. Empty when the task moves no value (or, for a multisig
+ * payment, will not be submitted yet). Non-string amounts are skipped — the
+ * tool's own schema rejects them.
+ *
+ * Batch payments are summed per asset in BigInt stroops (#734): a float sum
+ * both drifts (0.1 + 0.2) and would charge every asset against one total.
+ */
+function taskSpends(task: AgentTask): TaskSpend[] {
+  const p = (task.payload ?? {}) as Record<string, unknown>;
+  const one = (amount: unknown, key: string): TaskSpend[] =>
+    typeof amount === 'string' ? [{ amount, assetKey: key }] : [];
+
+  switch (task.type) {
+    case 'stellar_payment':
+      return one(p.amount, assetFieldsKey(p.assetCode, p.assetIssuer, 'XLM'));
+
+    case 'x402_respond':
+      return one(
+        p.amount,
+        assetFieldsKey(p.assetCode, p.assetIssuer, config.X402_ASSET_CODE, config.X402_ASSET_ISSUER)
+      );
+
+    case 'multisig_payment': {
+      const sigs = Array.isArray(p.signatures) ? p.signatures : [];
+      const minSig = typeof p.minSignatures === 'number' ? p.minSignatures : 1;
+      if (sigs.length < minSig) return [];
+      return one(p.amount, assetFieldsKey(p.assetCode, p.assetIssuer, 'XLM'));
+    }
+
+    case 'batch_payment': {
+      const payments = Array.isArray(p.payments) ? p.payments : [];
+      const perAsset = new Map<string, bigint>();
+      for (const pay of payments) {
+        const q = (pay ?? {}) as Record<string, unknown>;
+        const stroops = typeof q.amount === 'string' ? tryToStroops(q.amount) : null;
+        if (stroops === null) continue;
+        const key = assetFieldsKey(q.assetCode, q.assetIssuer, 'XLM');
+        perAsset.set(key, (perAsset.get(key) ?? 0n) + stroops);
+      }
+      return [...perAsset].map(([key, stroops]) => ({
+        amount: stroopsToString(stroops),
+        assetKey: key,
+      }));
+    }
+
+    case 'path_payment':
+      return one(p.sendAmount, assetObjectKey(p.sendAsset));
+
+    case 'dex_offer':
+      // Only guard non-zero amounts (delete action sets amount to "0")
+      return p.amount && p.amount !== '0' ? one(p.amount, assetObjectKey(p.selling)) : [];
+
+    default:
+      return [];
+  }
+}
+
+/**
  * Check that a payment amount does not exceed the configured per-payment and
  * mainnet spending caps, then **reserve** the amount against the cumulative
  * rolling-window limit.
@@ -122,40 +204,50 @@ export function _resetSpendingTrackerForTests(): void {
  * bad-sequence retry, or any other submission failure does NOT permanently
  * consume quota from the rolling window.
  *
- * Returns `null` for non-string amounts (tool schema will catch them).
- *
- * @throws if the single-payment amount exceeds AGENT_SPENDING_LIMIT or the
- *   mainnet safety cap, or if the cumulative reserved+committed total would
- *   exceed the limit.
+ * @throws if the amount is malformed, the single-payment amount exceeds
+ *   AGENT_SPENDING_LIMIT or the mainnet safety cap, or if the cumulative
+ *   reserved+committed total would exceed the limit.
  */
-function reserveSpendingLimit(amount: unknown): string | null {
-  if (typeof amount !== 'string') return null; // let the tool's own schema catch this
+function reserveSpendingLimit(spend: TaskSpend): string {
+  const stroops = toStroops(spend.amount);
 
-  const parsed = parseFloat(amount);
-  const limit = parseFloat(config.AGENT_SPENDING_LIMIT);
-
-  // Layer 1: single-payment cap
-  if (!isNaN(parsed) && parsed > limit) {
+  // Layer 1: single-payment cap. With per-asset limits configured (#733) the
+  // tracker applies the asset's own limit instead.
+  if (config.SPENDING_LIMITS_MAP.size === 0 && stroops > toStroops(config.AGENT_SPENDING_LIMIT)) {
     throw new Error(
-      `Payment amount ${amount} ${config.X402_ASSET_CODE} exceeds ` +
+      `Payment amount ${spend.amount} ${spend.assetKey} exceeds ` +
         `AGENT_SPENDING_LIMIT of ${config.AGENT_SPENDING_LIMIT}`
     );
   }
   // Layer 2: mainnet hard cap
-  if (!isNaN(parsed) && config.STELLAR_NETWORK === 'mainnet' && parsed > MAINNET_SPENDING_CAP) {
+  if (
+    config.STELLAR_NETWORK === 'mainnet' &&
+    stroops > BigInt(MAINNET_SPENDING_CAP) * STROOPS_PER_UNIT
+  ) {
     throw new Error(
-      `Payment amount ${amount} ${config.X402_ASSET_CODE} exceeds ` +
+      `Payment amount ${spend.amount} ${spend.assetKey} exceeds ` +
         `mainnet spending cap of ${MAINNET_SPENDING_CAP}`
     );
   }
 
   // Layer 3: reserve against rolling-window cumulative limit (issue #729)
   // Returns a reservationId — caller must commit() on success or release() on failure.
-  return spendingTracker.reserve(amount);
+  return spendingTracker.reserve(spend.amount, spend.assetKey);
 }
 
-function assertWithinSpendingLimit(amount: unknown): void {
-  reserveSpendingLimit(amount);
+/**
+ * Reserve every spend of `task`. All-or-nothing: if one reservation is
+ * refused, the ones already taken are released before the error propagates.
+ */
+function reserveTaskSpends(task: AgentTask): string[] {
+  const ids: string[] = [];
+  try {
+    for (const spend of taskSpends(task)) ids.push(reserveSpendingLimit(spend));
+  } catch (err) {
+    for (const id of ids) spendingTracker.release(id);
+    throw err;
+  }
+  return ids;
 }
 
 const log = createLogger('orchestrator');
@@ -217,14 +309,6 @@ function taskAmount(task: AgentTask): string | null {
   return typeof amount === 'string' ? amount : null;
 }
 
-export type TaskType =
-  | "stellar_payment"
-  | "soroban_invoke"
-  | "x402_respond"
-  | "account_info"
-  | "change_trust"
-  | "multisig_payment"
-  | "batch_payment";
 // ─── Task types ───────────────────────────────────────────────────────────────
 
 /** Task types handled by the tools PayFiAgent registers at construction. */
@@ -286,24 +370,68 @@ export interface AgentTask {
   idempotencyKey?: string;
 }
 
+/**
+ * An ordered list of tasks awaiting execution, with a human-readable summary
+ * to confirm before anything runs (see `planner.ts` / `executor.ts`).
+ */
+export interface Plan {
+  id: string;
+  tasks: AgentTask[];
+  /** Summary shown to the user before execution. */
+  summary: string;
+  /** ISO-8601 creation time. */
+  createdAt: string;
+  /** ISO-8601 time after which the plan may no longer be executed. */
+  expiresAt: string;
+}
+
 // ─── Type-safe payloads and results (#type-safe-tasks) ────────────────────────
 
 /**
  * Payload types for each task type. Use with `AgentTask` for full type inference.
  */
 export type TaskPayloadMap = {
-  stellar_payment: { destination: string; amount: string; assetCode?: string; assetIssuer?: string; memo?: string };
+  stellar_payment: {
+    destination: string;
+    amount: string;
+    assetCode?: string;
+    assetIssuer?: string;
+    memo?: string;
+  };
   soroban_invoke: { contractId: string; method: string; args?: unknown[] };
   x402_respond: { challenge: unknown };
   account_info: { accountId?: string };
   change_trust: { assetCode: string; assetIssuer: string; limit?: string };
-  multisig_payment: { destination: string; amount: string; signatures: string[]; minSignatures?: number };
+  multisig_payment: {
+    destination: string;
+    amount: string;
+    signatures: string[];
+    minSignatures?: number;
+  };
   batch_payment: { payments: Array<{ destination: string; amount: string }> };
   balance_check: { accountId: string; assetCode?: string; assetIssuer?: string };
-  path_payment: { destination: string; sendAsset: string; sendAmount: string; destAsset: string; destAmount?: string };
+  path_payment: {
+    destination: string;
+    sendAsset: string;
+    sendAmount: string;
+    destAsset: string;
+    destAmount?: string;
+  };
   fee_bump: { innerTransactionXdr: string; feeAccount: string; baseFeeMultiplier?: number };
-  dex_offer: { selling: string; buying: string; amount: string; price: number; action: 'create' | 'update' | 'delete' };
-  liquidity_pool: { liquidityProviderAccount: string; reserveA: string; reserveB: string; amountA: string; amountB: string };
+  dex_offer: {
+    selling: string;
+    buying: string;
+    amount: string;
+    price: number;
+    action: 'create' | 'update' | 'delete';
+  };
+  liquidity_pool: {
+    liquidityProviderAccount: string;
+    reserveA: string;
+    reserveB: string;
+    amountA: string;
+    amountB: string;
+  };
   stellar_toml: { domain: string };
   data_entry: { key: string; value: string; contractId?: string };
   sequence_number: { accountId: string };
@@ -312,11 +440,22 @@ export type TaskPayloadMap = {
   soroban_deploy: { wasmHash: string; salt?: string };
   swap: { sourceAsset: string; destAsset: string; amount: string };
   account_history: { accountId: string; limit?: number };
-  set_options: { accountId: string; thresholds?: { lowThreshold?: number; medThreshold?: number; highThreshold?: number }; homeDomain?: string };
+  set_options: {
+    accountId: string;
+    thresholds?: { lowThreshold?: number; medThreshold?: number; highThreshold?: number };
+    homeDomain?: string;
+  };
   soroban_event_query: { contractId: string; startLedger?: number; eventTypes?: string[] };
   stellar_identity_auth: { accountId: string; callback?: string };
   friendbot: { accountId: string };
-  nano_payment: { recipient: string; amountRaw: string; senderAccount?: string; senderSeed?: string; rpcUrl?: string; skipPrecheck?: boolean };
+  nano_payment: {
+    recipient: string;
+    amountRaw: string;
+    senderAccount?: string;
+    senderSeed?: string;
+    rpcUrl?: string;
+    skipPrecheck?: boolean;
+  };
   soroban_query: { contractId: string; key: string };
   network_status: Record<string, never>;
   ledger_info: Record<string, never>;
@@ -337,7 +476,12 @@ export type TaskResultMap = {
   multisig_payment: { txHash: string; ledger: number };
   batch_payment: { txHashes: string[]; ledger: number };
   balance_check: { balances: Record<string, string> };
-  path_payment: { txHash: string; ledger: number; sourceBalanceDelta?: string; destBalanceDelta?: string };
+  path_payment: {
+    txHash: string;
+    ledger: number;
+    sourceBalanceDelta?: string;
+    destBalanceDelta?: string;
+  };
   fee_bump: { txHash: string; ledger: number };
   dex_offer: { offerId: string; txHash: string };
   liquidity_pool: { liquidityPoolId: string; txHash: string };
@@ -353,7 +497,14 @@ export type TaskResultMap = {
   soroban_event_query: { events: unknown[] };
   stellar_identity_auth: { token: string };
   friendbot: { txHash: string; accountId: string };
-  nano_payment: { blockHash: string; recipient: string; amountRaw: string; network: 'nano'; precheckPassed: boolean; timestamp: string };
+  nano_payment: {
+    blockHash: string;
+    recipient: string;
+    amountRaw: string;
+    network: 'nano';
+    precheckPassed: boolean;
+    timestamp: string;
+  };
   soroban_query: { value: unknown };
   network_status: { buildNumber: string; currentProtocolVersion: number; currentLedger: number };
   ledger_info: { sequence: number; totalCoins: string; baseFee: number };
@@ -506,35 +657,6 @@ function optionalString(value: unknown): string | null {
 }
 
 /**
- * Atomically reserve a spending amount for the given asset.
- *
- * Uses BigInt stroop arithmetic (no parseFloat).
- * Per-asset limits are resolved from config.SPENDING_LIMITS_MAP.
- * Unknown assets are denied unless SPENDING_LIMITS_ALLOW_UNKNOWN is true.
- *
- * @param amount      - The amount string from the task payload.
- * @param assetCode   - Asset code (e.g. "XLM", "USDC").
- * @param assetIssuer - G-address issuer; absent / empty for native XLM.
- * @returns           A reservation id — pass to commitSpend() or rollbackSpend().
- * @throws            If the amount is malformed, asset is denied, or limit exceeded.
- */
-function reserveSpend(amount: unknown, assetCode?: unknown, assetIssuer?: unknown): string {
-  if (typeof amount !== "string") {
-    // Let the tool's own Zod schema surface a better error; do not block here.
-    return "";
-  }
-  const code    = typeof assetCode   === "string" ? assetCode   : config.X402_ASSET_CODE;
-  const issuer  = typeof assetIssuer === "string" ? assetIssuer : config.X402_ASSET_ISSUER;
-  const key     = assetKey(code, issuer);
-  return spendingTracker.reserve(amount, key);
-}
-
-function commitSpend(reservationId: string): void {
-  if (reservationId) spendingTracker.commit(reservationId);
-}
-
-function rollbackSpend(reservationId: string): void {
-  if (reservationId) spendingTracker.rollback(reservationId);
  * Build the audit-log entry for a task that produced a signed transaction, or
  * `null` when the result carries no `txHash` (read-only tasks, simulations,
  * multisig envelopes still awaiting signatures). Friendbot transactions are
@@ -574,6 +696,7 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
   private readonly signer: Signer;
   private paymentTool: StellarPaymentTool;
   private sorobanTool: SorobanInvokeTool;
+  private sorobanQueryTool: SorobanQueryTool;
   private x402Tool: X402PaymentTool;
   /** x402 v2 fetch client — created lazily on first fetchPaid() call. */
   private _x402FetchClient: X402FetchClient | null = null;
@@ -620,18 +743,16 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
 
   // Tasks re-dispatched by approve() — they skip the approval gate (#736).
   private readonly approvedTasks = new WeakSet<AgentTask>();
-  // Spending reservation held by each pending approval, released on decision/expiry.
-  private readonly approvalReservations = new Map<string, string>();
+  // Spending reservations held by each pending approval, released on decision/expiry.
+  private readonly approvalReservations = new Map<string, string[]>();
+  // Tool registry (#746) — the catalog getTools() exposes, and the dispatch
+  // target for task types the switch in executeTask does not handle.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private readonly tools = new Map<TaskType, AgentTool<any, any>>();
 
   constructor() {
     super();
 
-    // config.agentKeypair().secret() is the canonical way to obtain the signing secret.
-    // Direct access to config.AGENT_SECRET_KEY is intentionally blocked by the AgentConfig
-    // type (Omit<RawEnv, "AGENT_SECRET_KEY">); using agentKeypair() makes the access explicit.
-    this.paymentTool = new StellarPaymentTool(config.agentKeypair().secret());
-    this.sorobanTool = new SorobanInvokeTool(config.agentKeypair().secret());
-    this.x402Tool    = new X402PaymentTool(config.agentKeypair().secret());
     // Tools receive the agent-owned Signer, never the secret key itself, so the
     // raw secret is not copied into every tool instance.
     this.signer = createAgentSigner();
@@ -661,6 +782,10 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
     this.stellarIdentityTool = new StellarIdentityTool(this.signer);
     this.friendBotTool = new FriendBotTool();
     this.nanoPaymentTool = new NanoPaymentTool();
+
+    for (const tool of createBuiltinTools(this.signer)) {
+      this.registerTool(tool);
+    }
 
     // ── Register event listeners — every registration is mirrored in destroy() ──
     const onError = (err: Error) => {
@@ -870,7 +995,7 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
     for (const { task, correlationId, resolve } of queued) {
       resolve(this.shuttingDownResult(task, correlationId));
     }
-    logger.info('Agent draining — rejecting new tasks', { rejectedQueuedTasks: queued.length });
+    logger.info({ rejectedQueuedTasks: queued.length }, 'Agent draining — rejecting new tasks');
   }
 
   private shuttingDownResult(task: AgentTask, correlationId: string): AgentResult {
@@ -939,7 +1064,7 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
       return null;
     }
 
-    const reservationId = reserveSpendingLimit(amount);
+    const reservationIds = reserveTaskSpends(task);
     const createdAt = Date.now();
     const approval = {
       id: randomUUID(),
@@ -953,10 +1078,10 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
     try {
       savePendingApproval(approval);
     } catch (err) {
-      if (reservationId !== null) spendingTracker.release(reservationId);
+      for (const reservationId of reservationIds) spendingTracker.release(reservationId);
       throw err;
     }
-    if (reservationId !== null) this.approvalReservations.set(approval.id, reservationId);
+    this.approvalReservations.set(approval.id, reservationIds);
     setTimeout(() => this.expireApprovals(), config.APPROVAL_TTL_MS).unref();
 
     log.warn(
@@ -980,10 +1105,10 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
   }
 
   private releaseApprovalReservation(id: string): void {
-    const reservationId = this.approvalReservations.get(id);
-    if (reservationId === undefined) return;
+    const reservationIds = this.approvalReservations.get(id);
+    if (reservationIds === undefined) return;
     this.approvalReservations.delete(id);
-    spendingTracker.release(reservationId);
+    for (const reservationId of reservationIds) spendingTracker.release(reservationId);
   }
 
   /** Expire every pending approval past its deadline and release its reservation. */
@@ -1041,13 +1166,23 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
     return getPendingApproval(id) ?? null;
   }
 
-  async waitForPendingTasks(): Promise<void> {
-    if (this.activeTasks === 0 && this.taskQueue.length === 0) return;
-    logger.info('Waiting for pending tasks to finish', {
-      activeTasks: this.activeTasks,
-      queuedTasks: this.taskQueue.length,
-      timeoutMs,
-    });
+  /**
+   * Resolve once no tasks are active or queued.
+   *
+   * @param timeoutMs - Give up after this long. Omit to wait indefinitely.
+   * @returns  if every task settled,  if the timeout fired first.
+   */
+  async waitForPendingTasks(timeoutMs?: number): Promise<boolean> {
+    const idle = () => this.activeTasks === 0 && this.taskQueue.length === 0;
+    if (idle()) return true;
+    logger.info(
+      {
+        activeTasks: this.activeTasks,
+        queuedTasks: this.taskQueue.length,
+        timeoutMs,
+      },
+      'Waiting for pending tasks to finish'
+    );
     return new Promise<boolean>((resolve) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const interval = setInterval(() => {
@@ -1060,10 +1195,10 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
       if (timeoutMs !== undefined) {
         timer = setTimeout(() => {
           clearInterval(interval);
-          logger.warn('Timed out waiting for pending tasks', {
-            activeTasks: this.activeTasks,
-            queuedTasks: this.taskQueue.length,
-          });
+          logger.warn(
+            { activeTasks: this.activeTasks, queuedTasks: this.taskQueue.length },
+            'Timed out waiting for pending tasks'
+          );
           resolve(false);
         }, timeoutMs);
       }
@@ -1107,12 +1242,12 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
     // ── Idempotency check (#payment-idempotency) ─────────────────────────────
     if (task.idempotencyKey) {
       const existing = getIdempotencyResult(task.idempotencyKey, task.payload);
-      if (existing === { conflict: true }) {
+      if (existing && 'conflict' in existing) {
         return {
           success: false,
           taskType: task.type,
           error: `Idempotency key "${task.idempotencyKey}" already used with a different payload`,
-          errorType: 'IdempotencyConflict',
+          errorType: ErrorType.IdempotencyConflict,
           correlationId,
         };
       }
@@ -1211,22 +1346,6 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
     taskLog: ReturnType<typeof createLogger>
   ): Promise<AgentResult> {
     this.activeTasks++;
-    logger.info("Running task", { taskType: task.type });
-
-    // reservationId is non-empty only for payment tasks that were reserved
-    let reservationId = "";
-
-    try {
-      let data: AgentResultData | unknown;
-
-      switch (task.type) {
-        case "stellar_payment": {
-          const p = task.payload as Record<string, unknown>;
-          // Atomically reserve spend — throws if limit exceeded or asset denied
-          reservationId = reserveSpend(p?.amount, p?.assetCode, p?.assetIssuer);
-          data = await this.paymentTool.execute(task.payload);
-          commitSpend(reservationId);
-          break;
     this.emit('task:started', { taskType: task.type, correlationId });
     const startMs = Date.now();
 
@@ -1234,6 +1353,9 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
 
     // ── Compose middleware chain ────────────────────────────────────────────────
     const executeTask = async (): Promise<AgentResult> => {
+      // Spending reservations taken for this run (#729): committed once the
+      // tool succeeds, released if anything before that throws.
+      let reservationIds: string[] = [];
       try {
         if (VALUE_MOVING_TASK_TYPES.has(task.type) && isPaused()) {
           throw new AgentPausedError(
@@ -1245,24 +1367,17 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
           assertDestinationsAllowed(task);
         }
 
-        case "x402_respond": {
-          const p = task.payload as Record<string, unknown>;
-          // Atomically reserve spend — throws if limit exceeded or asset denied
-          reservationId = reserveSpend(p?.amount, p?.assetCode, p?.assetIssuer);
-          data = await this.x402Tool.respond(task.payload);
-          commitSpend(reservationId);
-          break;
         if (VALUE_MOVING_TASK_TYPES.has(task.type) && !this.approvedTasks.has(task)) {
           const held = this.holdForApproval(task, correlationId);
           if (held) return held;
         }
 
+        reservationIds = reserveTaskSpends(task);
+
         let data: unknown;
 
         switch (task.type) {
           case 'stellar_payment': {
-            const p = task.payload as Record<string, unknown>;
-            assertWithinSpendingLimit(p?.amount);
             const paymentResult = await this.paymentTool.execute(task.payload);
             data = {
               ...paymentResult,
@@ -1280,12 +1395,9 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
             data = await this.sorobanQueryTool.query(task.payload);
             break;
 
-          case 'x402_respond': {
-            const p = task.payload as Record<string, unknown>;
-            assertWithinSpendingLimit(p?.amount);
+          case 'x402_respond':
             data = await this.x402Tool.respond(task.payload);
             break;
-          }
 
           case 'account_info':
             data = await this.accountInfoTool.fetch();
@@ -1295,27 +1407,13 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
             data = await this.trustlineTool.execute(task.payload);
             break;
 
-          case 'multisig_payment': {
-            const p = task.payload as Record<string, unknown>;
-            const sigs = Array.isArray(p?.signatures) ? p.signatures : [];
-            const minSig = typeof p?.minSignatures === 'number' ? p.minSignatures : 1;
-            const willSubmit = sigs.length >= minSig;
-            if (willSubmit) assertWithinSpendingLimit(p?.amount);
+          case 'multisig_payment':
             data = await this.multiSigTool.execute(task.payload);
             break;
-          }
 
-          case 'batch_payment': {
-            const p = task.payload as Record<string, unknown>;
-            const payments = Array.isArray(p?.payments) ? p.payments : [];
-            const batchTotal = payments.reduce((sum: number, pay: unknown) => {
-              const amt = parseFloat((pay as Record<string, unknown>)?.amount as string);
-              return sum + (isNaN(amt) ? 0 : amt);
-            }, 0);
-            assertWithinSpendingLimit(String(batchTotal));
+          case 'batch_payment':
             data = await this.batchPaymentTool.execute(task.payload);
             break;
-          }
 
           case 'balance_check': {
             const balanceCheckTool = this.balanceCheckTool as {
@@ -1332,26 +1430,17 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
             break;
           }
 
-          case 'path_payment': {
-            const p = task.payload as Record<string, unknown>;
-            assertWithinSpendingLimit(p?.sendAmount);
+          case 'path_payment':
             data = await this.pathPaymentTool.execute(task.payload);
             break;
-          }
 
           case 'fee_bump':
             data = await this.feeBumpTool.execute(task.payload);
             break;
 
-          case 'dex_offer': {
-            const p = task.payload as Record<string, unknown>;
-            // Only guard non-zero amounts (delete action sets amount to "0")
-            if (p?.amount && p.amount !== '0') {
-              assertWithinSpendingLimit(p?.amount);
-            }
+          case 'dex_offer':
             data = await this.dexOfferTool.execute(task.payload);
             break;
-          }
 
           case 'swap':
             data = await this.swapTool.execute(task.payload);
@@ -1409,9 +1498,45 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
             data = await this.nanoPaymentTool.execute(task.payload);
             break;
 
-          default:
-            throw new Error(`Unknown task type: ${(task as AgentTask).type}`);
+          default: {
+            // Registry dispatch (#746): built-in tools without a case above and
+            // custom tools added with registerTool().
+            const tool = this.tools.get(task.type);
+            if (!tool) {
+              throw new Error(`Unknown task type: ${(task as AgentTask).type}`);
+            }
+            const ctx: ToolContext = {
+              correlationId,
+              logger: taskLog,
+              network: config.STELLAR_NETWORK,
+              // Reserved like the built-in payments above (#729): committed
+              // once the tool succeeds, released if it throws.
+              assertWithinSpendingLimit: (amount) => {
+                if (typeof amount !== 'string') return; // the tool's schema rejects it
+                reservationIds.push(
+                  reserveSpendingLimit({
+                    amount,
+                    assetKey: assetKey(config.X402_ASSET_CODE, config.X402_ASSET_ISSUER),
+                  })
+                );
+              },
+            };
+            const input = tool.inputSchema.parse(task.payload);
+            data = await withSpan(
+              `tool.${task.type}`,
+              async (span) => {
+                const toolData: unknown = await tool.execute(input, ctx);
+                setTxHashAttribute(span, toolData);
+                return toolData;
+              },
+              { [SPAN_ATTR.TASK_TYPE]: task.type, [SPAN_ATTR.CORRELATION_ID]: correlationId }
+            );
+            break;
+          }
         }
+
+        for (const id of reservationIds) spendingTracker.commit(id);
+        reservationIds = [];
 
         // ── Persist successful result with duration ───────────────────────────────
         const durationMs = Date.now() - startMs;
@@ -1450,16 +1575,12 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
           );
         }
 
-        case "batch_payment":
-          data = await this.batchPaymentTool.execute(task.payload);
-          break;
-
-        default:
-          throw new Error(`Unknown task type: ${(task as AgentTask).type}`);
         void dispatchWebhook(result);
 
         return result;
       } catch (err) {
+        for (const id of reservationIds) spendingTracker.release(id);
+        reservationIds = [];
         const safe = redactSecretString(describeError(err));
         const sanitized = sanitizePayload(task.payload);
         taskLog.error(
@@ -1491,24 +1612,6 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
       }
     };
 
-      logger.info("Task completed", { taskType: task.type });
-      const _data = data as AgentResultData | undefined;
-      const result: AgentResult = _data !== undefined
-        ? { success: true, taskType: task.type, data: _data }
-        : { success: true, taskType: task.type };
-      this.emit("task:complete", result);
-      saveResult({ ...result, timestamp: new Date().toISOString() });
-      return result;
-    } catch (err) {
-      // Roll back the reservation so the failed payment is not counted
-      rollbackSpend(reservationId);
-
-      const message = err instanceof Error ? err.message : String(err);
-      const safe = redactSecretString(message);
-      const sanitized = sanitizePayload(task.payload);
-      logger.error("Task failed", { taskType: task.type, error: safe, sanitizedPayload: sanitized });
-      const result: AgentResult = { success: false, taskType: task.type, error: safe };
-      this.emit("task:failed", result);
     // Build middleware chain: middleware[n] -> middleware[n-1] -> ... -> executeTask
     let chain: () => Promise<AgentResult> = executeTask;
     for (let i = this.middlewares.length - 1; i >= 0; i--) {
@@ -1520,10 +1623,31 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
 
     try {
       // Lets rpc_client emit task:retry / tx:* on this agent for this task.
-      return await taskContext.run(
+      const result = await taskContext.run(
         { taskType: task.type, correlationId, emit: this.emit.bind(this) },
-        chain
+        () =>
+          // Root span for the task (#823): tool spans and RPC spans nest under it,
+          // and the correlation ID links the trace to the task's log lines.
+          withSpan(
+            'agent.executeTask',
+            async (span) => {
+              const taskResult = await chain();
+              if (taskResult.success) {
+                setTxHashAttribute(span, taskResult.data);
+              } else {
+                markSpanError(span, taskResult.error ?? 'Task failed');
+              }
+              return taskResult;
+            },
+            { [SPAN_ATTR.TASK_TYPE]: task.type, [SPAN_ATTR.CORRELATION_ID]: correlationId }
+          )
       );
+      if (result.success) {
+        failureAlerts.recordSuccess();
+      } else {
+        failureAlerts.recordFailure(task.type);
+      }
+      return result;
     } catch (err) {
       failureAlerts.recordFailure(task.type);
       const durationMs = Date.now() - startMs;

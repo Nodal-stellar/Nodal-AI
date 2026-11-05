@@ -26,8 +26,8 @@ const log = createLogger('llm:openai');
 interface OpenAIMessage {
   role: Message['role'];
   content: string;
-  name?: string;
-  tool_call_id?: string;
+  name?: string | undefined;
+  tool_call_id?: string | undefined;
 }
 
 interface OpenAIToolCall {
@@ -97,16 +97,13 @@ export class OpenAIProvider implements LLMProvider {
     options: GenerationOptions = {}
   ): Promise<GenerationResponse> {
     if (!this.isConfigured()) {
-      throw new LLMError(
-        'configuration',
-        this.providerName,
-        'OpenAI API key not configured'
-      );
+      throw new LLMError('configuration', this.providerName, 'OpenAI API key not configured');
     }
 
-    const model = options.responseFormat?.type === 'json_object' 
-      ? 'gpt-4o'  // JSON mode works best with gpt-4o
-      : this.config.model || this.defaultModel;
+    const model =
+      options.responseFormat?.type === 'json_object'
+        ? 'gpt-4o' // JSON mode works best with gpt-4o
+        : this.config.model || this.defaultModel;
 
     const startTime = Date.now();
 
@@ -192,11 +189,7 @@ export class OpenAIProvider implements LLMProvider {
     }
 
     // All retries exhausted
-    throw lastError || new LLMError(
-      'server_error',
-      this.providerName,
-      'Max retries exhausted'
-    );
+    throw lastError || new LLMError('server_error', this.providerName, 'Max retries exhausted');
   }
 
   private async makeRequest(
@@ -212,11 +205,7 @@ export class OpenAIProvider implements LLMProvider {
       // Extract the first choice (we don't generate multiple by default)
       const choice = data.choices[0];
       if (!choice) {
-        throw new LLMError(
-          'server_error',
-          this.providerName,
-          'No completion choice returned'
-        );
+        throw new LLMError('server_error', this.providerName, 'No completion choice returned');
       }
 
       // Convert tool calls
@@ -244,10 +233,15 @@ export class OpenAIProvider implements LLMProvider {
         const message = err.response?.data?.error?.message || err.message;
 
         if (status === 401) {
-          throw new LLMError('configuration', this.providerName, `Authentication failed: ${message}`, {
-            statusCode: status,
-            isRetryable: false,
-          });
+          throw new LLMError(
+            'configuration',
+            this.providerName,
+            `Authentication failed: ${message}`,
+            {
+              statusCode: status,
+              isRetryable: false,
+            }
+          );
         }
 
         if (status === 429) {
@@ -279,9 +273,7 @@ export class OpenAIProvider implements LLMProvider {
     }
   }
 
-  private mapFinishReason(
-    reason: string | null
-  ): GenerationResponse['finishReason'] {
+  private mapFinishReason(reason: string | null): GenerationResponse['finishReason'] {
     switch (reason) {
       case 'stop':
         return 'stop';

@@ -1,7 +1,7 @@
 # On-chain agent spending policy
 
 Status: **Spike / prototype** (issue #813)
-Prototype: [`contracts/agent_policy/`](../../contracts/agent_policy/)
+Prototype: [`contracts/agent_policy/`](https://github.com/Nodal-stellar/Nodal-AI/tree/main/contracts/agent_policy)
 
 ## Problem
 

@@ -477,11 +477,9 @@ describe('AI Safety: Prompt Injection Protection', () => {
       });
 
       // Build a prompt with this (untrusted) output
-      const prompt = buildIsolatedPrompt(
-        'You are a payment assistant.',
-        'Check my balance',
-        [{ source: 'malicious_contract', data: sanitized.sanitized }]
-      );
+      const prompt = buildIsolatedPrompt('You are a payment assistant.', 'Check my balance', [
+        { source: 'malicious_contract', data: sanitized.sanitized },
+      ]);
 
       // The prompt should contain the untrusted marker
       expect(prompt).toContain('[UNTRUSTED DATA - EXTERNAL SOURCE]');

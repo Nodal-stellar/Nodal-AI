@@ -14,7 +14,7 @@ target/
 contracts/**/target/
 
 # Generated API docs (TypeDoc)
-docs/api/
+docs/public/api/
 
 # Lockfiles
 package-lock.json

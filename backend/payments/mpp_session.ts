@@ -17,14 +17,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import {
-  Address,
-  BASE_FEE,
-  Keypair,
-  StrKey,
-  TransactionBuilder,
-  xdr,
-} from '@stellar/stellar-sdk';
+import { Address, BASE_FEE, Keypair, StrKey, TransactionBuilder, xdr } from '@stellar/stellar-sdk';
 import { z } from 'zod';
 import { config, MAINNET_SPENDING_CAP } from '../config';
 import { AgentPausedError, PolicyViolationError, ValidationError } from '../errors';
@@ -34,6 +27,7 @@ import { createAgentSigner, Signer } from '../signer';
 import { spendingTracker } from '../spending_tracker';
 import { getStorage } from '../db/storage';
 import { createLogger } from '../utils/logger';
+import { toStroops } from '../utils/amount';
 import { caip2Network } from '../x402/middleware';
 
 const log = createLogger('mpp-session');
@@ -79,8 +73,8 @@ export interface ChannelState {
   status: ChannelStatus;
   openedAt: string; // ISO timestamp
   timeoutAt: string; // ISO timestamp
-  closedAt?: string;
-  latestCommitment?: ChannelCommitment; // JSON-serialized
+  closedAt?: string | undefined;
+  latestCommitment?: ChannelCommitment | undefined; // JSON-serialized
 }
 
 /**
@@ -124,17 +118,21 @@ export interface MppSessionCredential {
 
 const NewSessionSchema = z.object({
   asset: z.string().refine(StrKey.isValidContract, 'asset must be a contract address'),
-  totalAmount: z.string().regex(/^[1-9]\d*$/, 'totalAmount must be a positive integer in base units'),
+  totalAmount: z
+    .string()
+    .regex(/^[1-9]\d*$/, 'totalAmount must be a positive integer in base units'),
   timeoutSeconds: z.number().int().positive(),
 });
 
 const ChannelStateSchema = z.object({
   id: z.string().uuid(),
   agent: z.string().refine(StrKey.isValidEd25519PublicKey, 'agent must be a G-address'),
-  participant: z.string().refine(
-    (v) => StrKey.isValidEd25519PublicKey(v) || StrKey.isValidContract(v),
-    'participant must be a Stellar account or contract address'
-  ),
+  participant: z
+    .string()
+    .refine(
+      (v) => StrKey.isValidEd25519PublicKey(v) || StrKey.isValidContract(v),
+      'participant must be a Stellar account or contract address'
+    ),
   asset: z.string().refine(StrKey.isValidContract, 'asset must be a contract address'),
   totalAmount: z.string(),
   agentBalance: z.string(),
@@ -165,10 +163,10 @@ function fromBaseUnits(amount: string): string {
   return `${value / scale}.${(value % scale).toString().padStart(DECIMALS, '0')}`;
 }
 
+// Strict parse (#734): rejects malformed amounts and more than DECIMALS (7) places
+// instead of silently truncating them.
 function toBaseUnits(amount: string): string {
-  const [whole, fraction = '0'] = amount.split('.');
-  const padded = fraction.padEnd(DECIMALS, '0').slice(0, DECIMALS);
-  return (BigInt(whole) * 10n ** BigInt(DECIMALS) + BigInt(padded)).toString();
+  return toStroops(amount).toString();
 }
 
 /**

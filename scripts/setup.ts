@@ -132,7 +132,7 @@ async function main() {
     'testnet',
     isValidNetwork
   );
-  const networkDefaults = NETWORK_DEFAULTS[network];
+  const networkDefaults = NETWORK_DEFAULTS[network]!; // askValidated only accepts known keys
 
   const horizonUrl = await askValidated('Horizon RPC URL', networkDefaults.horizon, isValidUrl);
   if (network === 'mainnet') {

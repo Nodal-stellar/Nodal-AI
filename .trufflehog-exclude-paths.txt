@@ -12,3 +12,8 @@
 # by the pre-commit hook's own allowlist (.husky/scan-secrets.sh).
 ^tests/
 ^dist/tests/
+# node_modules/ was committed before 6ad67cc and stays in history. Its hits are
+# third-party documentation examples (a keyv README, zod's own tests, an axios
+# changelog), checked by hand; 0 verified. dist/ is compiled output of backend/.
+^node_modules/
+^dist/

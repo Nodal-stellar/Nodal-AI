@@ -26,7 +26,7 @@ vi.mock('../backend/config', () => ({
   },
 }));
 
-vi.mock('../backend/logger', () => ({
+vi.mock('../backend/utils/logger', () => ({
   logger: {
     error: vi.fn(),
     info: vi.fn(),
@@ -215,7 +215,7 @@ describe('ContractStorageWatcherTool', () => {
 
   describe('error/reconnect scenario', () => {
     it('handles transient error, emits error event, logs, and resumes on next poll', async () => {
-      const { logger } = await import('../backend/logger');
+      const { logger } = await import('../backend/utils/logger');
       const onError = vi.fn();
       const onChange = vi.fn();
 

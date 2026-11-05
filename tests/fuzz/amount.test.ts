@@ -11,54 +11,64 @@
  *   ✓ Negative values rejected
  */
 
-import { describe, it, expect } from "vitest";
-import fc from "fast-check";
-import { toStroops, stroopsToString, STROOPS_PER_UNIT } from "../../backend/utils/amount";
+import { describe, it, expect } from 'vitest';
+import fc from 'fast-check';
+import {
+  toStroops,
+  stroopsToString,
+  STROOPS_PER_UNIT,
+  fromStroops,
+  compareAmounts,
+  isValidAmount,
+  tryToStroops,
+  STROOP_SCALE,
+  MAX_DECIMAL_PLACES,
+} from '../../backend/utils/amount';
 
 // ─── Unit tests ───────────────────────────────────────────────────────────────
 
-describe("toStroops — valid inputs", () => {
-  it("converts whole numbers", () => {
-    expect(toStroops("1")).toBe(10_000_000n);
-    expect(toStroops("100")).toBe(1_000_000_000n);
-    expect(toStroops("0")).toBe(0n);
+describe('toStroops — valid inputs', () => {
+  it('converts whole numbers', () => {
+    expect(toStroops('1')).toBe(10_000_000n);
+    expect(toStroops('100')).toBe(1_000_000_000n);
+    expect(toStroops('0')).toBe(0n);
   });
 
-  it("converts 7-decimal amounts exactly", () => {
-    expect(toStroops("0.0000001")).toBe(1n);
-    expect(toStroops("1.0000000")).toBe(10_000_000n);
-    expect(toStroops("9.9999999")).toBe(99_999_999n);
-    expect(toStroops("100.5000000")).toBe(1_005_000_000n);
+  it('converts 7-decimal amounts exactly', () => {
+    expect(toStroops('0.0000001')).toBe(1n);
+    expect(toStroops('1.0000000')).toBe(10_000_000n);
+    expect(toStroops('9.9999999')).toBe(99_999_999n);
+    expect(toStroops('100.5000000')).toBe(1_005_000_000n);
   });
 
-  it("pads fractional part shorter than 7 digits", () => {
-    expect(toStroops("1.5")).toBe(15_000_000n);
-    expect(toStroops("1.50")).toBe(15_000_000n);
-    expect(toStroops("0.1")).toBe(1_000_000n);
+  it('pads fractional part shorter than 7 digits', () => {
+    expect(toStroops('1.5')).toBe(15_000_000n);
+    expect(toStroops('1.50')).toBe(15_000_000n);
+    expect(toStroops('0.1')).toBe(1_000_000n);
   });
 
-  it("handles very large amounts without precision loss", () => {
+  it('handles very large amounts without precision loss', () => {
     // 9_999_999_999_999.9999999 — well beyond safe integer range
-    expect(toStroops("9999999.9999999")).toBe(99_999_999_999_999n);
+    expect(toStroops('9999999.9999999')).toBe(99_999_999_999_999n);
   });
 });
 
-describe("toStroops — invalid inputs rejected", () => {
+describe('toStroops — invalid inputs rejected', () => {
   const INVALID = [
-    "1e3",          // scientific notation
-    "2.5E+4",       // scientific notation uppercase
-    "0x10",         // hex
-    " 5 ",          // whitespace
-    "-1",           // negative
-    "1.00000001",   // more than 7 decimal places
-    "",             // empty string
-    ".",            // bare dot
-    "1.",           // trailing dot
-    ".5",           // leading dot
-    "NaN",
-    "Infinity",
-    "1,000",        // comma separator
-    "1 000",        // space separator
+    '1e3', // scientific notation
+    '2.5E+4', // scientific notation uppercase
+    '0x10', // hex
+    ' 5 ', // whitespace
+    '-1', // negative
+    '1.00000001', // more than 7 decimal places
+    '', // empty string
+    '.', // bare dot
+    '1.', // trailing dot
+    '.5', // leading dot
+    'NaN',
+    'Infinity',
+    '1,000', // comma separator
+    '1 000', // space separator
   ];
 
   for (const val of INVALID) {
@@ -68,37 +78,36 @@ describe("toStroops — invalid inputs rejected", () => {
   }
 });
 
-describe("stroopsToString", () => {
-  it("converts back to 7-decimal format", () => {
-    expect(stroopsToString(1n)).toBe("0.0000001");
-    expect(stroopsToString(10_000_000n)).toBe("1.0000000");
-    expect(stroopsToString(1_005_000_000n)).toBe("100.5000000");
-    expect(stroopsToString(0n)).toBe("0.0000000");
+describe('stroopsToString', () => {
+  it('converts back to 7-decimal format', () => {
+    expect(stroopsToString(1n)).toBe('0.0000001');
+    expect(stroopsToString(10_000_000n)).toBe('1.0000000');
+    expect(stroopsToString(1_005_000_000n)).toBe('100.5000000');
+    expect(stroopsToString(0n)).toBe('0.0000000');
   });
 
-  it("pads fractional part with leading zeros", () => {
-    expect(stroopsToString(100n)).toBe("0.0000100");
+  it('pads fractional part with leading zeros', () => {
+    expect(stroopsToString(100n)).toBe('0.0000100');
   });
 });
 
-describe("STROOPS_PER_UNIT", () => {
-  it("equals 10_000_000n", () => {
+describe('STROOPS_PER_UNIT', () => {
+  it('equals 10_000_000n', () => {
     expect(STROOPS_PER_UNIT).toBe(10_000_000n);
   });
 });
 
 // ─── Property / fuzz tests ────────────────────────────────────────────────────
 
-describe("fuzz: toStroops round-trips via stroopsToString", () => {
-  it("arbitrary valid 7-decimal strings round-trip exactly", () => {
+describe('fuzz: toStroops round-trips via stroopsToString', () => {
+  it('arbitrary valid 7-decimal strings round-trip exactly', () => {
     // Generate: integer part 0–9999, fractional part 0000000–9999999
-    const validAmount = fc.tuple(
-      fc.nat({ max: 9_999 }),
-      fc.nat({ max: 9_999_999 })
-    ).map(([whole, frac]): string => {
-      const fracStr = String(frac).padStart(7, "0");
-      return `${whole}.${fracStr}`;
-    });
+    const validAmount = fc
+      .tuple(fc.nat({ max: 9_999 }), fc.nat({ max: 9_999_999 }))
+      .map(([whole, frac]): string => {
+        const fracStr = String(frac).padStart(7, '0');
+        return `${whole}.${fracStr}`;
+      });
 
     fc.assert(
       fc.property(validAmount, (amountStr) => {
@@ -113,11 +122,11 @@ describe("fuzz: toStroops round-trips via stroopsToString", () => {
     );
   });
 
-  it("fuzz: scientific notation strings always rejected", () => {
+  it('fuzz: scientific notation strings always rejected', () => {
     const scientificNotation = fc.oneof(
       fc.tuple(fc.nat({ max: 999 }), fc.nat({ max: 9 })).map(([m, e]) => `${m}e${e}`),
       fc.tuple(fc.nat({ max: 999 }), fc.nat({ max: 9 })).map(([m, e]) => `${m}E+${e}`),
-      fc.tuple(fc.nat({ max: 999 }), fc.nat({ max: 9 })).map(([m, e]) => `${m}e-${e}`),
+      fc.tuple(fc.nat({ max: 999 }), fc.nat({ max: 9 })).map(([m, e]) => `${m}e-${e}`)
     );
 
     fc.assert(
@@ -128,7 +137,7 @@ describe("fuzz: toStroops round-trips via stroopsToString", () => {
     );
   });
 
-  it("fuzz: arbitrary strings with whitespace always rejected", () => {
+  it('fuzz: arbitrary strings with whitespace always rejected', () => {
     const withWhitespace = fc.string({ minLength: 1 }).map((s) => ` ${s} `);
 
     fc.assert(
@@ -139,7 +148,7 @@ describe("fuzz: toStroops round-trips via stroopsToString", () => {
     );
   });
 
-  it("fuzz: negative amounts always rejected", () => {
+  it('fuzz: negative amounts always rejected', () => {
     const negativeAmount = fc.nat().map((n) => `-${n}`);
 
     fc.assert(
@@ -150,14 +159,13 @@ describe("fuzz: toStroops round-trips via stroopsToString", () => {
     );
   });
 
-  it("fuzz: amounts exceeding 7 decimal places always rejected", () => {
-    const tooManyDecimals = fc.tuple(
-      fc.nat({ max: 999 }),
-      fc.nat({ max: 99_999_999 })
-    ).map(([whole, frac]): string => {
-      const fracStr = String(frac).padStart(8, "0"); // 8 decimal places
-      return `${whole}.${fracStr}`;
-    });
+  it('fuzz: amounts exceeding 7 decimal places always rejected', () => {
+    const tooManyDecimals = fc
+      .tuple(fc.nat({ max: 999 }), fc.nat({ max: 99_999_999 }))
+      .map(([whole, frac]): string => {
+        const fracStr = String(frac).padStart(8, '0'); // 8 decimal places
+        return `${whole}.${fracStr}`;
+      });
 
     fc.assert(
       fc.property(tooManyDecimals, (amountStr) => {
@@ -165,6 +173,10 @@ describe("fuzz: toStroops round-trips via stroopsToString", () => {
       }),
       { numRuns: 500 }
     );
+  });
+});
+
+/**
  * Property-based fuzz tests for Stellar amount parsing and stroop conversion (Issue #830).
  *
  * Verifies critical safety properties across 10,000+ generated runs using fast-check:
@@ -175,18 +187,6 @@ describe("fuzz: toStroops round-trips via stroopsToString", () => {
  * 5. Rejection of NaN and non-numeric inputs
  * 6. Rejection of exponent / scientific notation forms
  */
-
-import { describe, it, expect } from 'vitest';
-import fc from 'fast-check';
-import {
-  toStroops,
-  fromStroops,
-  compareAmounts,
-  isValidAmount,
-  tryToStroops,
-  STROOP_SCALE,
-  MAX_DECIMAL_PLACES,
-} from '../../backend/utils/amount';
 
 const TEN_K_RUNS = 10_000;
 
@@ -216,10 +216,7 @@ describe('Amount parsing and stroop conversion property-based tests', () => {
     it('fromStroops(toStroops(s)) === s for canonical 7-decimal strings (10k runs)', () => {
       // Generates canonical 7-decimal strings: e.g. "123.4567890"
       const canonicalDecimalArb = fc
-        .tuple(
-          fc.integer({ min: 0, max: 10_000_000 }),
-          fc.integer({ min: 0, max: 9_999_999 })
-        )
+        .tuple(fc.integer({ min: 0, max: 10_000_000 }), fc.integer({ min: 0, max: 9_999_999 }))
         .map(([whole, frac]) => `${whole}.${frac.toString().padStart(7, '0')}`);
 
       fc.assert(
@@ -336,10 +333,7 @@ describe('Amount parsing and stroop conversion property-based tests', () => {
   describe('Rejection of >7 decimals', () => {
     it('rejects any amount with 8 or more decimal places (10k runs)', () => {
       const excessiveDecimalsArb = fc
-        .tuple(
-          fc.integer({ min: 0, max: 10_000 }),
-          fc.integer({ min: 8, max: 30 })
-        )
+        .tuple(fc.integer({ min: 0, max: 10_000 }), fc.integer({ min: 8, max: 30 }))
         .map(([whole, decimalsCount]) => `${whole}.${'9'.repeat(decimalsCount)}`);
 
       fc.assert(
@@ -357,10 +351,7 @@ describe('Amount parsing and stroop conversion property-based tests', () => {
   describe('Rejection of negative amounts', () => {
     it('rejects any negative amount string (10k runs)', () => {
       const negativeAmountArb = fc
-        .tuple(
-          fc.integer({ min: 1, max: 10_000_000 }),
-          fc.nat({ max: 7 })
-        )
+        .tuple(fc.integer({ min: 1, max: 10_000_000 }), fc.nat({ max: 7 }))
         .map(([whole, decCount]) =>
           decCount === 0 ? `-${whole}` : `-${whole}.${'1'.repeat(decCount)}`
         );

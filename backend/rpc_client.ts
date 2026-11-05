@@ -31,6 +31,7 @@ import { isThrottled, handleRateLimitResponse, withBackoffGuard } from './networ
 export { withBackoffGuard } from './network';
 import { withSpan } from './telemetry';
 import { emitTaskEvent } from './events';
+import { alertBreakerOpen } from './alerts';
 
 const log = createLogger('rpc-client');
 // Exported so the breaker's behaviour can be asserted against the real

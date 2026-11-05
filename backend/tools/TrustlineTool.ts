@@ -3,20 +3,11 @@
  * Manage asset trustlines for the agent account.
  */
 
-import {
-  TransactionBuilder,
-  Operation,
-  Asset,
-  BASE_FEE,
-  } from '@stellar/stellar-sdk';
+import { TransactionBuilder, Operation, Asset, BASE_FEE } from '@stellar/stellar-sdk';
 import { z } from 'zod';
 import { config } from '../config';
 import { createAgentSigner, Signer } from '../signer';
-import {
-  loadAccount,
-  submitTransaction,
-  resolveNetworkPassphrase,
-} from '../rpc_client';
+import { loadAccount, submitTransaction, resolveNetworkPassphrase } from '../rpc_client';
 import { SubmitResultSchema } from './StellarPaymentTool';
 import { getTypedBalances } from './balanceHelpers';
 import { ValidationError } from '../errors';

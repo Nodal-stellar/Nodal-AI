@@ -5,15 +5,17 @@
  * Implements SEP-41 facilitator-based payment requirements.
  */
 
-import { X402Middleware, X402MiddlewareOptions } from '@x402/express';
+import { randomUUID } from 'crypto';
+import type { NextFunction, Request, Response } from 'express';
 import { config } from '../config';
 import { logger } from '../utils/logger';
+import { nodalPaywall, type NodalPaywallOptions } from './middleware';
 
 /**
- * Options for creating an x402 middleware instance.
- * Extends @x402/express options with Nodal-specific customizations.
+ * Options for creating an x402 middleware instance: the {@link nodalPaywall}
+ * options used in v2 mode, plus the knobs of the legacy JSON challenge.
  */
-export interface X402MiddlewareOptionsWithLegacy extends X402MiddlewareOptions {
+export interface X402MiddlewareOptionsWithLegacy extends Partial<NodalPaywallOptions> {
   /** Optional custom X402 challenge response handler */
   challengeHandler?: (resource: string) => Promise<{
     amount: string;
@@ -24,32 +26,36 @@ export interface X402MiddlewareOptionsWithLegacy extends X402MiddlewareOptions {
     expiresAt: string;
     network?: string;
   }>;
+  /** Legacy mode: produces each challenge nonce. Defaults to a random UUID. */
+  nonceGenerator?: () => string;
+  /** Legacy mode: seconds until a challenge expires. Defaults to 300. */
+  expiresIn?: number;
 }
+
+/** Price charged when no `price` option is given, matching the legacy default amount. */
+const DEFAULT_PRICE = '1';
 
 /**
  * Create x402 seller middleware with support for both v2 and legacy modes.
- * 
+ *
  * When `config.X402_USE_LEGACY === true`, falls back to legacy JSON challenge format
  * for backward compatibility.
  */
-export function createX402Middleware(options: X402MiddlewareOptionsWithLegacy = {}) {
+export function createX402Middleware(
+  options: X402MiddlewareOptionsWithLegacy = {}
+): (req: Request, res: Response, next: NextFunction) => Promise<void> {
   // If legacy mode is enabled, return a simple middleware that returns JSON challenges
   if (config.X402_USE_LEGACY) {
-    logger.warn('x402: legacy mode enabled - using JSON challenge format for backward compatibility');
+    logger.warn(
+      'x402: legacy mode enabled - using JSON challenge format for backward compatibility'
+    );
     return createLegacyMiddleware(options);
   }
 
-  // Use official @x402/express middleware for v2
-  const x402Middleware = X402Middleware({
-    ...options,
-    // Set up facilitator if configured
-    facilitatorUrl: config.X402_FACILITATOR_URL,
-    // Default asset if not specified in options
-    asset: options.asset || {
-      code: config.X402_ASSET_CODE,
-      issuer: config.X402_ASSET_ISSUER,
-    },
-  });
+  // v2: the @x402/express payment middleware, configured by nodalPaywall()
+  // (facilitator from config.X402_FACILITATOR_URL, asset from config.X402_ASSET_CODE).
+  const { challengeHandler: _c, nonceGenerator: _n, expiresIn: _e, price, ...paywall } = options;
+  const x402Middleware = nodalPaywall({ ...paywall, price: price ?? DEFAULT_PRICE });
 
   logger.info('x402 v2 middleware enabled with SEP-41 token transfers');
   return x402Middleware;
@@ -59,11 +65,13 @@ export function createX402Middleware(options: X402MiddlewareOptionsWithLegacy = 
  * Legacy middleware that returns JSON challenges compatible with older clients.
  * Used when X402_USE_LEGACY=true for backward compatibility.
  */
-function createLegacyMiddleware(options: X402MiddlewareOptionsWithLegacy = {}) {
-  return async (req: any, res: any, next: (err?: Error) => void) => {
+function createLegacyMiddleware(
+  options: X402MiddlewareOptionsWithLegacy = {}
+): (req: Request, res: Response, next: NextFunction) => Promise<void> {
+  return async (req: Request, res: Response, next: NextFunction) => {
     try {
       // Determine the amount needed for this resource
-      let amount = '1';
+      let amount = options.price ?? DEFAULT_PRICE;
       let assetCode = config.X402_ASSET_CODE;
       let assetIssuer = config.X402_ASSET_ISSUER;
       let payTo = config.AGENT_PUBLIC_KEY;
@@ -79,9 +87,9 @@ function createLegacyMiddleware(options: X402MiddlewareOptionsWithLegacy = {}) {
 
       // Generate a unique nonce for this challenge
       const nonce = options.nonceGenerator?.() || generateNonce();
-      
+
       // Calculate expiry (default: 5 minutes from now)
-      const expiresAt = options.expiresIn 
+      const expiresAt = options.expiresIn
         ? new Date(Date.now() + options.expiresIn * 1000).toISOString()
         : new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
@@ -122,8 +130,11 @@ function createLegacyMiddleware(options: X402MiddlewareOptionsWithLegacy = {}) {
         ],
       });
 
-      logger.debug({ url: req.url, amount, asset: `${assetCode}:${assetIssuer}` }, 'x402 legacy challenge issued');
-      
+      logger.debug(
+        { url: req.url, amount, asset: `${assetCode}:${assetIssuer}` },
+        'x402 legacy challenge issued'
+      );
+
       // Stop processing - we've handled the response
       return;
     } catch (err) {
@@ -133,28 +144,22 @@ function createLegacyMiddleware(options: X402MiddlewareOptionsWithLegacy = {}) {
   };
 }
 
-/**
- * Generate a UUID v4 nonce for x402 challenges.
- */
+/** Generate an unpredictable UUID v4 nonce for x402 challenges. */
 function generateNonce(): string {
-  // Simple UUID v4 generator (node:crypto.randomUUID() requires Node 16+)
-  const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-  return uuid;
+  return randomUUID();
 }
 
 /**
  * Extract the X402 challenge from a request's headers.
  * Used by sellers to verify payment proofs from buyers.
  */
-export function getX402ChallengeFromHeaders(headers: Record<string, string | string[]>): any | null {
-  const x402Version = Array.isArray(headers['x-x402-version']) 
-    ? headers['x-x402-version'][0] 
+export function getX402ChallengeFromHeaders(
+  headers: Record<string, string | string[]>
+): any | null {
+  const x402Version = Array.isArray(headers['x-x402-version'])
+    ? headers['x-x402-version'][0]
     : headers['x-x402-version'];
-  
+
   if (!x402Version) {
     return null;
   }
@@ -162,29 +167,27 @@ export function getX402ChallengeFromHeaders(headers: Record<string, string | str
   // v1 legacy format
   if (x402Version === '1') {
     return {
-      amount: Array.isArray(headers['x-x402-amount']) 
-        ? headers['x-x402-amount'][0] 
+      amount: Array.isArray(headers['x-x402-amount'])
+        ? headers['x-x402-amount'][0]
         : headers['x-x402-amount'],
-      assetCode: Array.isArray(headers['x-x402-asset']) 
-        ? headers['x-x402-asset'][0].split(':')[0] 
+      assetCode: Array.isArray(headers['x-x402-asset'])
+        ? headers['x-x402-asset'][0]?.split(':')[0]
         : headers['x-x402-asset']?.split(':')[0],
-      assetIssuer: Array.isArray(headers['x-x402-asset']) 
-        ? headers['x-x402-asset'][0].split(':')[1] 
+      assetIssuer: Array.isArray(headers['x-x402-asset'])
+        ? headers['x-x402-asset'][0]?.split(':')[1]
         : headers['x-x402-asset']?.split(':')[1],
-      payTo: Array.isArray(headers['pay']) 
-        ? headers['pay'][0] 
-        : headers['pay'],
-      nonce: Array.isArray(headers['x-x402-nonce']) 
-        ? headers['x-x402-nonce'][0] 
+      payTo: Array.isArray(headers['pay']) ? headers['pay'][0] : headers['pay'],
+      nonce: Array.isArray(headers['x-x402-nonce'])
+        ? headers['x-x402-nonce'][0]
         : headers['x-x402-nonce'],
-      expiresAt: Array.isArray(headers['x-x402-expires']) 
-        ? headers['x-x402-expires'][0] 
+      expiresAt: Array.isArray(headers['x-x402-expires'])
+        ? headers['x-x402-expires'][0]
         : headers['x-x402-expires'],
-      resource: Array.isArray(headers['x-x402-resource']) 
-        ? headers['x-x402-resource'][0] 
+      resource: Array.isArray(headers['x-x402-resource'])
+        ? headers['x-x402-resource'][0]
         : headers['x-x402-resource'],
-      network: Array.isArray(headers['x-x402-network']) 
-        ? headers['x-x402-network'][0] 
+      network: Array.isArray(headers['x-x402-network'])
+        ? headers['x-x402-network'][0]
         : headers['x-x402-network'],
     };
   }

@@ -1,6 +1,6 @@
 /**
  * backend/planner.ts
- * 
+ *
  * AI-powered planner using function calling.
  * agent.plan("swap 50 XLM to USDC and send half to GB...") returns a structured Plan.
  */
@@ -97,8 +97,14 @@ const TOOL_SCHEMAS = {
     name: 'offer_book',
     description: 'Query Stellar DEX order book',
     inputSchema: z.object({
-      sellingAsset: z.union([z.string(), z.object({ code: z.string(), issuer: z.string().optional() })]),
-      buyingAsset: z.union([z.string(), z.object({ code: z.string(), issuer: z.string().optional() })]),
+      sellingAsset: z.union([
+        z.string(),
+        z.object({ code: z.string(), issuer: z.string().optional() }),
+      ]),
+      buyingAsset: z.union([
+        z.string(),
+        z.object({ code: z.string(), issuer: z.string().optional() }),
+      ]),
       limit: z.number().min(1).max(200).optional(),
     }),
   },
@@ -133,7 +139,9 @@ const PLANNER_PROMPT = `You are a financial planning assistant for the Stellar b
 Given a user request, produce a sequence of tasks to execute.
 
 Available tools:
-${Object.values(TOOL_SCHEMAS).map(t => `- ${t.name}: ${t.description}`).join('\n')}
+${Object.values(TOOL_SCHEMAS)
+  .map((t) => `- ${t.name}: ${t.description}`)
+  .join('\n')}
 
 Rules:
 1. Only use value-moving tools (payment, swap, invoke) if explicitly requested
@@ -153,17 +161,17 @@ function parseTasks(response: string): AgentTask[] {
   try {
     const parsed = JSON.parse(response);
     const tasks = Array.isArray(parsed) ? parsed : [parsed];
-    
+
     return tasks.map((task: { type: string; payload: unknown }) => {
       const taskType = task.type as TaskType;
       const schema = TOOL_SCHEMAS[taskType as keyof typeof TOOL_SCHEMAS];
-      
+
       if (schema) {
         // Validate with schema
         const validated = schema.inputSchema.parse(task.payload);
         return { type: taskType, payload: validated };
       }
-      
+
       // Unknown type - still include but won't be validated
       return { type: taskType, payload: task.payload };
     });
@@ -179,15 +187,18 @@ function parseTasks(response: string): AgentTask[] {
 function validateTaskPolicy(task: AgentTask): { valid: boolean; reason?: string } {
   // Check if value-moving tool is being used during planning
   if (VALUE_MOVING_TASK_TYPES.has(task.type)) {
-    return { valid: false, reason: `Value-moving tool ${task.type} cannot execute during planning` };
+    return {
+      valid: false,
+      reason: `Value-moving tool ${task.type} cannot execute during planning`,
+    };
   }
-  
+
   // Validate task type is known
   const knownTypes = Object.keys(TOOL_SCHEMAS);
   if (!knownTypes.includes(task.type) && !READONLY_TOOLS.has(task.type)) {
     return { valid: false, reason: `Unknown task type: ${task.type}` };
   }
-  
+
   return { valid: true };
 }
 
@@ -196,8 +207,8 @@ function validateTaskPolicy(task: AgentTask): { valid: boolean; reason?: string 
  */
 export class Planner {
   private agent: PayFiAgent;
-  private llmEndpoint?: string;
-  private llmApiKey?: string;
+  private llmEndpoint?: string | undefined;
+  private llmApiKey?: string | undefined;
 
   constructor(agent: PayFiAgent, options: { llmEndpoint?: string; llmApiKey?: string } = {}) {
     this.agent = agent;
@@ -207,28 +218,28 @@ export class Planner {
 
   /**
    * Generate a plan from natural language request.
-   * 
+   *
    * @param request - User's request in natural language
    * @param options.runReadonly - Whether to run read-only tools during planning (default: true)
    */
   async plan(request: string, options: { runReadonly?: boolean } = {}): Promise<Plan> {
     const { runReadonly = true } = options;
-    
+
     log.info({ request }, 'Generating plan');
-    
+
     // Build prompt
     const prompt = PLANNER_PROMPT.replace('{request}', request);
-    
+
     // Call LLM
     let tasks: AgentTask[];
-    
+
     if (this.llmEndpoint) {
       tasks = await this.callLLM(prompt);
     } else {
       // No LLM configured - return empty plan
       throw new Error('LLM not configured. Set LLM_ENDPOINT environment variable.');
     }
-    
+
     // Validate each task
     const validatedTasks: AgentTask[] = [];
     for (const task of tasks) {
@@ -237,31 +248,34 @@ export class Planner {
         log.warn({ taskType: task.type, reason: policy.reason }, 'Task failed policy check');
         continue;
       }
-      
+
       // Run read-only tools during planning if enabled
       if (runReadonly && READONLY_TOOLS.has(task.type)) {
         try {
           const result = await this.agent.run(task);
           if (result.success) {
-            log.debug({ taskType: task.type, data: result.data }, 'Read-only tool executed during planning');
+            log.debug(
+              { taskType: task.type, data: result.data },
+              'Read-only tool executed during planning'
+            );
           }
         } catch (err) {
           log.warn({ taskType: task.type, error: err }, 'Read-only tool failed during planning');
         }
       }
-      
+
       validatedTasks.push(task);
     }
-    
+
     // Create plan
     const plan: Plan = {
       id: `plan_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
       tasks: validatedTasks,
-      summary: validatedTasks.map(t => `${t.type}`).join('; '),
+      summary: validatedTasks.map((t) => `${t.type}`).join('; '),
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
     };
-    
+
     log.info({ planId: plan.id, taskCount: validatedTasks.length }, 'Plan generated');
     return plan;
   }
@@ -278,7 +292,7 @@ export class Planner {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(this.llmApiKey ? { 'Authorization': `Bearer ${this.llmApiKey}` } : {}),
+        ...(this.llmApiKey ? { Authorization: `Bearer ${this.llmApiKey}` } : {}),
       },
       body: JSON.stringify({
         model: process.env.LLM_MODEL ?? 'gpt-4',
@@ -291,9 +305,9 @@ export class Planner {
       throw new Error(`LLM call failed: ${response.status} ${response.statusText}`);
     }
 
-    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
     const content = data.choices?.[0]?.message?.content ?? '';
-    
+
     return parseTasks(content);
   }
 }

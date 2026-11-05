@@ -23,64 +23,9 @@
  *   - Negative values       ("-1")
  *   - More than 7 decimal places ("1.00000001")
  *   - Empty string, NaN, Infinity
- */
-
-/** Number of stroops in one unit (1 XLM = 10_000_000 stroops). */
-export const STROOPS_PER_UNIT = 10_000_000n;
-
-/**
- * Strict amount pattern: one or more digits, optionally followed by a dot and
- * 1–7 digits.  No sign, no exponent, no hex, no whitespace.
- */
-const AMOUNT_RE = /^\d+(\.\d{1,7})?$/;
-
-/**
- * Convert a Stellar amount string to an integer stroop count (BigInt).
  *
- * @param amountStr - A non-negative decimal string with up to 7 decimal places
- *                    (e.g. "100", "9.9999999", "0.0000001").
- * @returns The equivalent number of stroops as a BigInt.
- * @throws {Error} If the string does not match the strict Stellar amount format.
- */
-export function toStroops(amountStr: string): bigint {
-  if (!AMOUNT_RE.test(amountStr)) {
-    throw new Error(
-      `Invalid Stellar amount "${amountStr}": must match /^\\d+(\\.\\d{1,7})?$/ ` +
-      `(no scientific notation, hex, whitespace, or sign)`
-    );
-  }
-
-  const dotIndex = amountStr.indexOf(".");
-  if (dotIndex === -1) {
-    // Whole number — multiply directly
-    return BigInt(amountStr) * STROOPS_PER_UNIT;
-  }
-
-  const whole = amountStr.slice(0, dotIndex);
-  const frac  = amountStr.slice(dotIndex + 1);
-
-  // Pad fractional part on the right to exactly 7 digits so we can multiply
-  // without floating-point intermediaries.
-  const padded = frac.padEnd(7, "0");
-
-  return BigInt(whole) * STROOPS_PER_UNIT + BigInt(padded);
-}
-
-/**
- * Convert a stroop count back to a canonical 7-decimal-place string.
- * Useful for display and logging.
- *
- * @example stroopsToString(10_000_001n) === "1.0000001"
- * @example stroopsToString(            1n) === "0.0000001"
- */
-export function stroopsToString(stroops: bigint): string {
-  const units = stroops / STROOPS_PER_UNIT;
-  const frac  = stroops % STROOPS_PER_UNIT;
-  return `${units}.${String(frac).padStart(7, "0")}`;
-}
- * Utilities and schemas for Stellar amount handling and stroop conversions.
- * Stellar's smallest base unit is the stroop: 1 XLM = 10,000,000 stroops (7 decimal places).
- * Integer math in stroops (BigInt) prevents precision loss and floating-point errors.
+ * Also provides validation helpers and zod schemas for Stellar amount handling
+ * (Issue #830).
  */
 
 import { z } from 'zod';
@@ -88,6 +33,9 @@ import { z } from 'zod';
 /** 1 unit = 10,000,000 stroops (7 decimal places) */
 export const STROOP_SCALE = 10_000_000n;
 export const MAX_DECIMAL_PLACES = 7;
+
+/** Number of stroops in one unit (1 XLM = 10_000_000 stroops). Alias of STROOP_SCALE (#734). */
+export const STROOPS_PER_UNIT = STROOP_SCALE;
 
 /**
  * Regex for valid non-negative Stellar amounts with up to 7 decimal places.
@@ -163,6 +111,19 @@ export function fromStroops(stroops: bigint): string {
   const whole = stroops / STROOP_SCALE;
   const fraction = stroops % STROOP_SCALE;
   return `${whole}.${fraction.toString().padStart(MAX_DECIMAL_PLACES, '0')}`;
+}
+
+/**
+ * Convert a stroop count back to a canonical 7-decimal-place string.
+ * Useful for display and logging.
+ *
+ * @example stroopsToString(10_000_001n) === "1.0000001"
+ * @example stroopsToString(            1n) === "0.0000001"
+ */
+export function stroopsToString(stroops: bigint): string {
+  const units = stroops / STROOPS_PER_UNIT;
+  const frac = stroops % STROOPS_PER_UNIT;
+  return `${units}.${String(frac).padStart(7, '0')}`;
 }
 
 /**

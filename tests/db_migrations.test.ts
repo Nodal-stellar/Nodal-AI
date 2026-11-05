@@ -23,9 +23,16 @@ import {
 const EXPECTED_TABLES = [
   'agent_results',
   'agent_state',
+  'approval_audit_log',
   'audit_log',
+  'idempotency_keys',
+  'mpp_sessions',
+  'pending_approvals',
   'schema_version',
   'spending_records',
+  'trigger_events',
+  'triggers',
+  'x402_rate_records',
   'x402_used_nonces',
 ];
 
@@ -75,9 +82,9 @@ describe('fresh database', () => {
     migrateSqlite(db);
 
     expect(migrateSqlite(db)).toEqual([]);
-    expect(
-      (db.prepare(`SELECT COUNT(*) AS n FROM schema_version`).get() as { n: number }).n
-    ).toBe(loadMigrations(SQLITE_MIGRATIONS_DIR).length);
+    expect((db.prepare(`SELECT COUNT(*) AS n FROM schema_version`).get() as { n: number }).n).toBe(
+      loadMigrations(SQLITE_MIGRATIONS_DIR).length
+    );
   });
 
   it('creates the audit log append-only', () => {

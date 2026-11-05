@@ -4,7 +4,7 @@
  */
 
 import axios from 'axios';
-import toml from 'toml';
+import { parse as parseToml } from 'smol-toml';
 import { z } from 'zod';
 import { config } from '../config';
 import { withRetry } from '../rpc_client';
@@ -117,7 +117,7 @@ export const StellarTomlSchema = z
     DOCUMENTATION: StellarTomlDocumentationSchema.optional(),
     CURRENCIES: z.array(StellarTomlCurrencySchema).optional(),
     PRINCIPALS: z.array(StellarTomlPrincipalSchema).optional(),
-    VALIDATORS: z.array(z.record(z.unknown())).optional(),
+    VALIDATORS: z.array(z.record(z.string(), z.unknown())).optional(),
   })
   .passthrough();
 
@@ -162,7 +162,7 @@ export class StellarTomlTool {
         config.RETRY_DELAY_MS
       )
     );
-    const parsed = toml.parse(response.data);
+    const parsed = parseToml(response.data, { maxDepth: 64 });
 
     // Validate the third-party document before it reaches callers, matching
     // how StellarIdentityTool validates anchor responses. A malformed file

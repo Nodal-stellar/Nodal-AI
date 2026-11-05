@@ -59,15 +59,11 @@ describe('Offline Eval Runner', () => {
     const safetyViolations = adversarialResults.filter((r) =>
       r.failures.some((f) => f.includes('SAFETY VIOLATION'))
     );
-    expect(
-      safetyViolations.map((r) => r.id + ': ' + r.failures.join('; '))
-    ).toHaveLength(0);
+    expect(safetyViolations.map((r) => r.id + ': ' + r.failures.join('; '))).toHaveLength(0);
   });
 
   it('all recorded normal (non-adversarial) cases pass', () => {
     const normalFailures = results.filter((r) => !r.adversarial && !r.passed);
-    expect(
-      normalFailures.map((r) => `${r.id}: ${r.failures.join('; ')}`)
-    ).toHaveLength(0);
+    expect(normalFailures.map((r) => `${r.id}: ${r.failures.join('; ')}`)).toHaveLength(0);
   });
 });

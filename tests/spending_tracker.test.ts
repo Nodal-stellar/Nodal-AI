@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import Database from 'better-sqlite3';
 import { SpendingTracker } from '../backend/spending_tracker';
+import { _setDb } from '../backend/persistence';
 
 /**
  * Tests for SpendingTracker covering:
@@ -16,15 +18,20 @@ vi.mock('../backend/config', () => ({
   config: {
     SPENDING_WINDOW_MS: 60_000,
     AGENT_SPENDING_LIMIT: '100',
+    // Default asset charged when a spend names none, and no per-asset limits (#733).
+    X402_ASSET_CODE: 'USDC',
+    X402_ASSET_ISSUER: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+    SPENDING_LIMITS_MAP: new Map<string, string>(),
+    SPENDING_LIMITS_ALLOW_UNKNOWN: false,
   },
 }));
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-// ─── Existing window-boundary tests (#243) ────────────────────────────────────
-
-describe("SpendingTracker window boundary", () => {
 const WINDOW_MS = 60_000; // 1 minute — passed explicitly to each tracker
+
+// Trackers restore their window from the database, so every test needs its own.
+beforeEach(() => {
+  _setDb(new Database(':memory:'));
+});
 
 // ─── Basic record / limit checks ─────────────────────────────────────────────
 
@@ -145,7 +152,7 @@ describe('SpendingTracker — rolling window expiry (fake timers)', () => {
     tracker.record('60');
     vi.advanceTimersByTime(1_000);
 
-    expect(() => tracker.record("50")).toThrow(/exceeds limit/);
+    expect(() => tracker.record('50')).toThrow(/exceeds limit/);
     // 60 + 50 = 110 > 100, and both are inside the window.
     expect(() => tracker.record('50')).toThrow(/exceeds limit/);
   });
@@ -156,7 +163,6 @@ describe('SpendingTracker — rolling window expiry (fake timers)', () => {
 
     vi.advanceTimersByTime(WINDOW_MS + 1);
 
-    expect(() => tracker.record("60")).not.toThrow();
     // This is the evasion the issue is about: spacing payments across the
     // boundary is *allowed by design*, but only because the earlier one has
     // genuinely expired — not because pruning lost track of it.
@@ -184,59 +190,59 @@ describe('SpendingTracker — rolling window expiry (fake timers)', () => {
 
 // ─── Issue #730: over-limit rejection must not mutate state ──────────────────
 
-describe("SpendingTracker #730 — over-limit attempt leaves state unchanged", () => {
+describe('SpendingTracker #730 — over-limit attempt leaves state unchanged', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("total() is unchanged after an over-limit record() call", () => {
+  it('total() is unchanged after an over-limit record() call', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    tracker.record("60");
+    tracker.record('60');
     expect(tracker.total()).toBe(60);
 
     // 60 + 50 = 110 > 100 — should throw
-    expect(() => tracker.record("50")).toThrow(/exceeds limit/);
+    expect(() => tracker.record('50')).toThrow(/exceeds limit/);
 
     // total must still be 60, not 110
     expect(tracker.total()).toBe(60);
   });
 
-  it("a blocked attempt does not lock the tracker for subsequent valid records", () => {
+  it('a blocked attempt does not lock the tracker for subsequent valid records', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    tracker.record("60");
+    tracker.record('60');
 
     // This should be blocked
-    expect(() => tracker.record("50")).toThrow(/exceeds limit/);
+    expect(() => tracker.record('50')).toThrow(/exceeds limit/);
 
     // A smaller record that still fits (60 + 30 = 90 ≤ 100) should succeed
-    expect(() => tracker.record("30")).not.toThrow();
+    expect(() => tracker.record('30')).not.toThrow();
     expect(tracker.total()).toBe(90);
   });
 
-  it("multiple consecutive over-limit attempts do not inflate total()", () => {
+  it('multiple consecutive over-limit attempts do not inflate total()', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    tracker.record("80");
+    tracker.record('80');
 
     // Attempt to push over the limit three times
     for (let i = 0; i < 3; i++) {
-      expect(() => tracker.record("30")).toThrow(/exceeds limit/);
+      expect(() => tracker.record('30')).toThrow(/exceeds limit/);
     }
 
     // total must still be 80
     expect(tracker.total()).toBe(80);
   });
 
-  it("nothing is written to committed records on rejection", () => {
+  it('nothing is written to committed records on rejection', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    tracker.record("60");
+    tracker.record('60');
 
     try {
-      tracker.record("50");
+      tracker.record('50');
     } catch {
       // expected
     }
@@ -249,10 +255,10 @@ describe("SpendingTracker #730 — over-limit attempt leaves state unchanged", (
 
 // ─── Issue #729: reserve / commit / release ───────────────────────────────────
 
-describe("SpendingTracker #729 — reserve/commit/release three-phase API", () => {
+describe('SpendingTracker #729 — reserve/commit/release three-phase API', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
   });
 
   afterEach(() => {
@@ -261,41 +267,41 @@ describe("SpendingTracker #729 — reserve/commit/release three-phase API", () =
 
   // ── reserve ────────────────────────────────────────────────────────────────
 
-  it("reserve() returns a unique string id", () => {
+  it('reserve() returns a unique string id', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    const id1 = tracker.reserve("30");
-    const id2 = tracker.reserve("20");
-    expect(typeof id1).toBe("string");
-    expect(typeof id2).toBe("string");
+    const id1 = tracker.reserve('30');
+    const id2 = tracker.reserve('20');
+    expect(typeof id1).toBe('string');
+    expect(typeof id2).toBe('string');
     expect(id1).not.toBe(id2);
   });
 
-  it("reserve() counts the amount in totalWithReserved() but not total()", () => {
+  it('reserve() counts the amount in totalWithReserved() but not total()', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    tracker.reserve("40");
+    tracker.reserve('40');
     expect(tracker.total()).toBe(0);
     expect(tracker.totalWithReserved()).toBe(40);
   });
 
-  it("reserve() throws if the prospective total would exceed the limit", () => {
+  it('reserve() throws if the prospective total would exceed the limit', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    tracker.reserve("80");
+    tracker.reserve('80');
 
-    expect(() => tracker.reserve("30")).toThrow(/exceeds limit/);
+    expect(() => tracker.reserve('30')).toThrow(/exceeds limit/);
     // Only the first reservation is held
     expect(tracker.totalWithReserved()).toBe(80);
   });
 
-  it("reserve() throws for non-numeric input", () => {
+  it('reserve() throws for non-numeric input', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    expect(() => tracker.reserve("not-a-number")).toThrow();
+    expect(() => tracker.reserve('not-a-number')).toThrow();
   });
 
   // ── commit ─────────────────────────────────────────────────────────────────
 
-  it("commit() converts the reservation into a committed record", () => {
+  it('commit() converts the reservation into a committed record', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    const id = tracker.reserve("40");
+    const id = tracker.reserve('40');
 
     tracker.commit(id);
 
@@ -303,32 +309,32 @@ describe("SpendingTracker #729 — reserve/commit/release three-phase API", () =
     expect(tracker.totalWithReserved()).toBe(40);
   });
 
-  it("successful payments count exactly once after commit", () => {
+  it('successful payments count exactly once after commit', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    const id = tracker.reserve("40");
+    const id = tracker.reserve('40');
     tracker.commit(id);
 
     // total() should count it once, not twice
     expect(tracker.total()).toBe(40);
   });
 
-  it("commit() throws for an unknown reservation id", () => {
+  it('commit() throws for an unknown reservation id', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    expect(() => tracker.commit("nonexistent-id")).toThrow(/No active reservation/);
+    expect(() => tracker.commit('nonexistent-id')).toThrow(/No active reservation/);
   });
 
-  it("commit() throws if called twice for the same id", () => {
+  it('commit() throws if called twice for the same id', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    const id = tracker.reserve("30");
+    const id = tracker.reserve('30');
     tracker.commit(id);
     expect(() => tracker.commit(id)).toThrow(/No active reservation/);
   });
 
   // ── release ────────────────────────────────────────────────────────────────
 
-  it("release() removes the reservation and does NOT count toward total()", () => {
+  it('release() removes the reservation and does NOT count toward total()', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    const id = tracker.reserve("60");
+    const id = tracker.reserve('60');
 
     // Simulate transaction failure
     tracker.release(id);
@@ -337,56 +343,56 @@ describe("SpendingTracker #729 — reserve/commit/release three-phase API", () =
     expect(tracker.totalWithReserved()).toBe(0);
   });
 
-  it("failed payments do not count toward the window after release", () => {
+  it('failed payments do not count toward the window after release', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    tracker.record("60"); // committed spend
+    tracker.record('60'); // committed spend
 
-    const id = tracker.reserve("30"); // provisional
-    tracker.release(id);              // tx failed
+    const id = tracker.reserve('30'); // provisional
+    tracker.release(id); // tx failed
 
     // Only the committed 60 should count
     expect(tracker.total()).toBe(60);
     expect(tracker.totalWithReserved()).toBe(60);
   });
 
-  it("release() allows the amount to be reserved again after failure", () => {
+  it('release() allows the amount to be reserved again after failure', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    tracker.record("60");
-    const id = tracker.reserve("30");
+    tracker.record('60');
+    const id = tracker.reserve('30');
     tracker.release(id);
 
     // The same 30 can now be reserved again (60 + 30 = 90 ≤ 100)
-    expect(() => tracker.reserve("30")).not.toThrow();
+    expect(() => tracker.reserve('30')).not.toThrow();
   });
 
-  it("release() throws for an unknown reservation id", () => {
+  it('release() throws for an unknown reservation id', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    expect(() => tracker.release("nonexistent-id")).toThrow(/No active reservation/);
+    expect(() => tracker.release('nonexistent-id')).toThrow(/No active reservation/);
   });
 
-  it("release() throws if called twice for the same id", () => {
+  it('release() throws if called twice for the same id', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    const id = tracker.reserve("30");
+    const id = tracker.reserve('30');
     tracker.release(id);
     expect(() => tracker.release(id)).toThrow(/No active reservation/);
   });
 
   // ── combined flows ─────────────────────────────────────────────────────────
 
-  it("multiple concurrent reservations are all held against the limit", () => {
+  it('multiple concurrent reservations are all held against the limit', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    tracker.reserve("40");
-    tracker.reserve("40"); // 80 reserved total
+    tracker.reserve('40');
+    tracker.reserve('40'); // 80 reserved total
 
     // 80 + 30 = 110 > 100
-    expect(() => tracker.reserve("30")).toThrow(/exceeds limit/);
+    expect(() => tracker.reserve('30')).toThrow(/exceeds limit/);
     expect(tracker.totalWithReserved()).toBe(80);
   });
 
-  it("committed record persists across the window while unreserved amount is freed", () => {
+  it('committed record persists across the window while unreserved amount is freed', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    const id1 = tracker.reserve("50");
-    const id2 = tracker.reserve("30");
+    const id1 = tracker.reserve('50');
+    const id2 = tracker.reserve('30');
 
     tracker.commit(id1); // 50 committed
     tracker.release(id2); // 30 released (tx failed)
@@ -395,9 +401,9 @@ describe("SpendingTracker #729 — reserve/commit/release three-phase API", () =
     expect(tracker.totalWithReserved()).toBe(50);
   });
 
-  it("stale reservations are pruned after the window expires", () => {
+  it('stale reservations are pruned after the window expires', () => {
     const tracker = new SpendingTracker(WINDOW_MS);
-    tracker.reserve("80"); // never committed or released
+    tracker.reserve('80'); // never committed or released
 
     // Advance past the window
     vi.advanceTimersByTime(WINDOW_MS + 1);
@@ -405,6 +411,6 @@ describe("SpendingTracker #729 — reserve/commit/release three-phase API", () =
     // Pruning occurs on the next call; the stale hold must be gone
     expect(tracker.totalWithReserved()).toBe(0);
     // A new reservation for 80 should succeed (limit = 100)
-    expect(() => tracker.reserve("80")).not.toThrow();
+    expect(() => tracker.reserve('80')).not.toThrow();
   });
 });

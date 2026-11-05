@@ -3,13 +3,7 @@
  * Create and claim Stellar claimable balances.
  */
 
-import {
-  TransactionBuilder,
-  Operation,
-  Asset,
-  Claimant,
-  BASE_FEE,
-} from '@stellar/stellar-sdk';
+import { TransactionBuilder, Operation, Asset, Claimant, BASE_FEE } from '@stellar/stellar-sdk';
 import { z } from 'zod';
 import { config } from '../config';
 import { createAgentSigner, Signer } from '../signer';
@@ -82,9 +76,10 @@ function buildPredicate(
     case 'not':
       return Claimant.predicateNot(buildPredicate(predicate.predicate));
     case 'and':
-      return Claimant.predicateAnd(predicate.predicates.map(buildPredicate));
+      // Stellar predicates are binary; fold the list left to right.
+      return predicate.predicates.map(buildPredicate).reduce((l, r) => Claimant.predicateAnd(l, r));
     case 'or':
-      return Claimant.predicateOr(predicate.predicates.map(buildPredicate));
+      return predicate.predicates.map(buildPredicate).reduce((l, r) => Claimant.predicateOr(l, r));
   }
 }
 

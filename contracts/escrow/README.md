@@ -197,7 +197,7 @@ ledger time jumps) against a reference model and asserts the list below after ea
 | I1 | **Funds conservation:** `contract balance + released + refunded == deposited`. |
 | I2 | The contract, recipient and depositor balances match the model exactly — no call over- or under-pays. |
 | I3 | No balance goes negative, and the arbiter (current or proposed) never receives funds. |
-| I4 | Funds go to the recipient (`release` / `release_partial`) **or** back to the depositor (`refund` / `cancel`), never both. |
+| I4 | No unit of the deposit is paid twice. `refund` / `cancel` return exactly what `release_partial` has not already paid out, and settle the escrow, so a partially released escrow can pay both parties but never more than was deposited. |
 | I5 | The `released` flag matches the model, and a settled escrow holds zero tokens. |
 | I6 | While active, the stored `amount` equals the contract's token balance and is positive. |
 | I7 | `depositor`, `recipient` and `expiry` never change; `arbiter` changes only via an accepted rotation. |

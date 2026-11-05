@@ -3,6 +3,7 @@
 exports[`AgentResult snapshot > AgentResult has expected shape on failure 1`] = `
 {
   "correlationId": "fixed-test-id-failure",
+  "durationMs": Any<Number>,
   "error": "Test error",
   "errorType": "UNKNOWN_ERROR",
   "success": false,
@@ -16,6 +17,7 @@ exports[`AgentResult snapshot > AgentResult has expected shape on soroban_invoke
   "data": {
     "txHash": "soroban_invoke_tx_hash",
   },
+  "durationMs": Any<Number>,
   "success": true,
   "taskType": "soroban_invoke",
 }
@@ -29,6 +31,7 @@ exports[`AgentResult snapshot > AgentResult has expected shape on success 1`] = 
     "network": "mainnet",
     "txHash": "success_tx_hash",
   },
+  "durationMs": Any<Number>,
   "success": true,
   "taskType": "stellar_payment",
 }
@@ -45,6 +48,7 @@ exports[`AgentResult snapshot > AgentResult has expected shape on x402_respond s
     "signedAt": "2026-01-01T00:00:00.000Z",
     "txHash": "x402_tx_hash",
   },
+  "durationMs": Any<Number>,
   "success": true,
   "taskType": "x402_respond",
 }

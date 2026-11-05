@@ -13,6 +13,8 @@ import { PayFiAgent, AgentTask } from '../backend/agent';
 import { ErrorType } from '../backend/errors';
 
 vi.mock('../backend/persistence', () => ({
+  // The nonce store only touches the handle when a challenge is paid.
+  getDb: vi.fn(() => ({})),
   saveResult: vi.fn(),
   loadRecentSpend: vi.fn().mockReturnValue(0),
 }));

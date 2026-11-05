@@ -34,14 +34,12 @@ services:
     container_name: nodal-stellar
     platform: linux/amd64        # quickstart only ships amd64
     ports:
-      - "8000:8000"              # Horizon REST API
-      - "8001:8001"              # Soroban RPC
+      - "8000:8000"              # Horizon, Friendbot and Soroban RPC (/soroban/rpc)
     environment:
       NETWORK: local             # isolated local network, no real funds
     command: >
       --local
       --enable-soroban-rpc
-      --soroban-rpc-port 8001
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000"]
       interval: 10s
@@ -65,7 +63,7 @@ services:
       # Point to the local quickstart network
       STELLAR_NETWORK:    local
       HORIZON_URL:        http://stellar-quickstart:8000
-      SOROBAN_RPC_URL:    http://stellar-quickstart:8001
+      SOROBAN_RPC_URL:    http://stellar-quickstart:8000/soroban/rpc
       # Override these via a .env file or CI secrets — never hardcode real keys
       AGENT_SECRET_KEY:   ${AGENT_SECRET_KEY:?AGENT_SECRET_KEY is required}
       X402_ASSET_CODE:    ${X402_ASSET_CODE:-USDC}
@@ -116,7 +114,7 @@ services:
     environment:
       STELLAR_NETWORK:    local
       HORIZON_URL:        http://stellar-quickstart:8000
-      SOROBAN_RPC_URL:    http://stellar-quickstart:8001
+      SOROBAN_RPC_URL:    http://stellar-quickstart:8000/soroban/rpc
       AGENT_SECRET_KEY:   ${AGENT_SECRET_KEY:-process.env.AGENT_SECRET_KEY}
       X402_ASSET_CODE:    USDC
       X402_ASSET_ISSUER:  ${X402_ASSET_ISSUER:-GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN}
@@ -145,7 +143,7 @@ services:
     environment:
       STELLAR_NETWORK:    local
       HORIZON_URL:        http://stellar-quickstart:8000
-      SOROBAN_RPC_URL:    http://stellar-quickstart:8001
+      SOROBAN_RPC_URL:    http://stellar-quickstart:8000/soroban/rpc
       AGENT_SECRET_KEY:   ${AGENT_SECRET_KEY:-process.env.AGENT_SECRET_KEY}
       X402_ASSET_CODE:    USDC
       X402_ASSET_ISSUER:  ${X402_ASSET_ISSUER:-GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN}
@@ -197,7 +195,7 @@ services:
     environment:
       STELLAR_NETWORK:    local
       HORIZON_URL:        http://stellar-quickstart:8000
-      SOROBAN_RPC_URL:    http://stellar-quickstart:8001
+      SOROBAN_RPC_URL:    http://stellar-quickstart:8000/soroban/rpc
       AGENT_SECRET_KEY:   ${AGENT_SECRET_KEY:?AGENT_SECRET_KEY is required}
       X402_ASSET_CODE:    ${X402_ASSET_CODE:-USDC}
       X402_ASSET_ISSUER:  ${X402_ASSET_ISSUER:?X402_ASSET_ISSUER is required}

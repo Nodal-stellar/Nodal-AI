@@ -8,7 +8,7 @@
  * `execute`, so a tool always receives a validated, typed input.
  */
 
-import type { ZodType, ZodTypeDef } from 'zod';
+import type { ZodType } from 'zod';
 import type { TaskType } from '../agent';
 import type { createLogger } from '../utils/logger';
 
@@ -33,7 +33,7 @@ export interface AgentTool<I = unknown, O = unknown> {
   /** One-line, human/LLM-readable description of what the tool does. */
   description: string;
   /** Schema the task payload is parsed with before `execute` is called. */
-  inputSchema: ZodType<I, ZodTypeDef, unknown>;
+  inputSchema: ZodType<I, unknown>;
   /** True when the tool can move funds out of the agent's account. */
   valueMoving: boolean;
   /** Run the tool with the parsed payload. */

@@ -56,16 +56,30 @@ vi.mock('../backend/persistence', () => ({
   }),
 }));
 
-// Mock the dependency probes used by handleHealth(). Each defaults to a
-// healthy result; individual tests override them to exercise the degraded
-// path. The real implementations are never invoked in this suite.
+// Mock what handleHealth()'s probes call. Each defaults to healthy; individual
+// tests override them to exercise the degraded path. Plain functions, because
+// restoreMocks would strip a vi.fn() implementation after the first test.
 let horizonOk = true;
 let sorobanOk = true;
 let databaseOk = true;
-vi.mock('../backend/health', () => ({
-  checkHorizon: vi.fn(async () => (horizonOk ? { ok: true } : { ok: false, error: 'horizon down' })),
-  checkSoroban: vi.fn(async () => (sorobanOk ? { ok: true } : { ok: false, error: 'soroban down' })),
-  checkDatabase: vi.fn(async () => (databaseOk ? { ok: true } : { ok: false, error: 'database down' })),
+vi.mock('../backend/rpc_client', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  horizonServer: {
+    fetchBaseFee: async () => {
+      if (!horizonOk) throw new Error('horizon down');
+      return 100;
+    },
+  },
+  sorobanServer: {
+    getNetwork: async () => {
+      if (!sorobanOk) throw new Error('soroban down');
+      return {};
+    },
+  },
+}));
+vi.mock('../backend/db/client', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  db: { healthCheck: async () => databaseOk },
 }));
 
 // Mock the kill switch with an in-memory flag so the admin routes can be
@@ -96,7 +110,11 @@ import { getResults } from '../backend/persistence';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function makeReq(method: string, url: string, headers: Record<string, string> = {}): http.IncomingMessage {
+function makeReq(
+  method: string,
+  url: string,
+  headers: Record<string, string> = {}
+): http.IncomingMessage {
   return { method, url, headers } as http.IncomingMessage;
 }
 
@@ -163,15 +181,16 @@ describe('backend/server.ts — health check HTTP server', () => {
       const req = makeReq('GET', '/health');
       const res = makeRes();
 
-      await capturedHandler!(req, res);
+      capturedHandler!(req, res);
+      await vi.waitFor(() => expect(res._statusCode).not.toBe(0));
 
       expect(res._statusCode).toBe(200);
       const body = JSON.parse(res._body);
       expect(body.status).toBe('ok');
       expect(body.components).toEqual({
-        horizon: { ok: true },
-        soroban: { ok: true },
-        database: { ok: true },
+        horizon: 'up',
+        soroban: 'up',
+        database: 'up',
       });
       expect(res._headers['Content-Type']).toBe('application/json');
     });
@@ -181,7 +200,8 @@ describe('backend/server.ts — health check HTTP server', () => {
       const req = makeReq('GET', '/health');
       const res = makeRes();
 
-      await capturedHandler!(req, res);
+      capturedHandler!(req, res);
+      await vi.waitFor(() => expect(res._statusCode).not.toBe(0));
 
       expect(res._statusCode).toBe(200);
       const body = JSON.parse(res._body);
@@ -194,12 +214,13 @@ describe('backend/server.ts — health check HTTP server', () => {
       const req = makeReq('GET', '/health');
       const res = makeRes();
 
-      await capturedHandler!(req, res);
+      capturedHandler!(req, res);
+      await vi.waitFor(() => expect(res._statusCode).not.toBe(0));
 
       expect(res._statusCode).toBe(503);
       const body = JSON.parse(res._body);
       expect(body.status).toBe('degraded');
-      expect(body.components.horizon.ok).toBe(false);
+      expect(body.components.horizon).toBe('down');
     });
 
     it('returns 503 with status "degraded" when Soroban is down', async () => {
@@ -208,12 +229,13 @@ describe('backend/server.ts — health check HTTP server', () => {
       const req = makeReq('GET', '/health');
       const res = makeRes();
 
-      await capturedHandler!(req, res);
+      capturedHandler!(req, res);
+      await vi.waitFor(() => expect(res._statusCode).not.toBe(0));
 
       expect(res._statusCode).toBe(503);
       const body = JSON.parse(res._body);
       expect(body.status).toBe('degraded');
-      expect(body.components.soroban.ok).toBe(false);
+      expect(body.components.soroban).toBe('down');
     });
 
     it('returns 503 with status "degraded" when the database is down', async () => {
@@ -222,12 +244,13 @@ describe('backend/server.ts — health check HTTP server', () => {
       const req = makeReq('GET', '/health');
       const res = makeRes();
 
-      await capturedHandler!(req, res);
+      capturedHandler!(req, res);
+      await vi.waitFor(() => expect(res._statusCode).not.toBe(0));
 
       expect(res._statusCode).toBe(503);
       const body = JSON.parse(res._body);
       expect(body.status).toBe('degraded');
-      expect(body.components.database.ok).toBe(false);
+      expect(body.components.database).toBe('down');
     });
   });
 
@@ -318,7 +341,7 @@ describe('backend/server.ts — health check HTTP server', () => {
     });
 
     it('returns 500 when persistence throws an error', () => {
-      vi.mocked(getResults).mockImplementation(() => {
+      vi.mocked(getResults).mockImplementationOnce(() => {
         throw new Error('db down');
       });
 
@@ -457,9 +480,14 @@ describe('backend/server.ts — health check HTTP server', () => {
       const res = makeRes();
 
       capturedHandler!(
-        makeBodyReq('POST', '/approvals/appr-1', { decision: 'approve' }, {
-          authorization: 'Bearer nope',
-        }),
+        makeBodyReq(
+          'POST',
+          '/approvals/appr-1',
+          { decision: 'approve' },
+          {
+            authorization: 'Bearer nope',
+          }
+        ),
         res
       );
       await flush();
@@ -474,9 +502,14 @@ describe('backend/server.ts — health check HTTP server', () => {
       const res = makeRes();
 
       capturedHandler!(
-        makeBodyReq('POST', '/approvals/appr-1', { decision: 'approve' }, {
-          authorization: 'Bearer admin-secret',
-        }),
+        makeBodyReq(
+          'POST',
+          '/approvals/appr-1',
+          { decision: 'approve' },
+          {
+            authorization: 'Bearer admin-secret',
+          }
+        ),
         res
       );
       await flush();
@@ -492,9 +525,14 @@ describe('backend/server.ts — health check HTTP server', () => {
       const res = makeRes();
 
       capturedHandler!(
-        makeBodyReq('POST', '/approvals/appr-1', { decision: 'deny' }, {
-          authorization: 'Bearer admin-secret',
-        }),
+        makeBodyReq(
+          'POST',
+          '/approvals/appr-1',
+          { decision: 'deny' },
+          {
+            authorization: 'Bearer admin-secret',
+          }
+        ),
         res
       );
       await flush();

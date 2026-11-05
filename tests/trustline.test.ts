@@ -11,7 +11,9 @@ import * as rpcClient from '../backend/rpc_client';
 import { BalanceCheckTool } from '../backend/tools/BalanceCheckTool';
 
 vi.mock('../backend/tools/BalanceCheckTool', () => ({
-  BalanceCheckTool: vi.fn().mockImplementation(() => ({ execute: vi.fn() })),
+  BalanceCheckTool: vi.fn().mockImplementation(function () {
+    return { execute: vi.fn() };
+  }),
 }));
 
 vi.mock('../backend/rpc_client', () => ({
@@ -88,9 +90,9 @@ describe('TrustlineTool', () => {
       hash: 'trust_hash',
       ledger: 5,
     } as any);
-    vi.mocked(BalanceCheckTool).mockImplementation(
-      () => ({ execute: vi.fn().mockResolvedValue('0') }) as any
-    );
+    vi.mocked(BalanceCheckTool).mockImplementation(function () {
+      return { execute: vi.fn().mockResolvedValue('0') } as any;
+    });
     tool = new TrustlineTool(new KeypairSigner(Keypair.fromSecret(TEST_SECRET)));
   });
 
@@ -111,7 +113,9 @@ describe('TrustlineTool', () => {
   it('rejects removing a trustline with a non-zero balance before submission', async () => {
     vi.mocked(rpcClient.loadAccount).mockResolvedValue(makeMockAccount(true) as any);
     const balanceCheck = vi.fn().mockResolvedValue('1.5');
-    vi.mocked(BalanceCheckTool).mockImplementation(() => ({ execute: balanceCheck }) as any);
+    vi.mocked(BalanceCheckTool).mockImplementation(function () {
+      return { execute: balanceCheck } as any;
+    });
     tool = new TrustlineTool(new KeypairSigner(Keypair.fromSecret(TEST_SECRET)));
 
     await expect(

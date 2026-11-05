@@ -24,20 +24,23 @@ WORKDIR /build
 
 # ── Cache layer: copy manifests first so cargo fetch is only re-run on
 #    Cargo.toml / Cargo.lock changes, not on every source edit ──────────────────
-COPY contracts/escrow/Cargo.toml ./contracts/escrow/Cargo.toml
+COPY contracts/escrow/Cargo.toml contracts/escrow/Cargo.lock ./contracts/escrow/
 
 # Create a stub lib.rs so `cargo build` can resolve the crate without full source
 RUN mkdir -p contracts/escrow/src && \
     echo '#![no_std] soroban_sdk::contractimpl!(struct S;);' > contracts/escrow/src/lib.rs || \
     printf '#![no_std]\n' > contracts/escrow/src/lib.rs
 
-# Pre-fetch dependencies (cached unless Cargo.toml changes)
-RUN cargo fetch --manifest-path contracts/escrow/Cargo.toml
+# Pre-fetch dependencies (cached unless Cargo.toml or Cargo.lock changes).
+# --locked: without the lockfile cargo resolves to releases that need a newer
+# Cargo than the pinned 1.78, and the image would not match what CI tested.
+RUN cargo fetch --locked --manifest-path contracts/escrow/Cargo.toml
 
 # ── Full source copy + release build ──────────────────────────────────────────
 COPY contracts/escrow/src ./contracts/escrow/src
 
 RUN cargo build \
+        --locked \
         --manifest-path contracts/escrow/Cargo.toml \
         --target wasm32-unknown-unknown \
         --release
