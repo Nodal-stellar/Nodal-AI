@@ -25,7 +25,7 @@ import { KeypairSigner } from '../backend/signer';
 import { PolicyViolationError, ValidationError } from '../backend/errors';
 import * as rpcClient from '../backend/rpc_client';
 import { spendingTracker } from '../backend/spending_tracker';
-import { _resetKillSwitch, pauseAgent } from '../backend/kill_switch';
+import { _resetKillSwitch, pauseAgent, resumeAgent } from '../backend/kill_switch';
 
 vi.mock('../backend/rpc_client', () => ({
   loadAccount: vi.fn(),
@@ -289,8 +289,13 @@ describe('MppChargeClient', () => {
   it('refuses to pay while the kill switch is engaged', async () => {
     server = await startServer(chargeRequest);
     pauseAgent('test');
-    await expect(client.fetch(server.url)).rejects.toThrow(/paused/);
-    expect(server.state.credentials).toHaveLength(0);
+    try {
+      await expect(client.fetch(server.url)).rejects.toThrow(/paused/);
+      expect(server.state.credentials).toHaveLength(0);
+    } finally {
+      // The kill switch is process-wide; later tests must not inherit it.
+      resumeAgent('test');
+    }
   });
 
   it.each([

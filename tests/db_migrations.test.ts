@@ -23,9 +23,16 @@ import {
 const EXPECTED_TABLES = [
   'agent_results',
   'agent_state',
+  'approval_audit_log',
   'audit_log',
+  'idempotency_keys',
+  'mpp_sessions',
+  'pending_approvals',
   'schema_version',
   'spending_records',
+  'trigger_events',
+  'triggers',
+  'x402_rate_records',
   'x402_used_nonces',
 ];
 

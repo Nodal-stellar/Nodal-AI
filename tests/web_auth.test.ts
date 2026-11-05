@@ -24,6 +24,11 @@ vi.mock('../backend/config', () => {
   return {
     config: {
       STELLAR_NETWORK: 'testnet',
+      // rpc_client builds its servers at import time and needs real URLs.
+      HORIZON_URL: 'https://horizon-testnet.stellar.org',
+      SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org',
+      MAX_RETRIES: 1,
+      RETRY_DELAY_MS: 1,
       AGENT_PUBLIC_KEY: Keypair.fromSecret(secret).publicKey(),
       agentKeypair: () => Keypair.fromSecret(secret),
     },

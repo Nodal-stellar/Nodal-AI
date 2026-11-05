@@ -50,11 +50,15 @@ describe('LlmUsageTracker', () => {
 
     it('throws step_cap when cumulative step tokens exceed maxTokensPerStep', () => {
       // Fill up the step budget
-      const half = Math.floor(LLM_LIMITS.maxTokensPerStep / 2);
-      tracker.recordRequest({ sessionId: 's1', promptTokens: half, completionTokens: 0 });
+      // Each request stays under the per-request cap, which is checked first.
+      const perRequest = LLM_LIMITS.maxTokensPerRequest;
+      const requests = Math.floor(LLM_LIMITS.maxTokensPerStep / perRequest);
+      for (let i = 0; i < requests; i++) {
+        tracker.recordRequest({ sessionId: 's1', promptTokens: perRequest, completionTokens: 0 });
+      }
 
       // Now request something that would push past the step cap
-      const over = LLM_LIMITS.maxTokensPerStep - half + 1;
+      const over = LLM_LIMITS.maxTokensPerStep - requests * perRequest + 1;
       let caught: LlmBudgetError | null = null;
       try {
         tracker.assertStepBudget('s1', over);
@@ -99,7 +103,7 @@ describe('LlmUsageTracker', () => {
       // Now ask for something that would exceed the daily budget
       let caught: LlmBudgetError | null = null;
       try {
-        tracker.assertStepBudget('sfinal', LLM_LIMITS.maxTokensPerDay);
+        tracker.assertStepBudget('sfinal', LLM_LIMITS.maxTokensPerRequest);
       } catch (e) {
         caught = e as LlmBudgetError;
       }

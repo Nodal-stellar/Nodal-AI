@@ -30,6 +30,8 @@ vi.mock('../backend/rpc_client', () => ({
 }));
 
 vi.mock('../backend/persistence', () => ({
+  // The nonce store only touches the handle when a challenge is paid.
+  getDb: vi.fn(() => ({})),
   saveResult: vi.fn(),
   loadRecentSpend: vi.fn().mockReturnValue(0),
 }));
@@ -44,6 +46,8 @@ vi.mock('../backend/config', () => {
   const secret = Keypair.random().secret();
   return {
     config: {
+      PAYMENT_DESTINATION_POLICY: 'open',
+      PAYMENT_DESTINATIONS: [],
       STELLAR_NETWORK: 'testnet',
       HORIZON_URL: 'https://horizon-testnet.stellar.org',
       SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org',

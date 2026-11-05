@@ -556,10 +556,14 @@ describe('PayFiAgent — mainnet spending cap', () => {
   it('two PayFiAgent instances do not share state when run concurrently', async () => {
     vi.clearAllMocks();
     const agent1 = new PayFiAgent();
+    // An agent builds more than one StellarPaymentTool (the registry has its
+    // own), so the second agent's first instance is not simply results[1].
+    const secondAgentFirstInstance = vi.mocked(StellarPaymentTool).mock.results.length;
     const agent2 = new PayFiAgent();
 
     const mockInstance1 = vi.mocked(StellarPaymentTool).mock.results[0]!.value;
-    const mockInstance2 = vi.mocked(StellarPaymentTool).mock.results[1]!.value;
+    const mockInstance2 =
+      vi.mocked(StellarPaymentTool).mock.results[secondAgentFirstInstance]!.value;
 
     mockInstance1.execute.mockResolvedValueOnce({ txHash: 'tx_hash_1', ledger: 1 });
     mockInstance2.execute.mockResolvedValueOnce({ txHash: 'tx_hash_2', ledger: 2 });
@@ -636,7 +640,7 @@ describe('AgentResult snapshot', () => {
       correlationId: 'fixed-test-id-success',
     });
 
-    expect(result).toMatchSnapshot();
+    expect(result).toMatchSnapshot({ durationMs: expect.any(Number) });
     expect(result).toHaveProperty('success', true);
     expect(result).toHaveProperty('taskType', 'stellar_payment');
     expect(result).toHaveProperty('data');
@@ -653,7 +657,7 @@ describe('AgentResult snapshot', () => {
       correlationId: 'fixed-test-id-soroban-success',
     });
 
-    expect(result).toMatchSnapshot();
+    expect(result).toMatchSnapshot({ durationMs: expect.any(Number) });
     expect(result).toHaveProperty('success', true);
     expect(result).toHaveProperty('taskType', 'soroban_invoke');
     expect(result).toHaveProperty('data');
@@ -674,7 +678,7 @@ describe('AgentResult snapshot', () => {
       correlationId: 'fixed-test-id-x402-success',
     });
 
-    expect(result).toMatchSnapshot();
+    expect(result).toMatchSnapshot({ durationMs: expect.any(Number) });
     expect(result).toHaveProperty('success', true);
     expect(result).toHaveProperty('taskType', 'x402_respond');
     expect(result).toHaveProperty('data');
@@ -710,7 +714,7 @@ describe('AgentResult snapshot', () => {
       correlationId: 'fixed-test-id-failure',
     });
 
-    expect(result).toMatchSnapshot();
+    expect(result).toMatchSnapshot({ durationMs: expect.any(Number) });
     expect(result).toHaveProperty('success', false);
     expect(result).toHaveProperty('taskType', 'stellar_payment');
     expect(result).toHaveProperty('error');
@@ -1517,12 +1521,13 @@ describe('PayFiAgent — task dispatch matrix (#450)', () => {
     agent = new PayFiAgent();
   });
 
-  // Verify we are testing exactly 14 registered TaskType values.
-  it('dispatch matrix covers exactly 14 TaskType entries', () => {
-    expect(DISPATCH_MATRIX).toHaveLength(14);
+  // Verify we are testing exactly 13 registered TaskType values (the 14th,
+  // the deprecated `inflation` task, was removed in 2b6a14d).
+  it('dispatch matrix covers exactly 13 TaskType entries', () => {
+    expect(DISPATCH_MATRIX).toHaveLength(13);
     const taskTypes = DISPATCH_MATRIX.map(([type]) => type);
     // All entries must be unique — no accidental duplicates.
-    expect(new Set(taskTypes).size).toBe(14);
+    expect(new Set(taskTypes).size).toBe(13);
   });
 
   test.each(DISPATCH_MATRIX)(

@@ -22,79 +22,92 @@ import { DexOfferTool } from "../backend/tools/DexOfferTool";
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
-vi.mock("../backend/tools/StellarPaymentTool", () => ({
+vi.mock("../backend/tools/StellarPaymentTool", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   StellarPaymentTool: vi.fn().mockImplementation(() => ({
     execute: vi.fn().mockResolvedValue({ txHash: "stellar_hash", ledger: 1 }),
   })),
 }));
 
-vi.mock("../backend/tools/SorobanInvokeTool", () => ({
+vi.mock("../backend/tools/SorobanInvokeTool", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   SorobanInvokeTool: vi.fn().mockImplementation(() => ({
     execute: vi.fn().mockResolvedValue({}),
   })),
 }));
 
-vi.mock("../backend/tools/X402PaymentTool", () => ({
+vi.mock("../backend/tools/X402PaymentTool", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   X402PaymentTool: vi.fn().mockImplementation(() => ({
     respond: vi.fn().mockResolvedValue({}),
   })),
 }));
 
-vi.mock("../backend/tools/AccountInfoTool", () => ({
+vi.mock("../backend/tools/AccountInfoTool", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   AccountInfoTool: vi.fn().mockImplementation(() => ({
     fetch: vi.fn().mockResolvedValue({}),
   })),
 }));
 
-vi.mock("../backend/tools/TrustlineTool", () => ({
+vi.mock("../backend/tools/TrustlineTool", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   TrustlineTool: vi.fn().mockImplementation(() => ({
     execute: vi.fn().mockResolvedValue({}),
   })),
 }));
 
-vi.mock("../backend/tools/MultiSigPaymentTool", () => ({
+vi.mock("../backend/tools/MultiSigPaymentTool", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   MultiSigPaymentTool: vi.fn().mockImplementation(() => ({
     execute: vi.fn().mockResolvedValue({ txHash: "multisig_hash", ledger: 1 }),
   })),
 }));
 
-vi.mock("../backend/tools/BatchPaymentTool", () => ({
+vi.mock("../backend/tools/BatchPaymentTool", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   BatchPaymentTool: vi.fn().mockImplementation(() => ({
     execute: vi.fn().mockResolvedValue({ txHash: "batch_hash", ledger: 1 }),
   })),
 }));
 
-vi.mock("../backend/tools/SorobanQueryTool", () => ({
+vi.mock("../backend/tools/SorobanQueryTool", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   SorobanQueryTool: vi.fn().mockImplementation(() => ({
     query: vi.fn().mockResolvedValue({}),
   })),
 }));
 
-vi.mock("../backend/tools/BalanceCheckTool", () => ({
+vi.mock("../backend/tools/BalanceCheckTool", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   BalanceCheckTool: vi.fn().mockImplementation(() => ({
     getBalance: vi.fn().mockResolvedValue({ balances: [] }),
   })),
 }));
 
-vi.mock("../backend/tools/PathPaymentTool", () => ({
+vi.mock("../backend/tools/PathPaymentTool", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   PathPaymentTool: vi.fn().mockImplementation(() => ({
     execute: vi.fn().mockResolvedValue({ txHash: "path_hash", ledger: 1 }),
   })),
 }));
 
-vi.mock("../backend/tools/FeeBumpTool", () => ({
+vi.mock("../backend/tools/FeeBumpTool", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   FeeBumpTool: vi.fn().mockImplementation(() => ({
     execute: vi.fn().mockResolvedValue({ txHash: "fee_bump_hash", ledger: 1 }),
   })),
 }));
 
-vi.mock("../backend/tools/DexOfferTool", () => ({
+vi.mock("../backend/tools/DexOfferTool", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   DexOfferTool: vi.fn().mockImplementation(() => ({
     execute: vi.fn().mockResolvedValue({ txHash: "dex_hash", ledger: 1, offerId: "42" }),
   })),
 }));
 
-vi.mock("../backend/tools/ContractEventListener", () => ({
+vi.mock("../backend/tools/ContractEventListener", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   listen: vi.fn().mockReturnValue(() => {}),
 }));
 
@@ -121,6 +134,10 @@ vi.mock("../backend/rpc_client", () => ({
 vi.mock("../backend/config", () => ({
   config: {
     STELLAR_NETWORK: "testnet",
+    PAYMENT_DESTINATION_POLICY: "open",
+    SPENDING_LIMITS_MAP: new Map<string, string>(),
+    SPENDING_LIMITS_ALLOW_UNKNOWN: false,
+    PAYMENT_DESTINATIONS: [],
     HORIZON_URL: "https://horizon-testnet.stellar.org",
     SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org",
     AGENT_PUBLIC_KEY: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",

@@ -175,8 +175,8 @@ describe('PayFiAgent — stream (issue #107)', () => {
 
     expect(onChallenge).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalledWith(
-      'Dropped invalid x402 challenge memo',
-      expect.objectContaining({ error: expect.any(String) })
+      expect.objectContaining({ error: expect.any(String) }),
+      'Dropped invalid x402 challenge memo'
     );
 
     warnSpy.mockRestore();

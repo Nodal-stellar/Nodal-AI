@@ -75,6 +75,7 @@ vi.mock('../backend/logger', () => ({
 }));
 
 vi.mock('../backend/utils/logger', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   createLogger: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })),
   generateCorrelationId: vi.fn(() => 'mock-correlation-id'),
 }));
