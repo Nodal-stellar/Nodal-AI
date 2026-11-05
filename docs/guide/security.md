@@ -36,4 +36,4 @@ const agent = new Agent({
 
 ## Next Steps
 
-- [API Reference](/api/) - Explore the API documentation
+- [API Reference](./api-reference.md) - Explore the API documentation

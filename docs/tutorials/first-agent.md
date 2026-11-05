@@ -352,11 +352,11 @@ Check your internet connection and verify `HORIZON_URL` and `SOROBAN_RPC_URL` ar
 
 Now that you've run your first agent, explore more:
 
-- **[Architecture Guide](../ARCHITECTURE.md)** — Deep dive into system design
-- **[Glossary](../GLOSSARY.md)** — Stellar terminology explained
-- **[Examples](../../scripts/examples/)** — More runnable examples
-- **[Roadmap](../../ROADMAP.md)** — Upcoming features and milestones
-- **[Contributing](../../CONTRIBUTING.md)** — How to contribute to Nodal AI
+- **[Architecture Guide](https://github.com/Nodal-stellar/Nodal-AI/blob/main/ARCHITECTURE.md)** — Deep dive into system design
+- **[Glossary](https://github.com/Nodal-stellar/Nodal-AI/blob/main/GLOSSARY.md)** — Stellar terminology explained
+- **[Examples](https://github.com/Nodal-stellar/Nodal-AI/tree/main/scripts/examples)** — More runnable examples
+- **[Roadmap](https://github.com/Nodal-stellar/Nodal-AI/blob/main/ROADMAP.md)** — Upcoming features and milestones
+- **[Contributing](https://github.com/Nodal-stellar/Nodal-AI/blob/main/CONTRIBUTING.md)** — How to contribute to Nodal AI
 
 ---
 
@@ -380,7 +380,7 @@ When you're ready to deploy to mainnet:
 4. **Set spending limit:** Keep `AGENT_SPENDING_LIMIT` below 10,000
 5. **Test thoroughly:** Run extensive tests on testnet first
 
-See the [Mainnet Checklist](../../README.md#mainnet-checklist) for details.
+See the [Mainnet Checklist](https://github.com/Nodal-stellar/Nodal-AI/blob/main/README.md#mainnet-checklist) for details.
 
 ---
 

@@ -72,7 +72,7 @@ tmp/
 temp/
 
 # Generated API docs (TypeDoc)
-docs/api/
+docs/public/api/
 
 # Internal change-tracking docs (not for distribution)
 docs/x402-v2-changes.md

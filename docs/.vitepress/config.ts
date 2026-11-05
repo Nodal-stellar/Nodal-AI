@@ -8,6 +8,9 @@ export default defineConfig({
   lang: 'en-US',
   
   base,
+
+  // TypeDoc's finished HTML site is published as static files, not compiled as pages.
+  srcExclude: ['public/**'],
   
   themeConfig: {
     nav: [
