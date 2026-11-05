@@ -43,6 +43,10 @@ contracts/escrow/bindings/
 # OS / editor artefacts
 .DS_Store
 Thumbs.db
+# Default SQLite database (DB_PATH)
+agent.db
+agent.db-shm
+agent.db-wal
 .vscode/
 .idea/
 *.swp

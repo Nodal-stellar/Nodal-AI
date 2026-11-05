@@ -15,6 +15,7 @@
  * better-sqlite3 itself is synchronous.
  */
 
+import { config } from '../config';
 import type { INonceStore } from '../nonce_store';
 import { SqliteNonceStore } from '../nonce_store';
 import * as persistence from '../persistence';
@@ -196,9 +197,6 @@ let _storage: Storage | null = null;
  */
 export function getStorage(): Storage {
   if (!_storage) {
-    // Lazy import of config, matching persistence.ts, so tests can inject first.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { config } = require('../config') as typeof import('../config');
     if (config.STORAGE_BACKEND === 'postgres') {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { PostgresStorage } = require('./postgres') as typeof import('./postgres');

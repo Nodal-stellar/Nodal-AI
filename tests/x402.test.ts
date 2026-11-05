@@ -15,6 +15,9 @@ import { StellarPaymentTool } from '../backend/tools/StellarPaymentTool';
 import { config } from '../backend/config';
 import { TransactionFailureError, ErrorType } from '../backend/errors';
 import { horizonServer } from '../backend/rpc_client';
+import Database from 'better-sqlite3';
+import { _setDb } from '../backend/persistence';
+import { x402RateLimiter } from '../backend/x402_rate_limiter';
 
 // ─── Mock rpc_client so horizonServer.ledgers() is interceptable ──────────────
 
@@ -95,6 +98,9 @@ describe('X402PaymentTool', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Nonces and the x402 rate window are persistent; start each test clean.
+    _setDb(new Database(':memory:'));
+    x402RateLimiter.clear();
     mockPaymentTool = {
       publicKey: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
       execute: vi.fn().mockResolvedValue({ txHash: 'x402_mock_tx_hash', ledger: 99 }),

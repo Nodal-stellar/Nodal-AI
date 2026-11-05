@@ -110,9 +110,6 @@ export class SqliteNonceStore implements INonceStore {
       this.db = db;
       this.ownsConnection = false;
     } else {
-      // Lazy import of config so tests can mock it
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { config } = require('./config') as typeof import('./config');
       this.db = new Database(config.DB_PATH);
       this.ownsConnection = true;
     }

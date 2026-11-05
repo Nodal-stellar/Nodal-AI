@@ -79,7 +79,7 @@ const SpendingLimitSchema = z
 
 // ─── Raw environment schema ───────────────────────────────────────────────────
 
-const EnvSchema = z.object({
+export const EnvSchema = z.object({
   // Network
   STELLAR_NETWORK: z
     .enum(['testnet', 'mainnet', 'futurenet'], {
@@ -1190,6 +1190,7 @@ const FALLBACK_CONFIG: AgentConfig = new Proxy({} as AgentConfig, {
         X402_ASSET_ISSUER: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
         AGENT_SECRET_KEY: Keypair.random().secret(),
         AGENT_SPENDING_LIMIT: '100',
+        ...(process.env.DB_PATH ? { DB_PATH: process.env.DB_PATH } : {}),
       },
       { announce: false }
     );

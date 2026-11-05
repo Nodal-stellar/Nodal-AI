@@ -16,6 +16,7 @@
 import { createHash } from 'crypto';
 import Database from 'better-sqlite3';
 import type { AgentResult } from './agent';
+import { config } from './config';
 import { migrateSqlite } from './db/migrate';
 
 export type PersistedResult = AgentResult & { timestamp: string };
@@ -40,9 +41,8 @@ function applySchema(db: Database.Database): void {
  */
 export function getDb(): Database.Database {
   if (!_db) {
-    // Lazy import of config so that tests can inject via _setDb() before any DB access
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { config } = require('./config') as typeof import('./config');
+    // config is a lazy proxy: nothing reads it until this line, so tests can
+    // still inject a database via _setDb() without any Stellar configuration.
     _db = new Database(config.DB_PATH);
     applySchema(_db);
   }

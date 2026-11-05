@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import Database from 'better-sqlite3';
 import { SpendingTracker } from '../backend/spending_tracker';
+import { _setDb } from '../backend/persistence';
 
 /**
  * Tests for SpendingTracker covering:
@@ -25,6 +27,11 @@ vi.mock('../backend/config', () => ({
 }));
 
 const WINDOW_MS = 60_000; // 1 minute — passed explicitly to each tracker
+
+// Trackers restore their window from the database, so every test needs its own.
+beforeEach(() => {
+  _setDb(new Database(':memory:'));
+});
 
 // ─── Basic record / limit checks ─────────────────────────────────────────────
 

@@ -50,6 +50,8 @@ export default defineConfig({
     // Discover all test files under tests/ (excludes e2e — use npm run test:e2e)
     include: ["tests/**/*.test.ts"],
     exclude: ["tests/e2e/**"],
+    // Never read or write the developer's ./agent.db from a test run.
+    env: { DB_PATH: ":memory:" },
     // Each test file runs in its own isolated context — prevents mock bleed
     isolate: true,
     // Global setup file: enforces vi.useRealTimers() + vi.restoreAllMocks() after every
