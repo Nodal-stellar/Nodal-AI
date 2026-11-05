@@ -12,8 +12,8 @@ vi.mock('axios');
 
 describe('NanoPaymentTool — Feeless settlement rail (#715)', () => {
   let tool: NanoPaymentTool;
-  const VALID_NANO_ADDR = 'nano_3t6k35fd954wuafmangfbefpqsvt09fgpkq8k6i61q5nwn9x54kc16b6hrn1';
-  const VALID_XRB_ADDR = 'xrb_3t6k35fd954wuafmangfbefpqsvt09fgpkq8k6i61q5nwn9x54kc16b6hrn1';
+  const VALID_NANO_ADDR = 'nano_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3';
+  const VALID_XRB_ADDR = 'xrb_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3';
   const SUB_CENT_RAW = '1000000000000000000000000'; // 0.000001 XNO (sub-cent micro-payment)
 
   beforeEach(() => {

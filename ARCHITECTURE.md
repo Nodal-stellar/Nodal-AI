@@ -175,6 +175,7 @@ Every `TaskType` value accepted by `PayFiAgent.run()` is listed below, together 
 | `TaskType` | Tool class | Description |
 |---|---|---|
 | `stellar_payment` | `StellarPaymentTool` | Native XLM or custom Stellar asset payment via Horizon. Spending limit enforced before dispatch. |
+| `nano_payment` | `NanoPaymentTool` | Send a feeless Nano micro-payment (raw units). |
 | `soroban_invoke` | `SorobanInvokeTool` | Mutable Soroban smart contract invocation. Mandatory simulation gate before broadcast; `simulateOnly: true` for dry-run. |
 | `soroban_query` | `SorobanQueryTool` | Read-only Soroban contract state inspection. Always simulates, never broadcasts. |
 | `x402_respond` | `X402PaymentTool` | Respond to an x402 `402 Payment Required` challenge. Validates challenge schema, enforces spending limit, delegates payment to `StellarPaymentTool`, returns `X402PaymentProof`. |

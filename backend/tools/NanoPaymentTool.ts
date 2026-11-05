@@ -33,7 +33,8 @@ export const NanoPaymentInputSchema = z.object({
   amountRaw: z
     .string()
     .regex(/^\d+$/, 'amountRaw must be an unsigned integer string representing raw units')
-    .refine((v) => BigInt(v) > 0n, 'amountRaw must be greater than zero'),
+    // zod still runs this after a failed .regex(), and BigInt('0.001') throws.
+    .refine((v) => !/^\d+$/.test(v) || BigInt(v) > 0n, 'amountRaw must be greater than zero'),
   /** Optional sender account (nano_ address) */
   senderAccount: z.string().regex(NANO_ADDRESS_REGEX).optional(),
   /** Optional externalized seed / private key (hex string) */

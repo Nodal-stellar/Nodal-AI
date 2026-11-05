@@ -12,6 +12,7 @@ import { z } from 'zod';
 import type { AgentTool } from './AgentTool';
 import { createAgentSigner, type Signer } from '../signer';
 import { StellarPaymentTool, PaymentInputSchema } from './StellarPaymentTool';
+import { NanoPaymentInputSchema, NanoPaymentTool } from './NanoPaymentTool';
 import { SorobanInvokeTool, SorobanInvokeInputSchema } from './SorobanInvokeTool';
 import { SorobanQueryTool, SorobanQueryInputSchema } from './SorobanQueryTool';
 import { X402PaymentTool, X402ChallengeSchema } from './X402PaymentTool';
@@ -57,6 +58,7 @@ const NoInputSchema = z.unknown();
 export function createBuiltinTools(signer: Signer = createAgentSigner()): AgentTool<any, any>[] {
   // Tools receive the agent-owned Signer, never the secret key itself, so the
   // raw secret is not copied into every tool instance.
+  const nanoPaymentTool = new NanoPaymentTool();
   const paymentTool = new StellarPaymentTool(signer);
   const sorobanTool = new SorobanInvokeTool(signer);
   const sorobanQueryTool = new SorobanQueryTool(signer);
@@ -89,6 +91,15 @@ export function createBuiltinTools(signer: Signer = createAgentSigner()): AgentT
   const sorobanStorageTool = new SorobanStorageTool();
 
   return [
+    defineTool({
+      name: 'nano_payment',
+      description:
+        'Send a feeless Nano micro-payment. Amounts are raw units; pre-checks that the ' +
+        'recipient account is open unless skipPrecheck is set.',
+      inputSchema: NanoPaymentInputSchema,
+      valueMoving: true,
+      execute: (input) => nanoPaymentTool.execute(input),
+    }),
     defineTool({
       name: 'stellar_payment',
       description:
