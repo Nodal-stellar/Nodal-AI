@@ -400,7 +400,9 @@ export class SpendingTracker {
     // Throws on invalid format (no parseFloat)
     const stroops = toStroops(amountStr);
     const now = Date.now();
-    this.pruneOld(now);
+    // Show the alert monitor the drained window, so a threshold fired in the
+    // previous window can fire again in this one ("once per window", #824).
+    if (this.pruneOld(now)) this.checkAlerts(key);
 
     this.assertWithinLimit(stroops, key);
 
@@ -518,7 +520,7 @@ export class SpendingTracker {
     }
   }
 
-  private pruneOld(now: number): void {
+  private pruneOld(now: number): boolean {
     const cutoff = now - this.windowMs;
     // Entries are kept in timestamp order; stale reservations are pruned too
     // (conservative: only once strictly expired).
@@ -534,6 +536,7 @@ export class SpendingTracker {
         // Pruning is housekeeping; failing to do it must not block a payment.
       }
     }
+    return evicted;
   }
 
   /** Reset all state (committed records, reservations and alert thresholds). */
