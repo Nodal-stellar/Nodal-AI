@@ -145,7 +145,7 @@ Nodal AI includes a multi-stage Dockerfile and Docker Compose stack for local de
    ```
 
    This will spin up:
-   - `stellar-quickstart` at `http://localhost:8000` (Horizon) and `http://localhost:8001` (Soroban RPC).
+   - `stellar-quickstart` at `http://localhost:8000` (Horizon) and `http://localhost:8000/soroban/rpc` (Soroban RPC).
    - `agent` which automatically connects to the quickstart services once they are healthy.
 
 2. **Stop the services and clean up containers:**

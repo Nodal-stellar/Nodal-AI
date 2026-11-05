@@ -102,7 +102,7 @@ cmd_up() {
   $COMPOSE up --build -d
   log "Stack is running."
   log "  Horizon    : http://localhost:8000"
-  log "  Soroban    : http://localhost:8001"
+  log "  Soroban    : http://localhost:8000/soroban/rpc"
   log "  Agent      : http://localhost:3000"
   $COMPOSE logs -f
 }

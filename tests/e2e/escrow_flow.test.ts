@@ -214,18 +214,12 @@ describe.skipIf(process.env.RUN_E2E !== 'true')(
         fee: BASE_FEE,
         networkPassphrase: NETWORK_PASSPHRASE,
       })
-        .addOperation(
-          // @ts-expect-error — uploadContractWasm is available via stellar-sdk xdr helpers
-          xdr.Operation.invokeHostFunction({
-            hostFunction: xdr.HostFunction.hostFunctionTypeUploadContractWasm(wasm),
-            auth: [],
-          })
-        )
+        .addOperation(Operation.uploadContractWasm({ wasm }))
         .setTimeout(30)
         .build();
 
       const uploadResult = await sendTx(sorobanServer, uploadTx, deployerKp);
-      const wasmHash: Buffer = (uploadResult as any).returnValue?.bytes();
+      const wasmHash = Buffer.from((uploadResult as any).returnValue.bytes());
       expect(wasmHash).toBeDefined();
 
       // Step 2: Create a contract instance from the uploaded WASM hash.
@@ -237,27 +231,17 @@ describe.skipIf(process.env.RUN_E2E !== 'true')(
         networkPassphrase: NETWORK_PASSPHRASE,
       })
         .addOperation(
-          // @ts-expect-error — createContract via xdr helpers
-          xdr.Operation.invokeHostFunction({
-            hostFunction: xdr.HostFunction.hostFunctionTypeCreateContract(
-              new xdr.CreateContractArgs({
-                contractIdPreimage: xdr.ContractIdPreimage.contractIdPreimageFromAddress(
-                  new xdr.ContractIdPreimageFromAddress({
-                    address: Address.fromString(deployerKp.publicKey()).toScAddress(),
-                    salt: Buffer.alloc(32),
-                  })
-                ),
-                executable: xdr.ContractExecutable.contractExecutableWasm(wasmHash),
-              })
-            ),
-            auth: [],
+          Operation.createCustomContract({
+            address: Address.fromString(deployerKp.publicKey()),
+            wasmHash,
+            salt: Buffer.alloc(32),
           })
         )
         .setTimeout(30)
         .build();
 
       const deployResult = await sendTx(sorobanServer, deployTx, deployerKp);
-      contractId = (deployResult as any).returnValue?.address()?.contractId().toString('hex');
+      contractId = Address.fromScVal((deployResult as any).returnValue).toString();
       expect(contractId).toBeDefined();
       expect(typeof contractId).toBe('string');
     }, 120_000);
@@ -379,18 +363,12 @@ describe.skipIf(process.env.RUN_E2E !== 'true' || process.env.RUN_E2E_LEGACY !==
         fee: BASE_FEE,
         networkPassphrase: NETWORK_PASSPHRASE,
       })
-        .addOperation(
-          // @ts-expect-error — uploadContractWasm is available via stellar-sdk xdr helpers
-          xdr.Operation.invokeHostFunction({
-            hostFunction: xdr.HostFunction.hostFunctionTypeUploadContractWasm(wasm),
-            auth: [],
-          })
-        )
+        .addOperation(Operation.uploadContractWasm({ wasm }))
         .setTimeout(30)
         .build();
 
       const uploadResult = await sendTx(sorobanServer, uploadTx, deployerKp);
-      const wasmHash: Buffer = (uploadResult as any).returnValue?.bytes();
+      const wasmHash = Buffer.from((uploadResult as any).returnValue.bytes());
       expect(wasmHash).toBeDefined();
 
       // 2. Create contract instance
@@ -400,27 +378,17 @@ describe.skipIf(process.env.RUN_E2E !== 'true' || process.env.RUN_E2E_LEGACY !==
         networkPassphrase: NETWORK_PASSPHRASE,
       })
         .addOperation(
-          // @ts-expect-error — createContract via xdr helpers
-          xdr.Operation.invokeHostFunction({
-            hostFunction: xdr.HostFunction.hostFunctionTypeCreateContract(
-              new xdr.CreateContractArgs({
-                contractIdPreimage: xdr.ContractIdPreimage.contractIdPreimageFromAddress(
-                  new xdr.ContractIdPreimageFromAddress({
-                    address: Address.fromString(deployerKp.publicKey()).toScAddress(),
-                    salt: Buffer.alloc(32),
-                  })
-                ),
-                executable: xdr.ContractExecutable.contractExecutableWasm(wasmHash),
-              })
-            ),
-            auth: [],
+          Operation.createCustomContract({
+            address: Address.fromString(deployerKp.publicKey()),
+            wasmHash,
+            salt: Buffer.alloc(32),
           })
         )
         .setTimeout(30)
         .build();
 
       const deployResult = await sendTx(sorobanServer, deployTx, deployerKp);
-      contractId = (deployResult as any).returnValue?.address()?.contractId().toString('hex');
+      contractId = Address.fromScVal((deployResult as any).returnValue).toString();
       expect(contractId).toBeDefined();
     }, 120_000);
 
