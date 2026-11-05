@@ -2,8 +2,11 @@
 
 exports[`backend/server.ts — health check HTTP server > GET /health > health response matches expected shape 1`] = `
 {
-  "network": "testnet",
-  "publicKey": "GTEST1234567890123456789012345678901234567890123456",
+  "components": {
+    "database": "up",
+    "horizon": "up",
+    "soroban": "up",
+  },
   "status": "ok",
 }
 `;

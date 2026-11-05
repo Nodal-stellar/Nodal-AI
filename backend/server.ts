@@ -174,9 +174,10 @@ function isAuthenticated(req: http.IncomingMessage): boolean {
 }
 
 /**
- * Stricter variant of {@link isAuthenticated} used by GET /metrics: a missing
- * API token denies the request instead of allowing it, so the metrics endpoint
- * is not world-readable on a misconfigured deployment.
+ * Stricter variant of {@link isAuthenticated} used by GET /metrics and the
+ * kill-switch routes: a missing API token denies the request instead of
+ * allowing it, so metrics are not world-readable and nobody can flip the kill
+ * switch anonymously on a misconfigured deployment.
  */
 function isStrictlyAuthenticated(req: http.IncomingMessage): boolean {
   return Boolean(apiToken()) && isAuthenticated(req);
@@ -364,7 +365,7 @@ export function createHealthServer(agent?: PayFiAgent): http.Server {
 
     // ── POST /admin/pause ──────────────────────────────────────────────────
     if (req.method === 'POST' && req.url === ADMIN_PAUSE_PATH) {
-      if (!isAuthenticated(req)) {
+      if (!isStrictlyAuthenticated(req)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized' }));
         return;
@@ -377,7 +378,7 @@ export function createHealthServer(agent?: PayFiAgent): http.Server {
 
     // ── POST /admin/resume ─────────────────────────────────────────────────
     if (req.method === 'POST' && req.url === ADMIN_RESUME_PATH) {
-      if (!isAuthenticated(req)) {
+      if (!isStrictlyAuthenticated(req)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized' }));
         return;
