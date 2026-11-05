@@ -83,19 +83,21 @@ export const EnvSchema = z.object({
   // Network
   STELLAR_NETWORK: z
     .enum(['testnet', 'mainnet', 'futurenet'], {
-      errorMap: () => ({
-        message: 'STELLAR_NETWORK must be one of: testnet | mainnet | futurenet',
-      }),
+      error: () => 'STELLAR_NETWORK must be one of: testnet | mainnet | futurenet',
     })
     .default('testnet'),
 
   // RPC endpoints
   HORIZON_URL: z
-    .string({ required_error: 'HORIZON_URL is required' })
+    .string({
+      error: (issue) => (issue.input === undefined ? 'HORIZON_URL is required' : undefined),
+    })
     .url('HORIZON_URL must be a valid URL (e.g. https://horizon-testnet.stellar.org)'),
 
   SOROBAN_RPC_URL: z
-    .string({ required_error: 'SOROBAN_RPC_URL is required' })
+    .string({
+      error: (issue) => (issue.input === undefined ? 'SOROBAN_RPC_URL is required' : undefined),
+    })
     .url('SOROBAN_RPC_URL must be a valid URL (e.g. https://soroban-testnet.stellar.org)'),
 
   // Agent identity
@@ -108,7 +110,7 @@ export const EnvSchema = z.object({
   // from the environment by backend/signers, never stored on config).
   SIGNER_BACKEND: z
     .enum(['local', 'vault'], {
-      errorMap: () => ({ message: 'SIGNER_BACKEND must be one of: local | vault' }),
+      error: () => 'SIGNER_BACKEND must be one of: local | vault',
     })
     .default('local'),
   VAULT_ADDR: z.string().url('VAULT_ADDR must be a valid URL').optional(),
@@ -118,7 +120,9 @@ export const EnvSchema = z.object({
   // x402 / PayFi asset
   X402_ASSET_CODE: z.string().min(1).max(12).default('USDC'),
   X402_ASSET_ISSUER: z
-    .string({ required_error: 'X402_ASSET_ISSUER is required' })
+    .string({
+      error: (issue) => (issue.input === undefined ? 'X402_ASSET_ISSUER is required' : undefined),
+    })
     .length(56, 'X402_ASSET_ISSUER must be a 56-character Stellar address')
     .refine((val) => val.startsWith('G'), {
       message: 'X402_ASSET_ISSUER must start with G',
@@ -187,9 +191,7 @@ export const EnvSchema = z.object({
   // listed destinations, `denylist` blocks them, `open` (default) permits any.
   PAYMENT_DESTINATION_POLICY: z
     .enum(['allowlist', 'denylist', 'open'], {
-      errorMap: () => ({
-        message: 'PAYMENT_DESTINATION_POLICY must be one of: allowlist | denylist | open',
-      }),
+      error: () => 'PAYMENT_DESTINATION_POLICY must be one of: allowlist | denylist | open',
     })
     .default('open'),
   // Comma-separated G-addresses and/or federation names (name*domain).
@@ -336,7 +338,7 @@ export const EnvSchema = z.object({
   SPENDING_LIMITS_ALLOW_UNKNOWN: z
     .string()
     .transform((v) => v.toLowerCase() === 'true')
-    .default('false'),
+    .prefault('false'),
   // Bearer token for the HTTP API (/status, /spending, /metrics, /approvals,
   // /admin/*). Falls back to WEBHOOK_SECRET when unset — deprecated.
   ADMIN_API_TOKEN: z.string().min(1).optional(),

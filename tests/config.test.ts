@@ -45,8 +45,12 @@ describe('config.ts startup validation', () => {
     // vi.doMock (non-hoisted) runs after resetModules and ensures the next
     // dynamic import of backend/config picks up the mock rather than the real SDK.
     vi.doMock('@aws-sdk/client-secrets-manager', () => ({
-      SecretsManagerClient: vi.fn().mockImplementation(() => ({ send: mockSend })),
-      GetSecretValueCommand: vi.fn().mockImplementation((args: any) => args),
+      SecretsManagerClient: vi.fn().mockImplementation(function () {
+        return { send: mockSend };
+      }),
+      GetSecretValueCommand: vi.fn().mockImplementation(function (args: any) {
+        return args;
+      }),
     }));
     mockSend.mockReset();
     originalEnv = { ...process.env };
@@ -183,7 +187,6 @@ describe('formatValidationErrors', () => {
         path: ['test_field'],
         message:
           'Invalid secret: ' + ('SBV' + 'XQEODSNZVTESUCAAWZ45FI63OWNADBNRUERMXPU4XODQ47B4PMVAT'),
-        fatal: false,
       },
     ]);
     const result = formatValidationErrors(error);
@@ -197,7 +200,6 @@ describe('formatValidationErrors', () => {
         code: 'custom',
         path: ['field'],
         message: 'This is a normal error',
-        fatal: false,
       },
     ]);
     const result = formatValidationErrors(error);
@@ -210,7 +212,6 @@ describe('formatValidationErrors', () => {
         code: 'custom',
         path: ['SBV' + 'XQEODSNZVTESUCAAWZ45FI63OWNADBNRUERMXPU4XODQ47B4PMVAT'],
         message: 'Invalid config',
-        fatal: false,
       },
     ]);
     const result = formatValidationErrors(error);
@@ -228,7 +229,6 @@ describe('formatValidationErrors', () => {
           ('SBV' + 'XQEODSNZVTESUCAAWZ45FI63OWNADBNRUERMXPU4XODQ47B4PMVAT') +
           ' and Key2: ' +
           ('SBV' + 'XQEODSNZVTESUCAAWZ45FI63OWNADBNRUERMXPU4XODQ47B4PMVAY'),
-        fatal: false,
       },
     ]);
     const result = formatValidationErrors(error);
@@ -278,8 +278,12 @@ describe('config.ts — comprehensive env-var validation (issue #444)', () => {
     vi.resetModules();
     // Re-register the AWS mock after resetModules (same pattern as above).
     vi.doMock('@aws-sdk/client-secrets-manager', () => ({
-      SecretsManagerClient: vi.fn().mockImplementation(() => ({ send: mockSend })),
-      GetSecretValueCommand: vi.fn().mockImplementation((args: any) => args),
+      SecretsManagerClient: vi.fn().mockImplementation(function () {
+        return { send: mockSend };
+      }),
+      GetSecretValueCommand: vi.fn().mockImplementation(function (args: any) {
+        return args;
+      }),
     }));
     mockSend.mockReset();
     // Snapshot the current env so we can restore it exactly after each test.
@@ -540,8 +544,12 @@ describe('X402_ASSET_CONTRACT (#776)', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.doMock('@aws-sdk/client-secrets-manager', () => ({
-      SecretsManagerClient: vi.fn().mockImplementation(() => ({ send: mockSend })),
-      GetSecretValueCommand: vi.fn().mockImplementation((args: any) => args),
+      SecretsManagerClient: vi.fn().mockImplementation(function () {
+        return { send: mockSend };
+      }),
+      GetSecretValueCommand: vi.fn().mockImplementation(function (args: any) {
+        return args;
+      }),
     }));
     originalEnv = { ...process.env };
     vi.spyOn(process, 'exit').mockImplementation((code?: string | number | null | undefined) => {

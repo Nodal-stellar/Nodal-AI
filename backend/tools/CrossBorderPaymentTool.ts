@@ -95,7 +95,7 @@ export const KycFieldsSchema = z
     id_issue_date: isoDate,
     id_expiration_date: isoDate,
     id_number: text,
-    ip_address: z.string().ip('must be a valid IP address'),
+    ip_address: z.union([z.ipv4(), z.ipv6()], { error: 'must be a valid IP address' }),
     sex: z.enum(['male', 'female', 'other']),
     referral_id: text,
   })
@@ -159,10 +159,13 @@ export class KycValidationError extends ValidationError {
 
 // ─── Anchor responses ────────────────────────────────────────────────────────
 
-const Sep12TypesSchema = z.object({ types: z.record(z.unknown()).optional() }).optional();
+const Sep12TypesSchema = z
+  .object({ types: z.record(z.string(), z.unknown()).optional() })
+  .optional();
 
 const Sep31InfoSchema = z.object({
   receive: z.record(
+    z.string(),
     z
       .object({
         quotes_supported: z.boolean().optional(),
@@ -182,6 +185,7 @@ const Sep12CustomerSchema = z
     status: z.string(),
     fields: z
       .record(
+        z.string(),
         z
           .object({
             optional: z.boolean().optional(),
@@ -552,7 +556,7 @@ export class CrossBorderPaymentTool {
 
   /** Authenticated JSON request. Only GETs are retried. */
   private async request<T>(
-    schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+    schema: z.ZodType<T, unknown>,
     method: 'GET' | 'POST' | 'PUT',
     url: string,
     jwt: string,

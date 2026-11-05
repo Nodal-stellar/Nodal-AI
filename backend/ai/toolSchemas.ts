@@ -10,7 +10,6 @@
  */
 
 import { z } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -51,20 +50,15 @@ export interface ToolSchemaCollection {
 }
 
 // ─── Schema Generator ────────────────────────────────────────────────────────
-/** JSON Schema drafts zod-to-json-schema can emit, mapped to its target names. */
-const SCHEMA_TARGETS = {
-  'draft-07': 'jsonSchema7',
-  'draft-2019-09': 'jsonSchema2019-09',
-} as const;
+/** JSON Schema drafts z.toJSONSchema can emit. */
+type SchemaTarget = 'draft-07' | 'draft-2020-12';
 
 /**
  * Options for schema generation.
  */
 export interface GenerateSchemaOptions {
   /** Target JSON Schema version (default: draft-07) */
-  targetSchema?: keyof typeof SCHEMA_TARGETS;
-  /** Base path prepended to every $ref the generator emits */
-  baseUri?: string;
+  targetSchema?: SchemaTarget;
 }
 
 /**
@@ -74,17 +68,19 @@ export interface GenerateSchemaOptions {
  * @returns Collection of tool schemas with metadata
  */
 export function generateToolSchemas(options: GenerateSchemaOptions = {}): ToolSchemaCollection {
-  const { targetSchema = 'draft-07', baseUri } = options;
+  const { targetSchema = 'draft-07' } = options;
 
   // Create a fresh set of tools to get their current schemas
   const tools = createBuiltinTools();
 
   const toolSchemas: ToolSchema[] = tools.map((tool) => {
     // Convert Zod schema to JSON Schema
-    // We use the 'zod-to-json-schema' library which handles Zod-specific features
-    const jsonSchema = zodToJsonSchema(tool.inputSchema as z.ZodType<unknown>, {
-      target: SCHEMA_TARGETS[targetSchema],
-      ...(baseUri ? { basePath: [baseUri] } : {}),
+    // io: 'input' because this describes what a caller sends, before transforms;
+    // unrepresentable: 'any' because refinements are enforced at runtime anyway.
+    const jsonSchema = z.toJSONSchema(tool.inputSchema as z.ZodType<unknown>, {
+      target: targetSchema,
+      io: 'input',
+      unrepresentable: 'any',
     });
 
     return {

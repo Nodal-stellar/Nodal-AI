@@ -24,86 +24,110 @@ import { DexOfferTool } from '../backend/tools/DexOfferTool';
 
 vi.mock('../backend/tools/StellarPaymentTool', async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  StellarPaymentTool: vi.fn().mockImplementation(() => ({
-    execute: vi.fn().mockResolvedValue({ txHash: 'stellar_hash', ledger: 1 }),
-  })),
+  StellarPaymentTool: vi.fn().mockImplementation(function () {
+    return {
+      execute: vi.fn().mockResolvedValue({ txHash: 'stellar_hash', ledger: 1 }),
+    };
+  }),
 }));
 
 vi.mock('../backend/tools/SorobanInvokeTool', async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  SorobanInvokeTool: vi.fn().mockImplementation(() => ({
-    execute: vi.fn().mockResolvedValue({}),
-  })),
+  SorobanInvokeTool: vi.fn().mockImplementation(function () {
+    return {
+      execute: vi.fn().mockResolvedValue({}),
+    };
+  }),
 }));
 
 vi.mock('../backend/tools/X402PaymentTool', async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  X402PaymentTool: vi.fn().mockImplementation(() => ({
-    respond: vi.fn().mockResolvedValue({}),
-  })),
+  X402PaymentTool: vi.fn().mockImplementation(function () {
+    return {
+      respond: vi.fn().mockResolvedValue({}),
+    };
+  }),
 }));
 
 vi.mock('../backend/tools/AccountInfoTool', async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  AccountInfoTool: vi.fn().mockImplementation(() => ({
-    fetch: vi.fn().mockResolvedValue({}),
-  })),
+  AccountInfoTool: vi.fn().mockImplementation(function () {
+    return {
+      fetch: vi.fn().mockResolvedValue({}),
+    };
+  }),
 }));
 
 vi.mock('../backend/tools/TrustlineTool', async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  TrustlineTool: vi.fn().mockImplementation(() => ({
-    execute: vi.fn().mockResolvedValue({}),
-  })),
+  TrustlineTool: vi.fn().mockImplementation(function () {
+    return {
+      execute: vi.fn().mockResolvedValue({}),
+    };
+  }),
 }));
 
 vi.mock('../backend/tools/MultiSigPaymentTool', async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  MultiSigPaymentTool: vi.fn().mockImplementation(() => ({
-    execute: vi.fn().mockResolvedValue({ txHash: 'multisig_hash', ledger: 1 }),
-  })),
+  MultiSigPaymentTool: vi.fn().mockImplementation(function () {
+    return {
+      execute: vi.fn().mockResolvedValue({ txHash: 'multisig_hash', ledger: 1 }),
+    };
+  }),
 }));
 
 vi.mock('../backend/tools/BatchPaymentTool', async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  BatchPaymentTool: vi.fn().mockImplementation(() => ({
-    execute: vi.fn().mockResolvedValue({ txHash: 'batch_hash', ledger: 1 }),
-  })),
+  BatchPaymentTool: vi.fn().mockImplementation(function () {
+    return {
+      execute: vi.fn().mockResolvedValue({ txHash: 'batch_hash', ledger: 1 }),
+    };
+  }),
 }));
 
 vi.mock('../backend/tools/SorobanQueryTool', async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  SorobanQueryTool: vi.fn().mockImplementation(() => ({
-    query: vi.fn().mockResolvedValue({}),
-  })),
+  SorobanQueryTool: vi.fn().mockImplementation(function () {
+    return {
+      query: vi.fn().mockResolvedValue({}),
+    };
+  }),
 }));
 
 vi.mock('../backend/tools/BalanceCheckTool', async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  BalanceCheckTool: vi.fn().mockImplementation(() => ({
-    getBalance: vi.fn().mockResolvedValue({ balances: [] }),
-  })),
+  BalanceCheckTool: vi.fn().mockImplementation(function () {
+    return {
+      getBalance: vi.fn().mockResolvedValue({ balances: [] }),
+    };
+  }),
 }));
 
 vi.mock('../backend/tools/PathPaymentTool', async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  PathPaymentTool: vi.fn().mockImplementation(() => ({
-    execute: vi.fn().mockResolvedValue({ txHash: 'path_hash', ledger: 1 }),
-  })),
+  PathPaymentTool: vi.fn().mockImplementation(function () {
+    return {
+      execute: vi.fn().mockResolvedValue({ txHash: 'path_hash', ledger: 1 }),
+    };
+  }),
 }));
 
 vi.mock('../backend/tools/FeeBumpTool', async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  FeeBumpTool: vi.fn().mockImplementation(() => ({
-    execute: vi.fn().mockResolvedValue({ txHash: 'fee_bump_hash', ledger: 1 }),
-  })),
+  FeeBumpTool: vi.fn().mockImplementation(function () {
+    return {
+      execute: vi.fn().mockResolvedValue({ txHash: 'fee_bump_hash', ledger: 1 }),
+    };
+  }),
 }));
 
 vi.mock('../backend/tools/DexOfferTool', async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  DexOfferTool: vi.fn().mockImplementation(() => ({
-    execute: vi.fn().mockResolvedValue({ txHash: 'dex_hash', ledger: 1, offerId: '42' }),
-  })),
+  DexOfferTool: vi.fn().mockImplementation(function () {
+    return {
+      execute: vi.fn().mockResolvedValue({ txHash: 'dex_hash', ledger: 1, offerId: '42' }),
+    };
+  }),
 }));
 
 vi.mock('../backend/tools/ContractEventListener', async (importOriginal) => ({
@@ -168,18 +192,16 @@ describe('Issue #728 — path_payment spending limit', () => {
   beforeEach(() => {
     spendingTracker.clear();
     vi.clearAllMocks();
-    vi.mocked(PathPaymentTool).mockImplementation(
-      () =>
-        ({
-          execute: vi.fn().mockResolvedValue({ txHash: 'path_hash', ledger: 1 }),
-        }) as any
-    );
-    vi.mocked(StellarPaymentTool).mockImplementation(
-      () =>
-        ({
-          execute: vi.fn().mockResolvedValue({ txHash: 'stellar_hash', ledger: 1 }),
-        }) as any
-    );
+    vi.mocked(PathPaymentTool).mockImplementation(function () {
+      return {
+        execute: vi.fn().mockResolvedValue({ txHash: 'path_hash', ledger: 1 }),
+      } as any;
+    });
+    vi.mocked(StellarPaymentTool).mockImplementation(function () {
+      return {
+        execute: vi.fn().mockResolvedValue({ txHash: 'stellar_hash', ledger: 1 }),
+      } as any;
+    });
     agent = new PayFiAgent();
   });
 
@@ -253,18 +275,16 @@ describe('Issue #728 — multisig_payment spending limit', () => {
   beforeEach(() => {
     spendingTracker.clear();
     vi.clearAllMocks();
-    vi.mocked(MultiSigPaymentTool).mockImplementation(
-      () =>
-        ({
-          execute: vi.fn().mockResolvedValue({ txHash: 'multisig_hash', ledger: 1 }),
-        }) as any
-    );
-    vi.mocked(StellarPaymentTool).mockImplementation(
-      () =>
-        ({
-          execute: vi.fn().mockResolvedValue({ txHash: 'stellar_hash', ledger: 1 }),
-        }) as any
-    );
+    vi.mocked(MultiSigPaymentTool).mockImplementation(function () {
+      return {
+        execute: vi.fn().mockResolvedValue({ txHash: 'multisig_hash', ledger: 1 }),
+      } as any;
+    });
+    vi.mocked(StellarPaymentTool).mockImplementation(function () {
+      return {
+        execute: vi.fn().mockResolvedValue({ txHash: 'stellar_hash', ledger: 1 }),
+      } as any;
+    });
     agent = new PayFiAgent();
   });
 
@@ -339,18 +359,16 @@ describe('Issue #728 — batch_payment spending limit (rolling window)', () => {
   beforeEach(() => {
     spendingTracker.clear();
     vi.clearAllMocks();
-    vi.mocked(BatchPaymentTool).mockImplementation(
-      () =>
-        ({
-          execute: vi.fn().mockResolvedValue({ txHash: 'batch_hash', ledger: 1 }),
-        }) as any
-    );
-    vi.mocked(StellarPaymentTool).mockImplementation(
-      () =>
-        ({
-          execute: vi.fn().mockResolvedValue({ txHash: 'stellar_hash', ledger: 1 }),
-        }) as any
-    );
+    vi.mocked(BatchPaymentTool).mockImplementation(function () {
+      return {
+        execute: vi.fn().mockResolvedValue({ txHash: 'batch_hash', ledger: 1 }),
+      } as any;
+    });
+    vi.mocked(StellarPaymentTool).mockImplementation(function () {
+      return {
+        execute: vi.fn().mockResolvedValue({ txHash: 'stellar_hash', ledger: 1 }),
+      } as any;
+    });
     agent = new PayFiAgent();
   });
 
@@ -419,18 +437,16 @@ describe('Issue #728 — dex_offer spending limit', () => {
   beforeEach(() => {
     spendingTracker.clear();
     vi.clearAllMocks();
-    vi.mocked(DexOfferTool).mockImplementation(
-      () =>
-        ({
-          execute: vi.fn().mockResolvedValue({ txHash: 'dex_hash', ledger: 1, offerId: '42' }),
-        }) as any
-    );
-    vi.mocked(StellarPaymentTool).mockImplementation(
-      () =>
-        ({
-          execute: vi.fn().mockResolvedValue({ txHash: 'stellar_hash', ledger: 1 }),
-        }) as any
-    );
+    vi.mocked(DexOfferTool).mockImplementation(function () {
+      return {
+        execute: vi.fn().mockResolvedValue({ txHash: 'dex_hash', ledger: 1, offerId: '42' }),
+      } as any;
+    });
+    vi.mocked(StellarPaymentTool).mockImplementation(function () {
+      return {
+        execute: vi.fn().mockResolvedValue({ txHash: 'stellar_hash', ledger: 1 }),
+      } as any;
+    });
     agent = new PayFiAgent();
   });
 
@@ -502,30 +518,26 @@ describe('Issue #728 — cross-task-type cumulative limit enforcement', () => {
   beforeEach(() => {
     spendingTracker.clear();
     vi.clearAllMocks();
-    vi.mocked(StellarPaymentTool).mockImplementation(
-      () =>
-        ({
-          execute: vi.fn().mockResolvedValue({ txHash: 'stellar_hash', ledger: 1 }),
-        }) as any
-    );
-    vi.mocked(PathPaymentTool).mockImplementation(
-      () =>
-        ({
-          execute: vi.fn().mockResolvedValue({ txHash: 'path_hash', ledger: 1 }),
-        }) as any
-    );
-    vi.mocked(BatchPaymentTool).mockImplementation(
-      () =>
-        ({
-          execute: vi.fn().mockResolvedValue({ txHash: 'batch_hash', ledger: 1 }),
-        }) as any
-    );
-    vi.mocked(DexOfferTool).mockImplementation(
-      () =>
-        ({
-          execute: vi.fn().mockResolvedValue({ txHash: 'dex_hash', ledger: 1, offerId: '1' }),
-        }) as any
-    );
+    vi.mocked(StellarPaymentTool).mockImplementation(function () {
+      return {
+        execute: vi.fn().mockResolvedValue({ txHash: 'stellar_hash', ledger: 1 }),
+      } as any;
+    });
+    vi.mocked(PathPaymentTool).mockImplementation(function () {
+      return {
+        execute: vi.fn().mockResolvedValue({ txHash: 'path_hash', ledger: 1 }),
+      } as any;
+    });
+    vi.mocked(BatchPaymentTool).mockImplementation(function () {
+      return {
+        execute: vi.fn().mockResolvedValue({ txHash: 'batch_hash', ledger: 1 }),
+      } as any;
+    });
+    vi.mocked(DexOfferTool).mockImplementation(function () {
+      return {
+        execute: vi.fn().mockResolvedValue({ txHash: 'dex_hash', ledger: 1, offerId: '1' }),
+      } as any;
+    });
     agent = new PayFiAgent();
   });
 

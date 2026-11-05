@@ -120,9 +120,11 @@ vi.mock('../backend/rpc_client', async (importOriginal) => ({
 
 vi.mock('../backend/tools/StellarPaymentTool', async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  StellarPaymentTool: vi.fn().mockImplementation(() => ({
-    execute: vi.fn().mockResolvedValue({ txHash: 'legacy_tx_hash', ledger: 99 }),
-  })),
+  StellarPaymentTool: vi.fn().mockImplementation(function () {
+    return {
+      execute: vi.fn().mockResolvedValue({ txHash: 'legacy_tx_hash', ledger: 99 }),
+    };
+  }),
 }));
 
 // The seam X402FetchClient talks through: signing and header encoding belong to
@@ -241,9 +243,9 @@ describe('x402 v2 Interoperability', () => {
     spendingTracker._resetForTests();
 
     mockExecute = vi.fn().mockResolvedValue({ txHash: 'legacy_tx_hash_123', ledger: 101 });
-    vi.mocked(StellarPaymentTool).mockImplementation(
-      () => ({ execute: mockExecute }) as unknown as StellarPaymentTool
-    );
+    vi.mocked(StellarPaymentTool).mockImplementation(function () {
+      return { execute: mockExecute } as unknown as StellarPaymentTool;
+    });
 
     httpClient.getPaymentRequiredResponse.mockReturnValue({ accepts: [requirement()] });
     httpClient.createPaymentPayload.mockResolvedValue({ payload: 'signed' });

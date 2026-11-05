@@ -341,7 +341,7 @@ describe('backend/server.ts — health check HTTP server', () => {
     });
 
     it('returns 500 when persistence throws an error', () => {
-      vi.mocked(getResults).mockImplementation(() => {
+      vi.mocked(getResults).mockImplementationOnce(() => {
         throw new Error('db down');
       });
 

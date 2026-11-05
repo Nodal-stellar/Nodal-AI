@@ -40,11 +40,12 @@
  * which is safe to call from `beforeEach`.
  */
 
-import { vi } from 'vitest';
+import { vi, type Mock } from 'vitest';
 import { Networks } from '@stellar/stellar-sdk';
 
 /** A Vitest mock function (`vi.fn()`). */
-export type MockedFn = ReturnType<typeof vi.fn>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type MockedFn = Mock<(...args: any[]) => any>;
 
 /** Default sequence-bearing account fixture usable by `TransactionBuilder`. */
 export function makeMockAccount(publicKey: string): Record<string, unknown> {

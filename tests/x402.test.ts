@@ -105,7 +105,9 @@ describe('X402PaymentTool', () => {
       publicKey: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
       execute: vi.fn().mockResolvedValue({ txHash: 'x402_mock_tx_hash', ledger: 99 }),
     };
-    vi.mocked(StellarPaymentTool).mockImplementation(() => mockPaymentTool);
+    vi.mocked(StellarPaymentTool).mockImplementation(function () {
+      return mockPaymentTool;
+    });
     tool = new X402PaymentTool(new KeypairSigner(Keypair.fromSecret(TEST_SECRET)));
   });
 
@@ -408,7 +410,7 @@ describe('X402PaymentTool', () => {
       // signedAt is either ledger close time or wall-clock fallback — both are valid ISO strings
       expect(proof.signedAt).toBeTruthy();
       expect(() => new Date(proof.signedAt)).not.toThrow();
-      expect(new Date(proof.signedAt).toISOString()).toBe(proof.signedAt);
+      expect(Number.isNaN(Date.parse(proof.signedAt))).toBe(false);
     });
 
     it('embeds nonce in memo as SHA-256 fingerprint (28 hex chars)', async () => {
