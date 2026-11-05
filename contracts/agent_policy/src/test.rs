@@ -46,9 +46,8 @@ mod tests {
         let owner = Address::generate(&env);
         let token = Address::generate(&env);
         let account = env.register_contract(None, AgentPolicyAccount);
-        AgentPolicyAccountClient::new(&env, &account).init(
-            &agent_key, &owner, &token, &LIMIT, &WINDOW,
-        );
+        AgentPolicyAccountClient::new(&env, &account)
+            .init(&agent_key, &owner, &token, &LIMIT, &WINDOW);
         Setup {
             env,
             account,
@@ -151,9 +150,7 @@ mod tests {
         let first = transfer_ctx(&s, &s.token, LIMIT);
         assert_eq!(check(&s, vec![&s.env, first]), Ok(()));
         let start = s.env.ledger().timestamp();
-        s.env
-            .ledger()
-            .with_mut(|li| li.timestamp = start + WINDOW);
+        s.env.ledger().with_mut(|li| li.timestamp = start + WINDOW);
         let second = transfer_ctx(&s, &s.token, LIMIT);
         assert_eq!(check(&s, vec![&s.env, second]), Ok(()));
         assert_eq!(spent(&s), LIMIT);

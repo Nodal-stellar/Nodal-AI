@@ -30,8 +30,8 @@
 
 use soroban_sdk::{
     auth::{Context, CustomAccountInterface},
-    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short,
-    Address, BytesN, Env, Symbol, TryIntoVal, Val, Vec,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
+    BytesN, Env, Symbol, TryIntoVal, Val, Vec,
 };
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
@@ -123,7 +123,10 @@ impl AgentPolicyAccount {
         env.storage().instance().set(&DataKey::Spent, &0i128);
 
         env.events().publish(
-            (Symbol::new(&env, "policy"), Symbol::new(&env, "initialized")),
+            (
+                Symbol::new(&env, "policy"),
+                Symbol::new(&env, "initialized"),
+            ),
             (owner, token, limit, window),
         );
     }
