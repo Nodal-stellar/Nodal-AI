@@ -46,7 +46,7 @@ function checkNode(): CheckResult {
   }
 
   const version = result.stdout.replace('v', '');
-  const majorVersion = parseInt(version.split('.')[0], 10);
+  const majorVersion = parseInt(version.split('.')[0] ?? '', 10);
 
   if (majorVersion < REQUIRED_NODE_VERSION) {
     return {
