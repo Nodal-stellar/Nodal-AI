@@ -602,10 +602,10 @@ export type TaskMiddleware = (
 
 // ─── Payload sanitisation ─────────────────────────────────────────────────────
 
-const SECRET_KEY_RE = /^(?<prefix>.*?["':\s]?)(?<secret>S[ A-Z2-7]{55})(?<suffix>["'\s]?.*)$/i;
+const SECRET_KEY_RE = /S[A-Z2-7]{55}/g;
 
 function redactSecretString(value: string): string {
-  return value.replace(SECRET_KEY_RE, '$<prefix>[REDACTED]$<suffix>');
+  return value.replace(SECRET_KEY_RE, '[REDACTED]');
 }
 
 /**

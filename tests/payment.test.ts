@@ -15,7 +15,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Keypair } from '@stellar/stellar-sdk';
 import { z } from 'zod';
-import { StellarPaymentTool } from '../backend/tools/StellarPaymentTool';
+import {
+  StellarPaymentTool,
+  PaymentInputSchema,
+  buildMemo,
+} from '../backend/tools/StellarPaymentTool';
 import { KeypairSigner } from '../backend/signer';
 import { SubmitResultSchema } from '../backend/tools/StellarPaymentTool';
 import * as rpcClient from '../backend/rpc_client';
@@ -867,5 +871,124 @@ describe('StellarPaymentTool — slow-network scenario with MockNetworkCondition
         assetCode: 'XLM',
       })
     ).rejects.toThrow(/HorizonTimeoutError/);
+  });
+});
+
+describe('buildMemo', () => {
+  const HEX = 'ab'.repeat(32);
+
+  it('returns null when there is no memo', () => {
+    expect(buildMemo('text', undefined)).toBeNull();
+    expect(buildMemo('id', undefined)).toBeNull();
+  });
+
+  it('builds an id memo, and rejects a non-number or out-of-range id', () => {
+    expect(buildMemo('id', 42)?.value).toBe('42');
+    expect(buildMemo('id', 0)?.value).toBe('0');
+    expect(() => buildMemo('id', '42')).toThrow('Memo ID must be a number');
+    expect(() => buildMemo('id', -1)).toThrow(
+      'Memo ID must be a 64-bit unsigned integer (0 to 2^64-1)'
+    );
+    expect(() => buildMemo('id', 2 ** 64)).toThrow('64-bit unsigned integer');
+  });
+
+  describe.each([
+    ['hash', 'hash'],
+    ['return', 'return'],
+  ])('%s memo', (type, label) => {
+    it('accepts 64 hex characters, with or without a leading 0x', () => {
+      for (const value of [HEX, `0x${HEX}`, HEX.toUpperCase()]) {
+        const memo = buildMemo(type, value);
+        expect(memo?.type).toBe(type);
+        expect((memo?.value as Buffer).toString('hex')).toBe(HEX);
+      }
+    });
+
+    it('rejects a non-string', () => {
+      expect(() => buildMemo(type, 42)).toThrow(`Memo ${label} must be a string`);
+    });
+
+    it('rejects the wrong length', () => {
+      for (const value of [HEX.slice(2), `${HEX}ab`]) {
+        expect(() => buildMemo(type, value)).toThrow(
+          `Memo ${label} must be a 32-byte hex string (64 hex characters)`
+        );
+      }
+    });
+
+    it('rejects non-hex characters', () => {
+      expect(() => buildMemo(type, 'zz'.repeat(32))).toThrow(
+        `Memo ${label} must contain only valid hex characters`
+      );
+    });
+
+    it('only strips 0x from the start of the value', () => {
+      // Stripping it anywhere would turn this into a length error instead.
+      expect(() => buildMemo(type, `ab0x${'ab'.repeat(30)}`)).toThrow(
+        `Memo ${label} must contain only valid hex characters`
+      );
+    });
+  });
+
+  describe.each([['text'], ['anything-else']])('%s memo', (type) => {
+    it('builds a memo of up to 28 UTF-8 bytes', () => {
+      const memo = buildMemo(type, 'a'.repeat(28));
+      expect(memo?.type).toBe('text');
+      expect(memo?.value).toBe('a'.repeat(28));
+    });
+
+    it('rejects a non-string', () => {
+      expect(() => buildMemo(type, 42)).toThrow('Memo text must be a string');
+    });
+
+    it('counts bytes rather than characters', () => {
+      expect(() => buildMemo(type, 'a'.repeat(29))).toThrow('Memo text must be at most 28 bytes');
+      expect(() => buildMemo(type, '€'.repeat(10))).toThrow('Memo text must be at most 28 bytes');
+    });
+  });
+});
+
+describe('PaymentInputSchema', () => {
+  const base = { destination: VALID_DEST, amount: '1' };
+  const issuesOf = (input: unknown) => {
+    const parsed = PaymentInputSchema.safeParse(input);
+    return parsed.success ? [] : parsed.error.issues;
+  };
+
+  it('rejects a zero amount the regex lets through', () => {
+    expect(issuesOf({ ...base, amount: '00' })[0]?.message).toBe(
+      'Amount must be greater than zero'
+    );
+  });
+
+  it('accepts the smallest positive amount', () => {
+    expect(issuesOf({ ...base, amount: '0.0000001' })).toEqual([]);
+  });
+
+  it('applies defaults for the asset and memo type', () => {
+    expect(PaymentInputSchema.parse(base)).toMatchObject({ assetCode: 'XLM', memoType: 'text' });
+  });
+
+  it('rejects a text memo over 28 bytes on the memo field', () => {
+    for (const input of [
+      { ...base, memo: '€'.repeat(10) },
+      { ...base, memoType: 'text', memo: 'a'.repeat(29) },
+    ]) {
+      expect(issuesOf(input)).toEqual([
+        expect.objectContaining({
+          path: ['memo'],
+          message: 'MEMO_TEXT must not exceed 28 bytes (UTF-8 encoded)',
+        }),
+      ]);
+    }
+  });
+
+  it('accepts a text memo of exactly 28 bytes', () => {
+    expect(issuesOf({ ...base, memo: 'a'.repeat(28) })).toEqual([]);
+  });
+
+  it('does not apply the text limit to other memo types', () => {
+    expect(issuesOf({ ...base, memoType: 'hash', memo: 'a'.repeat(64) })).toEqual([]);
+    expect(issuesOf({ ...base, memoType: 'id', memo: 123 })).toEqual([]);
   });
 });
