@@ -9,6 +9,9 @@ dist/
 
 # Test coverage & snapshots
 coverage/
+# Stryker mutation-testing sandbox and report
+.stryker-tmp/
+reports/
 # tests/__snapshots__/*.snap files ARE committed (vitest's toMatchSnapshot()
 # refuses to write a new snapshot when CI=true, so an untracked .snap file
 # doesn't just get silently regenerated in CI — it fails the test outright).
