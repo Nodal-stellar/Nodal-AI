@@ -608,4 +608,90 @@ describe('backend/server.ts — health check HTTP server', () => {
       expect(res._statusCode).toBe(401);
     });
   });
+
+  describe('pathname routing with query strings (#964)', () => {
+    it('serves SSE events on GET /stream?token=… when authenticated via query parameter', () => {
+      process.env.ADMIN_API_TOKEN = 'sse-token';
+      let closeListener: (() => void) | undefined;
+      const agent = {
+        listApprovals: vi.fn(() => []),
+      } as any;
+
+      createHealthServer(agent);
+
+      const req = Object.assign(makeReq('GET', '/stream?token=sse-token'), {
+        on: vi.fn((event: string, cb: () => void) => {
+          if (event === 'close') closeListener = cb;
+        }),
+      });
+      const chunks: string[] = [];
+      const res = Object.assign(makeRes(), {
+        write: vi.fn((chunk: string) => {
+          chunks.push(chunk);
+          return true;
+        }),
+      });
+
+      capturedHandler!(req, res);
+
+      expect(res._statusCode).toBe(200);
+      expect(res._headers['Content-Type']).toBe('text/event-stream');
+      expect(chunks.join('')).toContain('event: initial');
+
+      // Clean up the SSE polling interval
+      closeListener?.();
+    });
+
+    it('returns 401 on GET /stream?token=wrong when token does not match', () => {
+      process.env.ADMIN_API_TOKEN = 'sse-token';
+      createHealthServer();
+
+      const res = makeRes();
+      capturedHandler!(makeReq('GET', '/stream?token=wrong'), res);
+
+      expect(res._statusCode).toBe(401);
+    });
+
+    it('matches /health, /approvals, /approvals/:id, and /admin/pause on pathname when query strings are present', async () => {
+      process.env.ADMIN_API_TOKEN = 'admin-token';
+      const approval = { id: 'appr-1', status: 'pending_approval' };
+      const agent = {
+        listApprovals: vi.fn(() => [approval]),
+        approve: vi.fn(async () => ({
+          approval: { ...approval, status: 'approved' },
+          result: { success: true, taskType: 'stellar_payment' },
+        })),
+        deny: vi.fn(),
+      } as any;
+
+      createHealthServer(agent);
+
+      // GET /health?probe=1
+      const healthRes = makeRes();
+      capturedHandler!(makeReq('GET', '/health?probe=1'), healthRes);
+      await vi.waitFor(() => expect(healthRes._statusCode).toBe(200));
+
+      // GET /approvals?token=admin-token
+      const approvalsRes = makeRes();
+      capturedHandler!(makeReq('GET', '/approvals?token=admin-token'), approvalsRes);
+      expect(approvalsRes._statusCode).toBe(200);
+      expect(JSON.parse(approvalsRes._body)).toEqual({ approvals: [approval] });
+
+      // POST /approvals/appr-1?token=admin-token
+      const decisionRes = makeRes();
+      capturedHandler!(
+        makeBodyReq('POST', '/approvals/appr-1?token=admin-token', { decision: 'approve' }),
+        decisionRes
+      );
+      await flush();
+      expect(decisionRes._statusCode).toBe(200);
+      expect(agent.approve).toHaveBeenCalledWith('appr-1');
+
+      // POST /admin/pause?token=admin-token
+      const pauseRes = makeRes();
+      capturedHandler!(makeReq('POST', '/admin/pause?token=admin-token'), pauseRes);
+      expect(pauseRes._statusCode).toBe(200);
+      expect(JSON.parse(pauseRes._body)).toEqual({ paused: true });
+    });
+  });
 });

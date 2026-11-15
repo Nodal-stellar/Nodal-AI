@@ -234,8 +234,18 @@ const ADMIN_RESUME_PATH = '/admin/resume';
  */
 export function createHealthServer(agent?: PayFiAgent): http.Server {
   const server = http.createServer((req, res) => {
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Bad Request' }));
+      return;
+    }
+    const { pathname } = parsedUrl;
+
     // ── GET /health ────────────────────────────────────────────────────────
-    if (req.method === 'GET' && req.url === HEALTH_PATH) {
+    if (req.method === 'GET' && pathname === HEALTH_PATH) {
       // Delegate to the real implementation: it probes Horizon, Soroban and
       // the database concurrently and reports 503 / "degraded" when any
       // dependency is down. The previous inline branch hardcoded
@@ -249,17 +259,13 @@ export function createHealthServer(agent?: PayFiAgent): http.Server {
     // ADMIN_API_TOKEN is set and honours `limit`/`offset` query parameters.
     // The previous inline branch served persisted results with no auth guard
     // and a hardcoded `getResults(10)`.
-    if (req.method === 'GET' && req.url?.split('?')[0] === STATUS_PATH) {
-      const parsedUrl = new URL(
-        req.url ?? STATUS_PATH,
-        `http://${req.headers.host ?? 'localhost'}`
-      );
+    if (req.method === 'GET' && pathname === STATUS_PATH) {
       void handleResults(req, res, parsedUrl);
       return;
     }
 
     // ── GET /spending ──────────────────────────────────────────────────────
-    if (req.method === 'GET' && req.url === SPENDING_PATH) {
+    if (req.method === 'GET' && pathname === SPENDING_PATH) {
       if (!isAuthenticated(req)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized' }));
@@ -285,7 +291,7 @@ export function createHealthServer(agent?: PayFiAgent): http.Server {
     }
 
     // ── GET /metrics ───────────────────────────────────────────────────────
-    if (req.method === 'GET' && req.url === METRICS_PATH) {
+    if (req.method === 'GET' && pathname === METRICS_PATH) {
       if (!isStrictlyAuthenticated(req)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized' }));
@@ -323,7 +329,7 @@ export function createHealthServer(agent?: PayFiAgent): http.Server {
     }
 
     // ── GET /approvals ─────────────────────────────────────────────────────
-    if (req.method === 'GET' && req.url === APPROVALS_PATH) {
+    if (req.method === 'GET' && pathname === APPROVALS_PATH) {
       if (!isAuthenticated(req)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized' }));
@@ -345,15 +351,15 @@ export function createHealthServer(agent?: PayFiAgent): http.Server {
     }
 
     // ── POST /approvals/:id ────────────────────────────────────────────────
-    if (req.method === 'POST' && req.url?.startsWith(`${APPROVALS_PATH}/`)) {
-      const id = decodeURIComponent(req.url.slice(APPROVALS_PATH.length + 1));
+    if (req.method === 'POST' && pathname.startsWith(`${APPROVALS_PATH}/`)) {
+      const id = decodeURIComponent(pathname.slice(APPROVALS_PATH.length + 1));
       void handleApprovalDecision(req, res, agent, id);
       return;
     }
 
     // ── GET /stream ────────────────────────────────────────────────────────
     // SSE stream for real-time dashboard updates
-    if (req.method === 'GET' && req.url === STREAM_PATH) {
+    if (req.method === 'GET' && pathname === STREAM_PATH) {
       if (!isAuthenticated(req)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized' }));
@@ -364,7 +370,7 @@ export function createHealthServer(agent?: PayFiAgent): http.Server {
     }
 
     // ── POST /admin/pause ──────────────────────────────────────────────────
-    if (req.method === 'POST' && req.url === ADMIN_PAUSE_PATH) {
+    if (req.method === 'POST' && pathname === ADMIN_PAUSE_PATH) {
       if (!isStrictlyAuthenticated(req)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized' }));
@@ -377,7 +383,7 @@ export function createHealthServer(agent?: PayFiAgent): http.Server {
     }
 
     // ── POST /admin/resume ─────────────────────────────────────────────────
-    if (req.method === 'POST' && req.url === ADMIN_RESUME_PATH) {
+    if (req.method === 'POST' && pathname === ADMIN_RESUME_PATH) {
       if (!isStrictlyAuthenticated(req)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized' }));
