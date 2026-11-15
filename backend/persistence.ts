@@ -17,6 +17,7 @@ import { createHash } from 'crypto';
 import Database from 'better-sqlite3';
 import type { AgentResult } from './agent';
 import { config } from './config';
+import { configureSqlitePragmas } from './db/client';
 import { migrateSqlite } from './db/migrate';
 
 export type PersistedResult = AgentResult & { timestamp: string };
@@ -24,14 +25,15 @@ export type PersistedResult = AgentResult & { timestamp: string };
 let _db: Database.Database | null = null;
 
 /**
- * Bring the schema up to date by applying the numbered migrations in
- * `backend/db/migrations/` (#821).
+ * Bring the schema up to date by applying SQLite pragmas (#962) and the
+ * numbered migrations in `backend/db/migrations/` (#821).
  *
  * Applied both to the lazily opened connection and to any DB injected through
  * `_setDb()`, so a test database has the same shape as a real one and the two
  * cannot drift apart.
  */
 function applySchema(db: Database.Database): void {
+  configureSqlitePragmas(db);
   migrateSqlite(db);
 }
 
