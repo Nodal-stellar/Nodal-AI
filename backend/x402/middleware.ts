@@ -37,15 +37,22 @@
 import type { Request, Response, NextFunction } from 'express';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { z } from 'zod';
+import { Asset, Networks } from '@stellar/stellar-sdk';
 import { paymentMiddlewareFromConfig, type SchemeRegistration } from '@x402/express';
 import { HTTPFacilitatorClient } from '@x402/core/server';
 import { ExactStellarScheme } from '@x402/stellar/exact/server';
 import { config } from '../config';
 import { toCaip2 } from '../network';
 import { createLogger } from '../utils/logger';
-import { stellarPublicKeySchema } from '../utils/stellarSchemas';
+import { isValidStellarContractId, stellarPublicKeySchema } from '../utils/stellarSchemas';
 
 const log = createLogger('x402-middleware');
+
+const NETWORK_PASSPHRASE: Record<string, string> = {
+  testnet: Networks.TESTNET,
+  mainnet: Networks.PUBLIC,
+  futurenet: Networks.FUTURENET,
+};
 
 // ─── nodalPaywall ─────────────────────────────────────────────────────────────
 
@@ -72,15 +79,20 @@ const log = createLogger('x402-middleware');
 export interface NodalPaywallOptions {
   /**
    * Price per request as a human-readable decimal, e.g. `"0.01"` for one cent
-   * of USDC.  The server scheme converts this to the SAC token amount using
-   * the asset's decimal precision (7 for USDC).
+   * of USDC.  Converted to the SAC token amount in stroops (7 decimals).
    */
   price: string;
   /**
-   * Asset code to charge in — e.g. `"USDC"`.
-   * Defaults to `config.X402_ASSET_CODE`.
+   * Asset to charge in — an asset code (`"USDC"`, `"EURC"`, `"XLM"`),
+   * `"CODE:ISSUER"`, or a SEP-41 SAC contract address (`C…`).
+   * Defaults to `config.X402_ASSET_CONTRACT` (`config.X402_ASSET_CODE`).
    */
   asset?: string;
+  /**
+   * Classic Stellar issuer (`G…`) when `asset` is a non-native asset code.
+   * Defaults to `config.X402_ASSET_ISSUER`.
+   */
+  assetIssuer?: string;
   /**
    * G-address of the account that should receive payments.
    * Defaults to `config.AGENT_PUBLIC_KEY` (the agent's own account).
@@ -109,12 +121,71 @@ const PaywallOptionsSchema = z.object({
   price: z
     .string()
     .regex(/^(?!0(\.0+)?$)\d+(\.\d{1,7})?$/, 'price must be a positive Stellar decimal'),
-  asset: z.string().min(1).max(12).optional(),
+  asset: z
+    .string()
+    .min(1)
+    .refine(
+      (val) => {
+        if (isValidStellarContractId(val)) return true;
+        if (val.includes(':')) {
+          const [code, issuer, ...rest] = val.split(':');
+          return (
+            rest.length === 0 &&
+            !!code &&
+            code.length >= 1 &&
+            code.length <= 12 &&
+            !!issuer &&
+            stellarPublicKeySchema('assetIssuer').safeParse(issuer).success
+          );
+        }
+        return val.length <= 12;
+      },
+      {
+        message:
+          'asset must be a 1–12 char asset code, "CODE:ISSUER", or a valid SAC contract ID (C…)',
+      }
+    )
+    .optional(),
+  assetIssuer: stellarPublicKeySchema('assetIssuer').optional(),
   payTo: stellarPublicKeySchema('payTo').optional(),
   facilitatorUrl: z.string().url().optional(),
   facilitatorApiKey: z.string().min(1).optional(),
   description: z.string().optional(),
 });
+
+function resolvePaywallAssetContract(asset?: string, assetIssuer?: string): string {
+  const passphrase = NETWORK_PASSPHRASE[config.STELLAR_NETWORK] ?? Networks.TESTNET;
+  if (!asset) {
+    if (assetIssuer) {
+      return new Asset(config.X402_ASSET_CODE, assetIssuer).contractId(passphrase);
+    }
+    return (
+      config.X402_ASSET_CONTRACT ??
+      (config.X402_ASSET_CODE === 'XLM'
+        ? Asset.native()
+        : new Asset(config.X402_ASSET_CODE, config.X402_ASSET_ISSUER)
+      ).contractId(passphrase)
+    );
+  }
+  if (isValidStellarContractId(asset)) {
+    return asset;
+  }
+  if (asset === 'XLM') {
+    return Asset.native().contractId(passphrase);
+  }
+  if (asset.includes(':')) {
+    const [code, issuer] = asset.split(':');
+    return new Asset(code!, issuer!).contractId(passphrase);
+  }
+  if (
+    !assetIssuer &&
+    asset === config.X402_ASSET_CODE &&
+    config.X402_ASSET_CONTRACT
+  ) {
+    return config.X402_ASSET_CONTRACT;
+  }
+  return new Asset(asset, assetIssuer ?? config.X402_ASSET_ISSUER).contractId(passphrase);
+}
 
 /**
  * Create Express payment-gating middleware for a single route.
@@ -148,6 +219,8 @@ export function nodalPaywall(
   const apiKey = opts.facilitatorApiKey ?? config.X402_FACILITATOR_API_KEY;
   const network = toCaip2(config.STELLAR_NETWORK);
   const payTo = opts.payTo ?? config.AGENT_PUBLIC_KEY;
+  const assetContract = resolvePaywallAssetContract(opts.asset, opts.assetIssuer);
+  const amount = toStroops(opts.price);
 
   // Build the facilitator client.  When an API key is configured we pass a
   // createAuthHeaders factory, which returns headers keyed by facilitator
@@ -164,9 +237,8 @@ export function nodalPaywall(
       : {}),
   });
 
-  // The server-side ExactStellarScheme converts decimal prices into SAC
-  // token amounts and builds the payment requirements that appear in the
-  // PAYMENT-REQUIRED header.
+  // The server-side ExactStellarScheme builds the payment requirements that
+  // appear in the PAYMENT-REQUIRED header using our resolved SAC contract ID.
   const stellarScheme = new ExactStellarScheme();
   const schemes: SchemeRegistration[] = [{ network, server: stellarScheme }];
 
@@ -179,7 +251,7 @@ export function nodalPaywall(
         scheme: 'exact' as const,
         network,
         payTo,
-        price: opts.price,
+        price: { amount, asset: assetContract },
         ...(opts.description ? {} : {}), // description goes in RouteConfig, not PaymentOption
       },
       ...(opts.description ? { description: opts.description } : {}),
@@ -192,6 +264,7 @@ export function nodalPaywall(
       payTo,
       price: opts.price,
       asset: opts.asset ?? config.X402_ASSET_CODE,
+      assetContract,
       facilitatorUrl,
     },
     'nodalPaywall middleware created'
