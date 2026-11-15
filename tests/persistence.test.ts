@@ -6,8 +6,17 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
-import { saveResult, getResults, _setDb, closeDb } from '../backend/persistence';
+import {
+  saveResult,
+  getResults,
+  saveIdempotencyResult,
+  getIdempotencyResult,
+  deleteIdempotencyKey,
+  _setDb,
+  closeDb,
+} from '../backend/persistence';
 import type { AgentResult } from '../backend/agent';
+import { ErrorType } from '../backend/errors';
 
 function makeInMemoryDb(): Database.Database {
   const db = new Database(':memory:');
@@ -210,5 +219,37 @@ describe('persistence', () => {
     _setDb(null);
     expect(() => closeDb()).not.toThrow();
     expect(() => closeDb()).not.toThrow();
+  });
+
+  // ─── Idempotency transient vs definitive failure caching (#950) ───────────
+
+  it('caches definitive failures (ValidationError) and refuses to cache transient failures (NetworkTimeout)', () => {
+    const payload = { destination: 'GABC', amount: '10' };
+
+    // Transient failure is not cached
+    saveIdempotencyResult('k-transient', 'stellar_payment', payload, {
+      success: false,
+      taskType: 'stellar_payment',
+      error: 'Horizon timeout',
+      errorType: ErrorType.NetworkTimeout,
+    });
+    expect(getIdempotencyResult('k-transient', payload)).toBeNull();
+
+    // Definitive failure IS cached
+    saveIdempotencyResult('k-definitive', 'stellar_payment', payload, {
+      success: false,
+      taskType: 'stellar_payment',
+      error: 'Invalid destination',
+      errorType: ErrorType.ValidationError,
+    });
+    const cached = getIdempotencyResult('k-definitive', payload);
+    expect(cached).toMatchObject({
+      success: false,
+      errorType: ErrorType.ValidationError,
+    });
+
+    // deleteIdempotencyKey removes an existing entry so a retry can succeed
+    deleteIdempotencyKey('k-definitive');
+    expect(getIdempotencyResult('k-definitive', payload)).toBeNull();
   });
 });

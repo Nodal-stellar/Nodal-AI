@@ -27,6 +27,7 @@ import {
   expirePendingApprovals,
   getIdempotencyResult,
   saveIdempotencyResult,
+  deleteIdempotencyKey,
   pruneIdempotencyKeys,
   PendingApproval,
 } from './persistence';
@@ -1602,9 +1603,21 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
         const timestamp = new Date().toISOString();
         saveResult({ ...result, timestamp });
 
-        // Store idempotency result for failures too (#payment-idempotency)
+        // Cache only definitive non-retryable failures under the idempotency key;
+        // for transient/retryable errors, delete the key so a retry runs (#950).
         if (task.idempotencyKey) {
-          saveIdempotencyResult(task.idempotencyKey, task.type, task.payload, result);
+          if (
+            result.errorType === ErrorType.ValidationError ||
+            result.errorType === ErrorType.PolicyViolation ||
+            result.errorType === ErrorType.InsufficientFunds ||
+            result.errorType === ErrorType.ConfigError ||
+            result.errorType === ErrorType.UnauthorizedError ||
+            result.errorType === ErrorType.ContractError
+          ) {
+            saveIdempotencyResult(task.idempotencyKey, task.type, task.payload, result);
+          } else {
+            deleteIdempotencyKey?.(task.idempotencyKey);
+          }
         }
 
         void dispatchWebhook(result);
@@ -1676,9 +1689,20 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
       const timestamp = new Date().toISOString();
       saveResult({ ...result, timestamp });
 
-      // Store idempotency result for middleware failures too
+      // Cache only definitive non-retryable failures under the idempotency key (#950)
       if (task.idempotencyKey) {
-        saveIdempotencyResult(task.idempotencyKey, task.type, task.payload, result);
+        if (
+          result.errorType === ErrorType.ValidationError ||
+          result.errorType === ErrorType.PolicyViolation ||
+          result.errorType === ErrorType.InsufficientFunds ||
+          result.errorType === ErrorType.ConfigError ||
+          result.errorType === ErrorType.UnauthorizedError ||
+          result.errorType === ErrorType.ContractError
+        ) {
+          saveIdempotencyResult(task.idempotencyKey, task.type, task.payload, result);
+        } else {
+          deleteIdempotencyKey?.(task.idempotencyKey);
+        }
       }
 
       void dispatchWebhook(result);

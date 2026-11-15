@@ -580,6 +580,36 @@ interface IdempotencyRecord {
 }
 
 /**
+ * Definitive, non-retryable error types that may be cached under an idempotency key (#950).
+ * Transient/retryable failures (NetworkTimeout, RateLimitError, AgentPaused, etc.)
+ * are NOT cached so a retry with the same idempotency key can execute and succeed.
+ */
+export const NON_RETRYABLE_IDEMPOTENCY_ERRORS: ReadonlySet<string> = new Set([
+  'VALIDATION_ERROR',
+  'POLICY_VIOLATION',
+  'INSUFFICIENT_FUNDS',
+  'CONFIG_ERROR',
+  'UNAUTHORIZED_ERROR',
+  'CONTRACT_ERROR',
+]);
+
+/**
+ * Returns true if `result` should be persisted under an idempotency key (#950):
+ * either a successful outcome or a definitive non-retryable failure.
+ */
+export function isCacheableIdempotencyResult(result: AgentResult): boolean {
+  if (result.success) return true;
+  return result.errorType !== undefined && NON_RETRYABLE_IDEMPOTENCY_ERRORS.has(result.errorType);
+}
+
+/**
+ * Delete an idempotency key so a subsequent retry can run (#950).
+ */
+export function deleteIdempotencyKey(key: string): void {
+  getDb().prepare(`DELETE FROM idempotency_keys WHERE key = ?`).run(key);
+}
+
+/**
  * Check if an idempotency key exists and is valid (not expired).
  * Returns the stored result if the key exists with the same payload hash.
  * Returns { conflict: true } if the key exists but payload differs.
@@ -620,12 +650,19 @@ export function getIdempotencyResult(
     return { conflict: true };
   }
 
+  const parsed = JSON.parse(row.result) as AgentResult;
+  if (!isCacheableIdempotencyResult(parsed)) {
+    db.prepare(`DELETE FROM idempotency_keys WHERE key = ?`).run(key);
+    return null;
+  }
+
   // Return stored result
-  return JSON.parse(row.result) as AgentResult;
+  return parsed;
 }
 
 /**
  * Store an idempotency key with the result.
+ * Only caches successes and definitive non-retryable failures (#950).
  * Keys expire after 24 hours.
  */
 export function saveIdempotencyResult(
@@ -635,6 +672,10 @@ export function saveIdempotencyResult(
   result: AgentResult
 ): void {
   const db = getDb();
+  if (!isCacheableIdempotencyResult(result)) {
+    db.prepare(`DELETE FROM idempotency_keys WHERE key = ?`).run(key);
+    return;
+  }
   const now = Date.now();
   const expiresAt = now + 24 * 60 * 60 * 1000; // 24 hours
 
