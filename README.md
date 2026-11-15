@@ -978,16 +978,25 @@ See [`backend/agent.ts`](./backend/agent.ts) for task dispatch and the spending-
 A seller can publish what its paid endpoints cost so agents can read the price before calling them. [`backend/x402/middleware.ts`](./backend/x402/middleware.ts) builds an OpenAPI 3.1 document from the route config and serves it at `/.well-known/openapi.json`. Each paid operation gets a `402` response and an `x-payment-info.offers[]` entry with `amount` (stroops), `price` (decimal), `asset`, `currency`, CAIP-2 `network` and `payTo`:
 
 ```typescript
-import { x402DiscoveryMiddleware, discoverPaymentOffers } from "./backend/x402/middleware";
+import { nodalPaywall, x402DiscoveryMiddleware, discoverPaymentOffers } from "./backend/x402/middleware";
 
-// Seller (Express or plain http)
+// Seller (Express): gate any HTTP method (GET, POST, PUT, DELETE) with nodalPaywall
+app.post(
+  "/generate",
+  nodalPaywall({ price: "0.01", asset: "USDC" }),
+  handler,
+);
+
 app.use(x402DiscoveryMiddleware({
   title: "Paid Data API",
-  routes: [{ method: "get", path: "/data", price: "0.01", payTo: "G..." }],
+  routes: [
+    { method: "get", path: "/data", price: "0.01", payTo: "G..." },
+    { method: "post", path: "/generate", price: "0.01", payTo: "G..." },
+  ],
 }));
 
 // Buyer: read the price without calling the route
-const [offer] = (await discoverPaymentOffers("https://api.example.com", "GET", "/data")) ?? [];
+const [offer] = (await discoverPaymentOffers("https://api.example.com", "POST", "/generate")) ?? [];
 ```
 
 The document is advisory; the 402 challenge stays authoritative for what is actually charged.
