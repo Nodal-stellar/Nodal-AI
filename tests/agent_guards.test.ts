@@ -455,6 +455,7 @@ describe('PayFiAgent guards', () => {
           'fee_bump',
           'liquidity_pool',
           'multisig_payment',
+          'nano_payment',
           'path_payment',
           'sequence_number',
           'set_options',
@@ -466,6 +467,31 @@ describe('PayFiAgent guards', () => {
           'x402_respond',
         ].sort()
       );
+    });
+
+    it('includes every built-in tool flagged valueMoving: true in VALUE_MOVING_TASK_TYPES (#948)', () => {
+      for (const tool of agent.getTools()) {
+        if (tool.valueMoving) {
+          expect(VALUE_MOVING_TASK_TYPES.has(tool.name)).toBe(true);
+        }
+      }
+    });
+
+    it('hides nano_payment from MCP tools by default unless MCP_ALLOW_PAYMENTS=true (#948)', async () => {
+      const { getMCPTools } = await import('../backend/mcp/server');
+      const prev = process.env.MCP_ALLOW_PAYMENTS;
+      try {
+        delete process.env.MCP_ALLOW_PAYMENTS;
+        const defaultTools = getMCPTools(agent).map((t) => t.name);
+        expect(defaultTools).not.toContain('nano_payment');
+
+        process.env.MCP_ALLOW_PAYMENTS = 'true';
+        const paymentTools = getMCPTools(agent).map((t) => t.name);
+        expect(paymentTools).toContain('nano_payment');
+      } finally {
+        if (prev === undefined) delete process.env.MCP_ALLOW_PAYMENTS;
+        else process.env.MCP_ALLOW_PAYMENTS = prev;
+      }
     });
   });
 

@@ -35,7 +35,7 @@ export interface MCPResponse {
  * Build tool schema for MCP from agent tools.
  * Read-only tools exposed by default; value-moving require MCP_ALLOW_PAYMENTS.
  */
-function getMCPTools(agent: PayFiAgent): MCPTool[] {
+export function getMCPTools(agent: PayFiAgent): MCPTool[] {
   const allowPayments = process.env.MCP_ALLOW_PAYMENTS === 'true';
 
   return agent
@@ -44,7 +44,7 @@ function getMCPTools(agent: PayFiAgent): MCPTool[] {
       name: tool.name,
       description: tool.description,
       inputSchema: tool.inputSchema,
-      valueMoving: tool.valueMoving,
+      valueMoving: tool.valueMoving || VALUE_MOVING_TASK_TYPES.has(tool.name),
     }))
     .filter((tool) => {
       if (!tool.valueMoving) return true;

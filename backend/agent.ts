@@ -561,6 +561,7 @@ export interface AgentResult {
  * keeps working.
  */
 export const VALUE_MOVING_TASK_TYPES: ReadonlySet<TaskType> = new Set<TaskType>([
+  'nano_payment',
   'stellar_payment',
   'soroban_invoke',
   'x402_respond',
