@@ -263,6 +263,20 @@ export const EnvSchema = z.object({
 
   // Health check HTTP server
   HEALTH_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  // Comma-separated list of origins permitted to call the HTTP API cross-origin (#966).
+  // Default unset/empty = no CORS headers emitted.
+  CORS_ALLOWED_ORIGINS: z
+    .string()
+    .refine(
+      (val) =>
+        val
+          .split(',')
+          .map((o) => o.trim())
+          .filter(Boolean)
+          .every((o) => o !== '*'),
+      { message: 'CORS_ALLOWED_ORIGINS must list explicit origins (wildcard "*" is not allowed)' }
+    )
+    .optional(),
 
   // Nano node RPC endpoint used by NanoPaymentTool.
   NANO_RPC_URL: z.string().url().default('http://127.0.0.1:7076'),
@@ -673,6 +687,11 @@ export interface AgentConfig {
    * Defaults to 3000.
    */
   readonly HEALTH_PORT: number;
+  /**
+   * Comma-separated list of origins permitted to call the HTTP API cross-origin (#966).
+   * Optional — when unset or empty, no CORS headers are emitted.
+   */
+  readonly CORS_ALLOWED_ORIGINS?: string | undefined;
 
   /** Nano node RPC endpoint used by NanoPaymentTool (default: http://127.0.0.1:7076). */
   readonly NANO_RPC_URL: string;
@@ -955,6 +974,7 @@ function parseConfigAndDerive(
   const {
     AGENT_SECRET_KEY: _secret,
     ALLOWED_X402_ORIGINS,
+    CORS_ALLOWED_ORIGINS,
     AGENT_SECRET_KEY_ARN,
     SPENDING_LIMITS: _rawLimits,
     OTLP_ENDPOINT,
@@ -983,6 +1003,7 @@ function parseConfigAndDerive(
     PAYMENT_DESTINATIONS: paymentDestinations,
     X402_ASSET_CONTRACT: x402AssetContract,
     ...(ALLOWED_X402_ORIGINS ? { ALLOWED_X402_ORIGINS } : {}),
+    ...(CORS_ALLOWED_ORIGINS ? { CORS_ALLOWED_ORIGINS } : {}),
     ...(AGENT_SECRET_KEY_ARN ? { AGENT_SECRET_KEY_ARN } : {}),
     ...(OTLP_ENDPOINT ? { OTLP_ENDPOINT } : {}),
     ...(WEBHOOK_URL ? { WEBHOOK_URL } : {}),
