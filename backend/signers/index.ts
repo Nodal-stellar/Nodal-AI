@@ -37,6 +37,7 @@ export function createSigner(): Signer {
         token,
         keyName: config.VAULT_TRANSIT_KEY,
         mount: config.VAULT_TRANSIT_MOUNT,
+        prefetchPublicKey: true,
       });
     }
 

@@ -206,4 +206,29 @@ describe('createSigner', () => {
 
     expect(() => createSigner()).toThrow(/requires VAULT_ADDR, VAULT_TRANSIT_KEY and VAULT_TOKEN/);
   });
+
+  it('checks Vault sys/health + key read and caches the result for 30s (#1018)', async () => {
+    const vaultKey = Keypair.random();
+    mockVault(vaultKey);
+    const s = new VaultTransitSigner({
+      address: VAULT_ADDR,
+      token: VAULT_TOKEN,
+      keyName: KEY_NAME,
+    });
+
+    expect(await s.healthCheck()).toBe(true);
+    expect(await s.healthCheck()).toBe(true);
+    // sys/health + keys/<name> called only once across two consecutive checks within 30s
+    expect(axios.get).toHaveBeenCalledTimes(2);
+    expect(axios.get).toHaveBeenNthCalledWith(
+      1,
+      `${VAULT_ADDR}/v1/sys/health`,
+      expect.objectContaining({ headers: { 'X-Vault-Token': VAULT_TOKEN } })
+    );
+
+    s._resetHealthCache();
+    vi.mocked(axios.get).mockRejectedValueOnce(new Error('vault sealed'));
+    expect(await s.healthCheck()).toBe(false);
+  });
 });
+

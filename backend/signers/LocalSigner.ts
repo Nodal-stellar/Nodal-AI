@@ -23,4 +23,8 @@ export class LocalSigner implements Signer {
   async sign(data: Buffer): Promise<Buffer> {
     return this.keypair.sign(data);
   }
+
+  async healthCheck(): Promise<boolean> {
+    return Boolean(this.keypair.publicKey());
+  }
 }

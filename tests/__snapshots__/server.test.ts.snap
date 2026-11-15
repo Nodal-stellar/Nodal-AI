@@ -5,6 +5,7 @@ exports[`backend/server.ts — health check HTTP server > GET /health > health r
   "components": {
     "database": "up",
     "horizon": "up",
+    "signer": "up",
     "soroban": "up",
   },
   "status": "ok",

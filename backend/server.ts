@@ -38,8 +38,18 @@ import { metricsRegistry, renderMetrics, spendingWindowTotal } from './metrics';
 import { pauseAgent, resumeAgent, isPaused } from './kill_switch';
 import { assetKey as makeAssetKey } from './spending_tracker';
 import { stroopsToString } from './utils/amount';
+import { createSigner, type Signer } from './signers';
 
 const log = createLogger('health-server');
+
+let _healthSigner: Signer | null = null;
+let _healthSignerBackend: string | undefined;
+
+/** Reset cached signer instance used by checkSigner() (for tests). */
+export function _resetHealthSigner(): void {
+  _healthSigner = null;
+  _healthSignerBackend = undefined;
+}
 
 // ─── Health types & component probes ─────────────────────────────────────────
 
@@ -52,6 +62,7 @@ export interface HealthResponse {
     horizon: ComponentStatus;
     soroban: ComponentStatus;
     database: ComponentStatus;
+    signer: ComponentStatus;
   };
 }
 
@@ -111,6 +122,34 @@ export async function checkDatabase(): Promise<ComponentStatus> {
     return (await withTimeout(db.healthCheck())) ? 'up' : 'down';
   } catch (err) {
     log.warn({ msg: 'Database health probe failed', err: String(err) });
+    return 'down';
+  }
+}
+
+/**
+ * Probe the configured signer backend (#1018).
+ *
+ * For `SIGNER_BACKEND=vault`, checks Vault `sys/health` and reads the transit
+ * key (cached for 30 s on the signer instance). For `local`, verifies the
+ * local keypair can produce its public key.
+ */
+export async function checkSigner(): Promise<ComponentStatus> {
+  try {
+    const backend = config.SIGNER_BACKEND ?? 'local';
+    if (backend === 'local') {
+      return config.AGENT_PUBLIC_KEY ? 'up' : 'down';
+    }
+    if (!_healthSigner || _healthSignerBackend !== backend) {
+      _healthSigner = createSigner();
+      _healthSignerBackend = backend;
+    }
+    if (_healthSigner.healthCheck) {
+      return (await withTimeout(_healthSigner.healthCheck())) ? 'up' : 'down';
+    }
+    await withTimeout(_healthSigner.publicKey());
+    return 'up';
+  } catch (err) {
+    log.warn({ msg: 'Signer health probe failed', err: String(err) });
     return 'down';
   }
 }
@@ -423,17 +462,18 @@ async function handleHealth(_req: http.IncomingMessage, res: http.ServerResponse
   try {
     // Probed concurrently: run serially and a slow Horizon delays the Soroban
     // answer, so the endpoint's latency becomes the sum of every dependency.
-    const [horizon, soroban, database] = await Promise.all([
+    const [horizon, soroban, database, signer] = await Promise.all([
       checkHorizon(),
       checkSoroban(),
       checkDatabase(),
+      checkSigner(),
     ]);
 
-    const allUp = horizon === 'up' && soroban === 'up' && database === 'up';
+    const allUp = horizon === 'up' && soroban === 'up' && database === 'up' && signer === 'up';
     const statusCode = allUp ? 200 : 503;
     const body: HealthResponse = {
       status: allUp ? 'ok' : 'degraded',
-      components: { horizon, soroban, database },
+      components: { horizon, soroban, database, signer },
     };
 
     const payload = JSON.stringify(body);

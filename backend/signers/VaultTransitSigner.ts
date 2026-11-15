@@ -27,6 +27,10 @@ export interface VaultTransitSignerOptions {
   mount?: string;
   /** Per-request timeout in milliseconds. Defaults to 10 000. */
   timeoutMs?: number;
+  /** TTL for cached health check results in milliseconds. Defaults to 30 000. */
+  healthCacheTtlMs?: number;
+  /** Whether to prefetch and cache the public key at construction time. */
+  prefetchPublicKey?: boolean;
 }
 
 interface VaultKeyResponse {
@@ -41,29 +45,40 @@ interface VaultSignResponse {
   data: { signature: string };
 }
 
+const DEFAULT_HEALTH_CACHE_TTL_MS = 30_000;
+
 export class VaultTransitSigner implements Signer {
   readonly backend = 'vault' as const;
+  private readonly rootUrl: string;
   private readonly baseUrl: string;
   private readonly token: string;
   private readonly keyName: string;
   private readonly timeoutMs: number;
+  private readonly healthCacheTtlMs: number;
   private cachedPublicKey: string | null = null;
+  private cachedHealth: { ok: boolean; expiresAt: number } | null = null;
 
   constructor(options: VaultTransitSignerOptions) {
     const mount = (options.mount ?? 'transit').replace(/^\/+|\/+$/g, '');
-    this.baseUrl = `${options.address.replace(/\/+$/, '')}/v1/${mount}`;
+    this.rootUrl = options.address.replace(/\/+$/, '');
+    this.baseUrl = `${this.rootUrl}/v1/${mount}`;
     this.token = options.token;
     this.keyName = options.keyName;
     this.timeoutMs = options.timeoutMs ?? 10_000;
+    this.healthCacheTtlMs = options.healthCacheTtlMs ?? DEFAULT_HEALTH_CACHE_TTL_MS;
+
+    if (options.prefetchPublicKey) {
+      void this.publicKey().catch((err) => {
+        log.warn({ keyName: this.keyName, err: String(err) }, 'Vault public key prefetch failed');
+      });
+    }
   }
 
   private get headers(): Record<string, string> {
     return { 'X-Vault-Token': this.token };
   }
 
-  async publicKey(): Promise<string> {
-    if (this.cachedPublicKey) return this.cachedPublicKey;
-
+  private async fetchAndDecodePublicKey(): Promise<string> {
     const res = await axios.get<VaultKeyResponse>(
       `${this.baseUrl}/keys/${encodeURIComponent(this.keyName)}`,
       { headers: this.headers, timeout: this.timeoutMs }
@@ -88,9 +103,50 @@ export class VaultTransitSigner implements Signer {
       throw new Error(`Vault transit key "${this.keyName}" returned a malformed public key`);
     }
 
-    this.cachedPublicKey = StrKey.encodeEd25519PublicKey(raw);
+    return StrKey.encodeEd25519PublicKey(raw);
+  }
+
+  async publicKey(): Promise<string> {
+    if (this.cachedPublicKey) return this.cachedPublicKey;
+
+    this.cachedPublicKey = await this.fetchAndDecodePublicKey();
     log.info({ keyName: this.keyName, publicKey: this.cachedPublicKey }, 'Vault signer key loaded');
     return this.cachedPublicKey;
+  }
+
+  /**
+   * Probe Vault reachability (`GET /v1/sys/health`) and verify the transit key
+   * is readable (`GET /v1/<mount>/keys/<key>`). Results are cached for
+   * `healthCacheTtlMs` (default 30 s) so frequent `/health` polls do not
+   * hammer Vault. Also populates `cachedPublicKey` when not yet cached.
+   */
+  async healthCheck(): Promise<boolean> {
+    const now = Date.now();
+    if (this.cachedHealth && now < this.cachedHealth.expiresAt) {
+      return this.cachedHealth.ok;
+    }
+
+    try {
+      await axios.get(`${this.rootUrl}/v1/sys/health`, {
+        headers: this.headers,
+        timeout: this.timeoutMs,
+      });
+      const pubKey = await this.fetchAndDecodePublicKey();
+      if (!this.cachedPublicKey) {
+        this.cachedPublicKey = pubKey;
+      }
+      this.cachedHealth = { ok: true, expiresAt: now + this.healthCacheTtlMs };
+      return true;
+    } catch (err) {
+      log.warn({ keyName: this.keyName, err: String(err) }, 'Vault signer health check failed');
+      this.cachedHealth = { ok: false, expiresAt: now + this.healthCacheTtlMs };
+      return false;
+    }
+  }
+
+  /** Clear the cached health result (for testing). */
+  _resetHealthCache(): void {
+    this.cachedHealth = null;
   }
 
   async sign(data: Buffer): Promise<Buffer> {
