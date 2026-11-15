@@ -1030,6 +1030,9 @@ function loadConfigSync(): AgentConfig {
   if (process.env.AGENT_SECRET_KEY_ARN) {
     throw new Error('Cannot load configuration synchronously when AGENT_SECRET_KEY_ARN is set.');
   }
+  if (process.env.NANO_SEED_ARN) {
+    throw new Error('Cannot load configuration synchronously when NANO_SEED_ARN is set.');
+  }
   return parseConfigAndDerive();
 }
 
@@ -1037,6 +1040,20 @@ function assertSecretConfigCompatibility(): void {
   if (process.env.AGENT_SECRET_KEY && process.env.AGENT_SECRET_KEY_ARN) {
     process.stderr.write(
       '❌ [Config] Cannot specify both AGENT_SECRET_KEY and AGENT_SECRET_KEY_ARN.\n'
+    );
+    process.exit(1);
+  }
+  if (process.env.NANO_SEED && process.env.NANO_SEED_ARN) {
+    process.stderr.write('❌ [Config] Cannot specify both NANO_SEED and NANO_SEED_ARN.\n');
+    process.exit(1);
+  }
+  if (
+    process.env.NANO_ENABLED === 'true' &&
+    !process.env.NANO_SEED &&
+    !process.env.NANO_SEED_ARN
+  ) {
+    process.stderr.write(
+      '❌ [Config] NANO_SEED or NANO_SEED_ARN is required when NANO_ENABLED=true.\n'
     );
     process.exit(1);
   }
@@ -1077,6 +1094,38 @@ export async function loadConfig(): Promise<AgentConfig> {
     }
   }
 
+  if (process.env.NANO_SEED_ARN) {
+    try {
+      const arn = process.env.NANO_SEED_ARN;
+      const secret = await fetchSecretFromArn(arn);
+      let parsedSeed = secret;
+      try {
+        const json = JSON.parse(secret);
+        if (json && typeof json === 'object' && !Array.isArray(json)) {
+          const candidate = json.NANO_SEED;
+          if (typeof candidate === 'string') {
+            parsedSeed = candidate;
+          } else {
+            const firstValue = Object.values(json).find(
+              (value): value is string => typeof value === 'string'
+            );
+            if (firstValue) {
+              parsedSeed = firstValue;
+            }
+          }
+        }
+      } catch {
+        // Not a JSON object, use raw string
+      }
+      process.env.NANO_SEED = parsedSeed;
+    } catch (err: any) {
+      process.stderr.write(
+        `❌ [Config] Failed to fetch Nano seed from AWS Secrets Manager (ARN: ${process.env.NANO_SEED_ARN}): ${err.message}\n`
+      );
+      process.exit(1);
+    }
+  }
+
   return parseConfigAndDerive();
 }
 
@@ -1091,7 +1140,7 @@ if (process.env.AGENT_SECRET_KEY && process.env.AGENT_SECRET_KEY_ARN) {
   process.stderr.write(
     '❌ [Config] Cannot specify both AGENT_SECRET_KEY and AGENT_SECRET_KEY_ARN.\n'
   );
-} else if (process.env.AGENT_SECRET_KEY && !process.env.AGENT_SECRET_KEY_ARN) {
+} else if (process.env.AGENT_SECRET_KEY && !process.env.AGENT_SECRET_KEY_ARN && !process.env.NANO_SEED_ARN) {
   try {
     _config = loadConfigSync();
   } catch (err: any) {
@@ -1129,7 +1178,16 @@ export const configPromise = {
   finally: (onfinally?: (() => void) | null) => ensureConfigPromise().finally(onfinally),
 } as PromiseLike<AgentConfig>;
 
-// ─── LLM Provider Helper ───────────────────────────────────────────────────
+// ─── Secret / LLM Provider Helpers ──────────────────────────────────────────
+
+/**
+ * Gets the Nano seed from the environment (#975).
+ * The seed is NEVER exposed on the config object or accepted in task payloads.
+ * @returns The Nano seed or undefined if not configured
+ */
+export function getNanoSeed(): string | undefined {
+  return process.env.NANO_SEED;
+}
 
 /**
  * Gets the LLM API key from the environment.

@@ -452,7 +452,6 @@ export type TaskPayloadMap = {
     recipient: string;
     amountRaw: string;
     senderAccount?: string;
-    senderSeed?: string;
     rpcUrl?: string;
     skipPrecheck?: boolean;
   };
@@ -781,7 +780,7 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
     this.sorobanEventIndexerTool = new SorobanEventIndexerTool();
     this.stellarIdentityTool = new StellarIdentityTool(this.signer);
     this.friendBotTool = new FriendBotTool();
-    this.nanoPaymentTool = new NanoPaymentTool();
+    this.nanoPaymentTool = new NanoPaymentTool(this.signer);
 
     for (const tool of createBuiltinTools(this.signer)) {
       this.registerTool(tool);

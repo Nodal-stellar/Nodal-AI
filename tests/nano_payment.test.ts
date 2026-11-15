@@ -4,9 +4,10 @@
  * Tests for NanoPaymentTool feeless settlement rail beside Stellar (#715).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import axios from 'axios';
 import { NanoPaymentTool, NanoPaymentInputSchema } from '../backend/tools/NanoPaymentTool';
+import { ConfigError, ValidationError } from '../backend/errors';
 
 vi.mock('axios');
 
@@ -15,10 +16,21 @@ describe('NanoPaymentTool — Feeless settlement rail (#715)', () => {
   const VALID_NANO_ADDR = 'nano_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3';
   const VALID_XRB_ADDR = 'xrb_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3';
   const SUB_CENT_RAW = '1000000000000000000000000'; // 0.000001 XNO (sub-cent micro-payment)
+  const TEST_SEED = 'a'.repeat(64);
+  const originalNanoSeed = process.env.NANO_SEED;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.NANO_SEED = TEST_SEED;
     tool = new NanoPaymentTool();
+  });
+
+  afterEach(() => {
+    if (originalNanoSeed === undefined) {
+      delete process.env.NANO_SEED;
+    } else {
+      process.env.NANO_SEED = originalNanoSeed;
+    }
   });
 
   describe('Input validation', () => {
@@ -34,6 +46,24 @@ describe('NanoPaymentTool — Feeless settlement rail (#715)', () => {
         amountRaw: '1',
       });
       expect(parsedXrb.recipient).toBe(VALID_XRB_ADDR);
+    });
+
+    it('rejects payloads containing senderSeed (#975)', async () => {
+      expect(() =>
+        NanoPaymentInputSchema.parse({
+          recipient: VALID_NANO_ADDR,
+          amountRaw: SUB_CENT_RAW,
+          senderSeed: TEST_SEED,
+        })
+      ).toThrow();
+
+      await expect(
+        tool.execute({
+          recipient: VALID_NANO_ADDR,
+          amountRaw: SUB_CENT_RAW,
+          senderSeed: TEST_SEED,
+        })
+      ).rejects.toThrow(ValidationError);
     });
 
     it('rejects invalid recipient addresses', () => {
@@ -130,6 +160,19 @@ describe('NanoPaymentTool — Feeless settlement rail (#715)', () => {
 
       expect(result.precheckPassed).toBe(true);
       expect(result.blockHash).toBeDefined();
+    });
+
+    it('fails with ConfigError when neither NANO_SEED nor Signer is configured (#975)', async () => {
+      delete process.env.NANO_SEED;
+      const unconfiguredTool = new NanoPaymentTool();
+
+      await expect(
+        unconfiguredTool.execute({
+          recipient: VALID_NANO_ADDR,
+          amountRaw: SUB_CENT_RAW,
+          skipPrecheck: true,
+        })
+      ).rejects.toThrow(ConfigError);
     });
   });
 });

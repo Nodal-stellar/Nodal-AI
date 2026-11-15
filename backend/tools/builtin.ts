@@ -55,7 +55,7 @@ const NoInputSchema = z.unknown();
 export function createBuiltinTools(signer: Signer = createAgentSigner()): AgentTool<any, any>[] {
   // Tools receive the agent-owned Signer, never the secret key itself, so the
   // raw secret is not copied into every tool instance.
-  const nanoPaymentTool = new NanoPaymentTool();
+  const nanoPaymentTool = new NanoPaymentTool(signer);
   const paymentTool = new StellarPaymentTool(signer);
   const sorobanTool = new SorobanInvokeTool(signer);
   const sorobanQueryTool = new SorobanQueryTool(signer);
