@@ -56,9 +56,11 @@ import { config, MAINNET_SPENDING_CAP } from '../config';
 import { createLogger } from '../utils/logger';
 import { toCaip2 } from '../network';
 import { spendingTracker } from '../spending_tracker';
-import { PolicyViolationError } from '../errors';
+import { PolicyViolationError, RpcUnavailableError } from '../errors';
 import type { Signer } from '../signer';
 import { sorobanServer } from '../rpc_client';
+
+export { RpcUnavailableError };
 
 const log = createLogger('x402-client');
 
@@ -81,7 +83,7 @@ const DEFAULT_AUTH_EXPIRY_LEDGERS = 50;
  * because the Exact scheme's client role only signs auth entries; the
  * facilitator signs and submits the outer transaction.
  */
-class NodalClientStellarSigner implements ClientStellarSigner {
+export class NodalClientStellarSigner implements ClientStellarSigner {
   readonly address: string;
 
   constructor(private readonly signer: Signer) {
@@ -96,16 +98,16 @@ class NodalClientStellarSigner implements ClientStellarSigner {
     // Deserialise the incoming base64 XDR → SorobanAuthorizationEntry
     const entry = xdr.SorobanAuthorizationEntry.fromXDR(entryXdr, 'base64');
 
-    // Derive the ledger expiry: current ledger + buffer
+    // Derive the ledger expiry: current ledger + buffer (#923)
     let validUntilLedgerSeq: number;
     try {
       const latestLedger = await sorobanServer.getLatestLedger();
       validUntilLedgerSeq = latestLedger.sequence + DEFAULT_AUTH_EXPIRY_LEDGERS;
-    } catch {
-      // If we cannot fetch the ledger, use a reasonable absolute value.
-      // ExactStellarScheme will re-simulate and may override this.
-      validUntilLedgerSeq = 0;
-      log.warn('Could not fetch latest ledger for auth entry expiry; using 0');
+    } catch (err) {
+      throw new RpcUnavailableError(
+        `Could not fetch latest ledger from Soroban RPC for x402 auth entry expiry: ${err instanceof Error ? err.message : String(err)}`,
+        err
+      );
     }
 
     const signed = await this.signer.signAuthEntry(
@@ -355,6 +357,9 @@ export class X402FetchClient {
       paymentPayload = await this.httpClient.createPaymentPayload(paymentRequired);
     } catch (err) {
       spendingTracker.release(reservationId);
+      if (err instanceof RpcUnavailableError) {
+        throw err;
+      }
       throw new Error(
         `x402 v2: failed to create payment payload for ${urlStr}: ${err instanceof Error ? err.message : String(err)}`
       );

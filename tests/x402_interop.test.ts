@@ -12,7 +12,12 @@ import type { Keypair } from '@stellar/stellar-sdk';
 import { config, AgentConfig } from '../backend/config';
 import { X402PaymentTool } from '../backend/tools/X402PaymentTool';
 import { createX402Middleware } from '../backend/x402/server';
-import { X402FetchClient } from '../backend/x402/client';
+import {
+  X402FetchClient,
+  NodalClientStellarSigner,
+  RpcUnavailableError,
+} from '../backend/x402/client';
+import { sorobanServer } from '../backend/rpc_client';
 import { StellarPaymentTool } from '../backend/tools/StellarPaymentTool';
 import Database from 'better-sqlite3';
 import { _setDb } from '../backend/persistence';
@@ -371,6 +376,48 @@ describe('x402 v2 Interoperability', () => {
       await expect(buyer().fetch(PAID_URL)).rejects.toThrow(/failed to create payment payload/);
 
       expect(spendingTracker.total()).toBe(0);
+    });
+
+    it('releases the reservation and propagates RpcUnavailableError when Soroban RPC is unreachable (#923)', async () => {
+      const rpcError = new RpcUnavailableError('Soroban RPC connection refused');
+      httpClient.createPaymentPayload.mockRejectedValue(rpcError);
+      stubPaidServer();
+
+      await expect(buyer().fetch(PAID_URL)).rejects.toThrow(RpcUnavailableError);
+
+      expect(spendingTracker.total()).toBe(0);
+    });
+
+    it('throws RpcUnavailableError and does not sign with ledger 0 when getLatestLedger fails (#923)', async () => {
+      const { xdr } = await import('@stellar/stellar-sdk');
+      const fakeEntry = {} as InstanceType<typeof xdr.SorobanAuthorizationEntry>;
+      const fromXdrSpy = vi
+        .spyOn(xdr.SorobanAuthorizationEntry, 'fromXDR')
+        .mockReturnValue(fakeEntry);
+      const getLatestLedgerSpy = vi
+        .spyOn(sorobanServer, 'getLatestLedger')
+        .mockRejectedValue(new Error('ECONNREFUSED'));
+
+      const signAuthEntryMock = vi.fn();
+      const mockSigner = {
+        publicKey: () => AGENT_ADDRESS,
+        signAuthEntry: signAuthEntryMock,
+      } as unknown as Signer;
+
+      const adapter = new NodalClientStellarSigner(mockSigner);
+
+      try {
+        await expect(
+          adapter.signAuthEntry('AAAA', {
+            networkPassphrase: 'Test SDF Network ; September 2015',
+          })
+        ).rejects.toThrow(RpcUnavailableError);
+
+        expect(signAuthEntryMock).not.toHaveBeenCalled();
+      } finally {
+        fromXdrSpy.mockRestore();
+        getLatestLedgerSpy.mockRestore();
+      }
     });
 
     it('needs no facilitator: settlement is the seller side of the protocol', async () => {

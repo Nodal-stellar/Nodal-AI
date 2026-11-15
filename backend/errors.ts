@@ -64,6 +64,13 @@ export class NetworkTimeoutError extends StructuredError {
   }
 }
 
+export class RpcUnavailableError extends StructuredError {
+  constructor(message: string, cause?: unknown) {
+    super(message, ErrorType.NetworkTimeout, cause);
+    Object.setPrototypeOf(this, RpcUnavailableError.prototype);
+  }
+}
+
 export class ValidationError extends StructuredError {
   constructor(message: string, cause?: unknown) {
     super(message, ErrorType.ValidationError, cause);
