@@ -10,7 +10,7 @@
  */
 
 import { execSync } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 
 interface CheckResult {
   name: string;
@@ -200,6 +200,26 @@ function checkEnvFile(): CheckResult {
       found: false,
       details: 'Run `npm run setup` to create one from .env.example',
     };
+  }
+
+  try {
+    const envContents = readFileSync(envPath, 'utf-8');
+    const configuredKeys = new Set(
+      [...envContents.matchAll(/^\s*([A-Z0-9_]+)=/gm)].map((m) => m[1]!)
+    );
+    const exampleContents = existsSync('.env.example') ? readFileSync('.env.example', 'utf-8') : '';
+    const allSchemaKeys = [...exampleContents.matchAll(/^#?\s*([A-Z0-9_]+)=/gm)].map((m) => m[1]!);
+    const missingOptional = [...new Set(allSchemaKeys)].filter((k) => !configuredKeys.has(k));
+    if (missingOptional.length > 0) {
+      return {
+        name: '.env file',
+        required: false,
+        found: true,
+        details: `Optional keys not set (using defaults): ${missingOptional.join(', ')}`,
+      };
+    }
+  } catch {
+    // Ignore read errors and report .env found
   }
 
   return {

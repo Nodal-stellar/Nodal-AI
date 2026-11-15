@@ -89,3 +89,20 @@ describe('TaskType documentation stays in sync with the registry', () => {
     expect(sorted(templateTaskTypes())).toEqual(sorted(registry));
   });
 });
+
+describe('.env.example stays in sync with EnvSchema (#1000)', () => {
+  it('documents every non-derived EnvSchema key in .env.example', () => {
+    const configSrc = read('backend/config.ts');
+    const schemaMatch = configSrc.match(/export const EnvSchema = z\.object\(\{([\s\S]*?)\n\}\);/);
+    if (!schemaMatch) throw new Error('EnvSchema not found in backend/config.ts');
+    const schemaKeys = [...schemaMatch[1]!.matchAll(/^ {2}([A-Z0-9_]+):/gm)].map((m) => m[1]!);
+
+    const envExample = read('.env.example');
+    const documentedKeys = new Set(
+      [...envExample.matchAll(/^#?\s*([A-Z0-9_]+)=/gm)].map((m) => m[1]!)
+    );
+
+    const missing = schemaKeys.filter((k) => !documentedKeys.has(k));
+    expect(missing).toEqual([]);
+  });
+});
