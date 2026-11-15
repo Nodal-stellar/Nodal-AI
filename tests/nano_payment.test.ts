@@ -4,9 +4,16 @@
  * Tests for NanoPaymentTool feeless settlement rail beside Stellar (#715).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import axios from 'axios';
-import { NanoPaymentTool, NanoPaymentInputSchema } from '../backend/tools/NanoPaymentTool';
+import {
+  NanoPaymentTool,
+  NanoPaymentInputSchema,
+  nanoRawToXno,
+  NANO_RAW_PER_XNO,
+} from '../backend/tools/NanoPaymentTool';
+import { spendingTracker } from '../backend/spending_tracker';
+import { config } from '../backend/config';
 
 vi.mock('axios');
 
@@ -18,7 +25,14 @@ describe('NanoPaymentTool — Feeless settlement rail (#715)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    spendingTracker._resetForTests();
+    (config.SPENDING_LIMITS_MAP as Map<string, string>).clear();
     tool = new NanoPaymentTool();
+  });
+
+  afterEach(() => {
+    spendingTracker._resetForTests();
+    (config.SPENDING_LIMITS_MAP as Map<string, string>).clear();
   });
 
   describe('Input validation', () => {
@@ -130,6 +144,40 @@ describe('NanoPaymentTool — Feeless settlement rail (#715)', () => {
 
       expect(result.precheckPassed).toBe(true);
       expect(result.blockHash).toBeDefined();
+    });
+
+    it('converts raw amounts to XNO and enforces SPENDING_LIMITS="XNO:1" (#977)', async () => {
+      expect(nanoRawToXno(NANO_RAW_PER_XNO.toString())).toBe('1.0000000');
+      expect(nanoRawToXno((2n * NANO_RAW_PER_XNO).toString())).toBe('2.0000000');
+
+      (config.SPENDING_LIMITS_MAP as Map<string, string>).set('XNO', '1');
+
+      // A 2 XNO payment is blocked by SPENDING_LIMITS='XNO:1'
+      await expect(
+        tool.execute({
+          recipient: VALID_NANO_ADDR,
+          amountRaw: (2n * NANO_RAW_PER_XNO).toString(),
+          skipPrecheck: true,
+        })
+      ).rejects.toThrow(/exceeds limit 1\.0000000/);
+
+      // A 1 XNO payment succeeds and is recorded under asset key 'XNO'
+      const ok = await tool.execute({
+        recipient: VALID_NANO_ADDR,
+        amountRaw: NANO_RAW_PER_XNO.toString(),
+        skipPrecheck: true,
+      });
+      expect(ok.amountRaw).toBe(NANO_RAW_PER_XNO.toString());
+      expect(spendingTracker.totalForAsset('XNO')).toBe(10_000_000n);
+
+      // A subsequent Nano payment in the same window is rejected because the 1 XNO cap is reached
+      await expect(
+        tool.execute({
+          recipient: VALID_NANO_ADDR,
+          amountRaw: SUB_CENT_RAW,
+          skipPrecheck: true,
+        })
+      ).rejects.toThrow(/exceeds limit 1\.0000000/);
     });
   });
 });
