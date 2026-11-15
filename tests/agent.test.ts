@@ -1661,8 +1661,30 @@ describe('PayFiAgent — kill switch (#743)', () => {
     expect(result.errorType).toBeUndefined();
   });
 
+  it('rejects nano_payment with errorType AGENT_PAUSED while paused (#948)', async () => {
+    vi.mocked(isPaused).mockReturnValue(true);
+
+    const result = await agent.run({
+      type: 'nano_payment',
+      payload: {
+        recipient: 'nano_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3',
+        amountRaw: '1000000000000000000000000',
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.errorType).toBe(ErrorType.AgentPaused);
+    expect(result.error).toMatch(/Agent is paused/);
+  });
+
   it('classifies signing tasks as value-moving and lookups as read-only', () => {
-    for (const type of ['stellar_payment', 'x402_respond', 'soroban_invoke', 'swap'] as const) {
+    for (const type of [
+      'nano_payment',
+      'stellar_payment',
+      'x402_respond',
+      'soroban_invoke',
+      'swap',
+    ] as const) {
       expect(VALUE_MOVING_TASK_TYPES.has(type)).toBe(true);
     }
     for (const type of [
