@@ -18,8 +18,27 @@ import * as crypto from 'crypto';
 import { ValidationError } from '../errors';
 import { createLogger } from '../utils/logger';
 import { config } from '../config';
+import { assetKey, spendingTracker } from '../spending_tracker';
 
 const log = createLogger('nano-payment-tool');
+
+/** 1 XNO = 10^30 raw units */
+export const NANO_RAW_PER_XNO = 10n ** 30n;
+const NANO_RAW_PER_STROOP = 10n ** 23n;
+
+/**
+ * Convert a raw Nano amount string (1 XNO = 10^30 raw) into a 7-decimal XNO
+ * string suitable for `spendingTracker` (#977). Sub-stroop positive amounts
+ * round up to 0.0000001 XNO so micro-payments still reserve non-zero quota.
+ */
+export function nanoRawToXno(amountRaw: string): string {
+  const raw = BigInt(amountRaw);
+  if (raw <= 0n) return '0.0000000';
+  const stroops = (raw + NANO_RAW_PER_STROOP - 1n) / NANO_RAW_PER_STROOP;
+  const whole = stroops / 10_000_000n;
+  const frac = (stroops % 10_000_000n).toString().padStart(7, '0');
+  return `${whole}.${frac}`;
+}
 
 /** Standard Nano address regex matching nano_ or legacy xrb_ 60-character base32 strings */
 export const NANO_ADDRESS_REGEX = /^(nano|xrb)_[13456789abcdefghijkmnopqrstuwxyz]{60}$/;
@@ -136,57 +155,68 @@ export class NanoPaymentTool {
     const input = parsed.data;
     const rpcUrl = input.rpcUrl || this.defaultRpcUrl;
 
-    log.info(
-      { recipient: input.recipient, amountRaw: input.amountRaw },
-      'Executing feeless Nano micro-payment'
-    );
+    // Reserve spend in XNO against the rolling spending window (#977)
+    const xnoAmount = nanoRawToXno(input.amountRaw);
+    const reservationId = spendingTracker.reserve(xnoAmount, assetKey('XNO'));
 
-    // Simulation gate pre-check
-    let precheckPassed = false;
-    if (!input.skipPrecheck) {
-      precheckPassed = await this.precheckRecipient(input.recipient, rpcUrl);
-    } else {
-      precheckPassed = true;
-    }
-
-    // Generate block hash receipt for send block
-    const blockHash = this.generateBlockHash(
-      input.recipient,
-      input.amountRaw,
-      input.senderSeed || this.defaultSeed || 'default-seed'
-    );
-
-    // Broadcast send block to Nano node RPC if available
     try {
-      await axios.post(
-        rpcUrl,
-        {
-          action: 'process',
-          json_block: 'true',
-          subtype: 'send',
-          block: {
-            type: 'state',
-            account:
-              input.senderAccount ||
-              'nano_1nodalaiagent111111111111111111111111111111111111111111111111',
-            link: input.recipient,
-            amount: input.amountRaw,
-          },
-        },
-        { timeout: 5000 }
+      log.info(
+        { recipient: input.recipient, amountRaw: input.amountRaw, xnoAmount },
+        'Executing feeless Nano micro-payment'
       );
-    } catch {
-      // If RPC is unreachable in local/mock environments, the signed block hash receipt is still returned
-      log.info({ blockHash }, 'Nano block processed / hash generated');
-    }
 
-    return {
-      blockHash,
-      recipient: input.recipient,
-      amountRaw: input.amountRaw,
-      network: 'nano',
-      precheckPassed,
-      timestamp: new Date().toISOString(),
-    };
+      // Simulation gate pre-check
+      let precheckPassed = false;
+      if (!input.skipPrecheck) {
+        precheckPassed = await this.precheckRecipient(input.recipient, rpcUrl);
+      } else {
+        precheckPassed = true;
+      }
+
+      // Generate block hash receipt for send block
+      const blockHash = this.generateBlockHash(
+        input.recipient,
+        input.amountRaw,
+        input.senderSeed || this.defaultSeed || 'default-seed'
+      );
+
+      // Broadcast send block to Nano node RPC if available
+      try {
+        await axios.post(
+          rpcUrl,
+          {
+            action: 'process',
+            json_block: 'true',
+            subtype: 'send',
+            block: {
+              type: 'state',
+              account:
+                input.senderAccount ||
+                'nano_1nodalaiagent111111111111111111111111111111111111111111111111',
+              link: input.recipient,
+              amount: input.amountRaw,
+            },
+          },
+          { timeout: 5000 }
+        );
+      } catch {
+        // If RPC is unreachable in local/mock environments, the signed block hash receipt is still returned
+        log.info({ blockHash }, 'Nano block processed / hash generated');
+      }
+
+      spendingTracker.commit(reservationId);
+
+      return {
+        blockHash,
+        recipient: input.recipient,
+        amountRaw: input.amountRaw,
+        network: 'nano',
+        precheckPassed,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (err) {
+      spendingTracker.release(reservationId);
+      throw err;
+    }
   }
 }
