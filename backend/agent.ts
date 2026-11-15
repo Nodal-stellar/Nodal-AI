@@ -731,6 +731,7 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
     resolve: (result: AgentResult) => void;
   }> = [];
   private _streamStop: (() => void) | null = null;
+  private readonly _paymentListeners = new Set<(challenge: X402Challenge) => void>();
   private _contractListenerStop: (() => void) | null = null;
   private _storageWatcherStop: (() => void) | null = null;
 
@@ -824,50 +825,65 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
   /**
    * Start polling the Horizon payment stream for incoming x402 challenges.
    * Calls onChallenge for each payment whose memo starts with "x402:".
+   * Returns an unsubscribe function that removes only this listener (#943).
    */
-  startListening(resourceUrl: string, onChallenge: (challenge: X402Challenge) => void): void {
-    if (this._streamStop) return; // already listening
+  startListening(resourceUrl: string, onChallenge: (challenge: X402Challenge) => void): () => void {
+    this._paymentListeners.add(onChallenge);
 
-    const closeStream = horizonServer
-      .payments()
-      .forAccount(config.AGENT_PUBLIC_KEY)
-      .stream({
-        onmessage: (payment: any) => {
-          const memo: string = payment.memo ?? '';
-          if (!memo.startsWith('x402:')) return;
-          try {
-            const raw: unknown = JSON.parse(Buffer.from(memo.slice(5), 'base64').toString('utf8'));
-            const challenge: X402Challenge = X402ChallengeSchema.parse(raw);
-            onChallenge(challenge);
-          } catch (err) {
-            // Malformed or schema-invalid memo — log and drop rather than
-            // forwarding to onChallenge (or letting Zod's error surface
-            // deep inside respond(), where it can't be attributed to the
-            // stream that produced it).
-            logger.warn(
-              {
-                error: err instanceof Error ? err.message : String(err),
-              },
-              'Dropped invalid x402 challenge memo'
-            );
-          }
-        },
-        onerror: (event: MessageEvent) => {
-          logger.warn({ error: String(event) }, 'Payment stream error');
-          // The underlying connection is dead — tear it down so `_streamStop`
-          // doesn't keep pointing at a broken stream forever, which would
-          // otherwise permanently block a future startListening() call (its
-          // early-return guard only checks whether `_streamStop` is set).
-          this.stopListening();
-        },
-      });
+    if (!this._streamStop) {
+      const closeStream = horizonServer
+        .payments()
+        .forAccount(config.AGENT_PUBLIC_KEY)
+        .stream({
+          onmessage: (payment: any) => {
+            const memo: string = payment.memo ?? '';
+            if (!memo.startsWith('x402:')) return;
+            try {
+              const raw: unknown = JSON.parse(
+                Buffer.from(memo.slice(5), 'base64').toString('utf8')
+              );
+              const challenge: X402Challenge = X402ChallengeSchema.parse(raw);
+              for (const listener of [...this._paymentListeners]) {
+                listener(challenge);
+              }
+            } catch (err) {
+              // Malformed or schema-invalid memo — log and drop rather than
+              // forwarding to onChallenge (or letting Zod's error surface
+              // deep inside respond(), where it can't be attributed to the
+              // stream that produced it).
+              logger.warn(
+                {
+                  error: err instanceof Error ? err.message : String(err),
+                },
+                'Dropped invalid x402 challenge memo'
+              );
+            }
+          },
+          onerror: (event: MessageEvent) => {
+            logger.warn({ error: String(event) }, 'Payment stream error');
+            // The underlying connection is dead — tear it down so `_streamStop`
+            // doesn't keep pointing at a broken stream forever, which would
+            // otherwise permanently block a future startListening() call (its
+            // early-return guard only checks whether `_streamStop` is set).
+            this.stopListening();
+          },
+        });
 
-    this._streamStop = closeStream as unknown as () => void;
-    logger.info({ resourceUrl }, 'Payment stream started');
+      this._streamStop = closeStream as unknown as () => void;
+      logger.info({ resourceUrl }, 'Payment stream started');
+    }
+
+    return () => {
+      this._paymentListeners.delete(onChallenge);
+      if (this._paymentListeners.size === 0) {
+        this.stopListening();
+      }
+    };
   }
 
   /** Stop the active Horizon payment stream subscription. */
   stopListening(): void {
+    this._paymentListeners.clear();
     if (this._streamStop) {
       this._streamStop();
       this._streamStop = null;
@@ -888,12 +904,20 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
     contractId: string,
     eventTypes: string[],
     onEvent: (event: rpc.Api.EventResponse) => void
-  ): void {
+  ): () => void {
     if (this._contractListenerStop) {
       this._contractListenerStop();
     }
-    this._contractListenerStop = listenContractEvents(contractId, eventTypes, onEvent);
+    const stop = listenContractEvents(contractId, eventTypes, onEvent);
+    this._contractListenerStop = stop;
     logger.info({ contractId }, 'Contract event listener started');
+    return () => {
+      stop();
+      if (this._contractListenerStop === stop) {
+        this._contractListenerStop = null;
+        logger.info('Contract event listener stopped');
+      }
+    };
   }
 
   /** Stop the active contract event listener. */
@@ -912,14 +936,22 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
   startStorageWatcher(
     options: ContractStorageWatcherOptions,
     onChange: (event: StorageChangeEvent) => void
-  ): void {
+  ): () => void {
     if (this._storageWatcherStop) {
       this._storageWatcherStop();
     }
     const handle = watchContractStorage(options);
     handle.on('change', onChange);
-    this._storageWatcherStop = handle.stop;
+    const stop = handle.stop;
+    this._storageWatcherStop = stop;
     logger.info({ contractId: options.contractId }, 'Contract storage watcher started');
+    return () => {
+      stop();
+      if (this._storageWatcherStop === stop) {
+        this._storageWatcherStop = null;
+        logger.info('Contract storage watcher stopped');
+      }
+    };
   }
 
   /** Stop the active contract storage watcher. */

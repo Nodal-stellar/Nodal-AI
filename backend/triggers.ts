@@ -142,9 +142,9 @@ function matchesFilter(event: unknown, filter: TriggerFilter): boolean {
 export class TriggerManager {
   private triggers: Map<string, Trigger> = new Map();
   private agent: PayFiAgent;
-  private unlistenPayment?: () => void;
-  private unlistenContract?: () => void;
-  private unlistenStorage?: () => void;
+  private unlistenPayment?: (() => void) | undefined;
+  private unlistenContract?: (() => void) | undefined;
+  private unlistenStorage?: (() => void) | undefined;
 
   constructor(agent: PayFiAgent) {
     this.agent = agent;
@@ -167,7 +167,8 @@ export class TriggerManager {
   }
 
   private setupPaymentListener(): void {
-    this.agent.startListening('trigger', async (challenge) => {
+    this.unlistenPayment?.();
+    this.unlistenPayment = this.agent.startListening('trigger', async (challenge) => {
       const payment = {
         assetCode: challenge.assetCode,
         from: challenge.payTo, // Incoming payment
@@ -265,12 +266,15 @@ export class TriggerManager {
   }
 
   /**
-   * Stop all listeners and cleanup.
+   * Stop all listeners registered by TriggerManager and cleanup.
    */
   stop(): void {
-    this.agent.stopListening();
-    this.agent.stopContractListener();
-    this.agent.stopStorageWatcher();
+    this.unlistenPayment?.();
+    this.unlistenPayment = undefined;
+    this.unlistenContract?.();
+    this.unlistenContract = undefined;
+    this.unlistenStorage?.();
+    this.unlistenStorage = undefined;
     this.triggers.clear();
     log.info('TriggerManager stopped');
   }
