@@ -9,14 +9,18 @@ import { PayFiAgent, AgentTask } from './agent';
 import { config } from './config';
 import { createLogger } from './utils/logger';
 import { getDb } from './persistence';
+import { toStroops, tryToStroops } from './utils/amount';
+import { isValidStellarPublicKey } from './utils/stellarSchemas';
 
 const log = createLogger('triggers');
 
 export type TriggerSource = 'payment' | 'contract_event' | 'storage_change';
 
 export interface TriggerFilter {
-  /** Filter by source asset code (e.g., 'USDC') */
+  /** Filter by source asset code (e.g., 'USDC' or 'XLM') */
   assetCode?: string;
+  /** Filter by asset issuer G-address (required when assetCode is non-native, #940) */
+  assetIssuer?: string;
   /** Filter by sender public key */
   from?: string;
   /** Filter by amount threshold */
@@ -38,6 +42,26 @@ export interface Trigger {
   enabled: boolean;
   createdAt: string;
   lastFiredAt?: string;
+}
+
+/**
+ * Validate trigger filter at creation time (#940).
+ * Non-native asset filters must include a valid Stellar issuer public key.
+ */
+function validateTriggerFilter(filter: TriggerFilter): void {
+  if (filter.assetCode && filter.assetCode !== 'XLM') {
+    if (!filter.assetIssuer || !isValidStellarPublicKey(filter.assetIssuer)) {
+      throw new Error(
+        `Trigger filter for non-native asset "${filter.assetCode}" requires a valid assetIssuer (G…)`
+      );
+    }
+  } else if (filter.assetIssuer !== undefined && !isValidStellarPublicKey(filter.assetIssuer)) {
+    throw new Error('Trigger filter assetIssuer must be a valid Stellar public key (G…)');
+  }
+
+  if (filter.minAmount !== undefined) {
+    toStroops(filter.minAmount);
+  }
 }
 
 /**
@@ -104,14 +128,23 @@ async function recordTriggerFired(triggerId: string, eventId: string): Promise<b
 }
 
 /**
- * Check if event matches trigger filter.
+ * Check if event matches trigger filter (#940).
  */
-function matchesFilter(event: unknown, filter: TriggerFilter): boolean {
+export function matchesFilter(event: unknown, filter: TriggerFilter): boolean {
   const e = event as Record<string, unknown>;
 
   if (filter.assetCode) {
     const eventAsset = (e.assetCode as string) ?? (e.asset as string);
     if (eventAsset !== filter.assetCode) return false;
+
+    if (filter.assetCode !== 'XLM') {
+      if (!filter.assetIssuer) return false;
+      const eventIssuer = (e.assetIssuer as string) ?? (e.issuer as string);
+      if (eventIssuer !== filter.assetIssuer) return false;
+    }
+  } else if (filter.assetIssuer) {
+    const eventIssuer = (e.assetIssuer as string) ?? (e.issuer as string);
+    if (eventIssuer !== filter.assetIssuer) return false;
   }
 
   if (filter.from) {
@@ -119,9 +152,11 @@ function matchesFilter(event: unknown, filter: TriggerFilter): boolean {
   }
 
   if (filter.minAmount) {
-    const eventAmount = parseFloat(String(e.amount ?? e.value ?? '0'));
-    const minAmount = parseFloat(filter.minAmount);
-    if (eventAmount < minAmount) return false;
+    const eventStroops = tryToStroops(String(e.amount ?? e.value ?? '0'));
+    const minStroops = tryToStroops(filter.minAmount);
+    if (eventStroops === null || minStroops === null || eventStroops < minStroops) {
+      return false;
+    }
   }
 
   if (filter.contractId) {
@@ -170,6 +205,7 @@ export class TriggerManager {
     this.agent.startListening('trigger', async (challenge) => {
       const payment = {
         assetCode: challenge.assetCode,
+        assetIssuer: challenge.assetIssuer,
         from: challenge.payTo, // Incoming payment
         amount: challenge.amount,
       };
@@ -183,13 +219,13 @@ export class TriggerManager {
         const isNew = await recordTriggerFired(id, eventId);
         if (!isNew) continue;
 
-        // Check spending limit before execution
+        // Check spending limit before execution using BigInt stroops (#940)
         const p = trigger.task.payload as Record<string, unknown>;
         if (p.amount) {
-          const limit = parseFloat(config.AGENT_SPENDING_LIMIT);
-          const amount = parseFloat(String(p.amount));
-          if (amount > limit) {
-            log.warn({ triggerId: id, amount }, 'Trigger exceeds spending limit');
+          const limitStroops = toStroops(config.AGENT_SPENDING_LIMIT);
+          const amountStroops = tryToStroops(String(p.amount));
+          if (amountStroops === null || amountStroops > limitStroops) {
+            log.warn({ triggerId: id, amount: p.amount }, 'Trigger exceeds spending limit');
             continue;
           }
         }
@@ -220,6 +256,8 @@ export class TriggerManager {
     filter: TriggerFilter;
     task: AgentTask;
   }): Promise<Trigger> {
+    validateTriggerFilter(options.filter);
+
     const trigger: Trigger = {
       id: `trig_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
       source: options.source,
