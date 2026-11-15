@@ -8,9 +8,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import * as http from 'http';
 import type { AddressInfo } from 'net';
+import type { Request, Response, NextFunction } from 'express';
+import { HTTPFacilitatorClient } from '@x402/core/server';
 import {
   buildOpenApiDocument,
   discoverPaymentOffers,
+  nodalPaywall,
   OPENAPI_DISCOVERY_PATH,
   readPaymentOffers,
   x402DiscoveryMiddleware,
@@ -20,8 +23,10 @@ import {
 vi.mock('../backend/config', () => ({
   config: {
     STELLAR_NETWORK: 'testnet',
+    AGENT_PUBLIC_KEY: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
     X402_ASSET_CODE: 'USDC',
     X402_ASSET_ISSUER: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+    X402_FACILITATOR_URL: 'https://facilitator.example.com',
   },
 }));
 
@@ -145,4 +150,81 @@ describe('x402DiscoveryMiddleware', () => {
     expect(readPaymentOffers(doc, 'GET', '/free')).toBeUndefined();
     expect(readPaymentOffers(doc, 'POST', '/data')).toBeUndefined();
   });
+});
+
+describe('nodalPaywall HTTP method coverage (#927)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each(['GET', 'POST', 'PUT', 'DELETE'])(
+    'returns 402 with PAYMENT-REQUIRED and does not call next() on unpaid %s requests',
+    async (method) => {
+      vi.spyOn(HTTPFacilitatorClient.prototype, 'getSupported').mockResolvedValue({
+        kinds: [
+          {
+            x402Version: 2,
+            scheme: 'exact',
+            network: 'stellar:testnet',
+          },
+        ],
+        extensions: [],
+        signers: {},
+      });
+
+      const middleware = nodalPaywall({
+        price: '0.01',
+        payTo: PAY_TO,
+        facilitatorUrl: 'https://facilitator.example.com',
+      });
+
+      const headers: Record<string, string> = {};
+      let statusCode = 200;
+      let bodySent: unknown;
+
+      const req = {
+        method,
+        path: '/generate',
+        originalUrl: '/generate',
+        protocol: 'https',
+        headers: { host: 'api.example.com' },
+        query: {},
+        body: {},
+        header: (name: string) => {
+          const lower = name.toLowerCase();
+          if (lower === 'accept') return 'application/json';
+          if (lower === 'user-agent') return 'NodalTest/1.0';
+          return undefined;
+        },
+      } as unknown as Request;
+
+      const res = {
+        status(code: number) {
+          statusCode = code;
+          return this;
+        },
+        setHeader(key: string, value: string) {
+          headers[key.toLowerCase()] = value;
+          return this;
+        },
+        json(payload: unknown) {
+          bodySent = payload;
+          return this;
+        },
+        send(payload: unknown) {
+          bodySent = payload;
+          return this;
+        },
+      } as unknown as Response;
+
+      const next = vi.fn() as unknown as NextFunction;
+
+      await middleware(req, res, next);
+
+      expect(statusCode).toBe(402);
+      expect(headers['payment-required']).toBeDefined();
+      expect(bodySent).toBeDefined();
+      expect(next).not.toHaveBeenCalled();
+    }
+  );
 });

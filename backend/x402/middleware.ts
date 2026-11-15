@@ -11,8 +11,8 @@
  * ```typescript
  * import { nodalPaywall } from './backend/x402/middleware';
  *
- * app.get(
- *   '/data',
+ * app.post(
+ *   '/generate',
  *   nodalPaywall({ price: '0.01', asset: 'USDC' }),
  *   handler,
  * );
@@ -170,11 +170,12 @@ export function nodalPaywall(
   const stellarScheme = new ExactStellarScheme();
   const schemes: SchemeRegistration[] = [{ network, server: stellarScheme }];
 
-  // Route key is a wildcard so the same middleware instance works regardless
-  // of the path it is mounted at.  The facilitator sees the full URL from the
-  // request, which uniquely identifies the resource.
+  // Route key uses method and path wildcards ('* *') so the same middleware
+  // instance gates GET, POST, PUT, DELETE, PATCH, etc. regardless of the path
+  // it is mounted at.  The facilitator sees the full URL from the request,
+  // which uniquely identifies the resource.
   const routes = {
-    'GET *': {
+    '* *': {
       accepts: {
         scheme: 'exact' as const,
         network,
