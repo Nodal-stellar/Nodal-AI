@@ -21,6 +21,9 @@ export interface Signer {
 
   /** Sign raw bytes with Ed25519 and return the 64-byte signature. */
   sign(data: Buffer): Promise<Buffer>;
+
+  /** Optional reachability / key-read probe for health checks (#1018). */
+  healthCheck?(): Promise<boolean>;
 }
 
 /**

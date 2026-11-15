@@ -191,6 +191,7 @@ describe('backend/server.ts — health check HTTP server', () => {
         horizon: 'up',
         soroban: 'up',
         database: 'up',
+        signer: 'up',
       });
       expect(res._headers['Content-Type']).toBe('application/json');
     });
@@ -251,6 +252,31 @@ describe('backend/server.ts — health check HTTP server', () => {
       const body = JSON.parse(res._body);
       expect(body.status).toBe('degraded');
       expect(body.components.database).toBe('down');
+    });
+
+    it('returns 503 with status "degraded" and signer: "down" when Vault is down (#1018)', async () => {
+      const { config } = await import('../backend/config');
+      const { _resetHealthSigner } = await import('../backend/server');
+      const prevBackend = (config as any).SIGNER_BACKEND;
+      (config as any).SIGNER_BACKEND = 'vault';
+      _resetHealthSigner();
+
+      try {
+        createHealthServer();
+        const req = makeReq('GET', '/health');
+        const res = makeRes();
+
+        capturedHandler!(req, res);
+        await vi.waitFor(() => expect(res._statusCode).not.toBe(0));
+
+        expect(res._statusCode).toBe(503);
+        const body = JSON.parse(res._body);
+        expect(body.status).toBe('degraded');
+        expect(body.components.signer).toBe('down');
+      } finally {
+        (config as any).SIGNER_BACKEND = prevBackend;
+        _resetHealthSigner();
+      }
     });
   });
 
