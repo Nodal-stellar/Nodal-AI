@@ -15,35 +15,36 @@
 import axios from 'axios';
 import { z } from 'zod';
 import * as crypto from 'crypto';
-import { ValidationError } from '../errors';
+import { ConfigError, ValidationError } from '../errors';
 import { createLogger } from '../utils/logger';
-import { config } from '../config';
+import { config, getNanoSeed } from '../config';
+import type { Signer } from '../signer';
 
 const log = createLogger('nano-payment-tool');
 
 /** Standard Nano address regex matching nano_ or legacy xrb_ 60-character base32 strings */
 export const NANO_ADDRESS_REGEX = /^(nano|xrb)_[13456789abcdefghijkmnopqrstuwxyz]{60}$/;
 
-export const NanoPaymentInputSchema = z.object({
-  /** Recipient nano_ or xrb_ address */
-  recipient: z
-    .string()
-    .regex(NANO_ADDRESS_REGEX, 'Invalid Nano address format (must start with nano_ or xrb_)'),
-  /** Raw amount in 10^-30 XNO units (1 Nano = 10^30 raw) */
-  amountRaw: z
-    .string()
-    .regex(/^\d+$/, 'amountRaw must be an unsigned integer string representing raw units')
-    // zod still runs this after a failed .regex(), and BigInt('0.001') throws.
-    .refine((v) => !/^\d+$/.test(v) || BigInt(v) > 0n, 'amountRaw must be greater than zero'),
-  /** Optional sender account (nano_ address) */
-  senderAccount: z.string().regex(NANO_ADDRESS_REGEX).optional(),
-  /** Optional externalized seed / private key (hex string) */
-  senderSeed: z.string().optional(),
-  /** Optional Nano node RPC URL */
-  rpcUrl: z.string().url().optional(),
-  /** Optional flag to bypass pre-check gate */
-  skipPrecheck: z.boolean().optional().default(false),
-});
+export const NanoPaymentInputSchema = z
+  .object({
+    /** Recipient nano_ or xrb_ address */
+    recipient: z
+      .string()
+      .regex(NANO_ADDRESS_REGEX, 'Invalid Nano address format (must start with nano_ or xrb_)'),
+    /** Raw amount in 10^-30 XNO units (1 Nano = 10^30 raw) */
+    amountRaw: z
+      .string()
+      .regex(/^\d+$/, 'amountRaw must be an unsigned integer string representing raw units')
+      // zod still runs this after a failed .regex(), and BigInt('0.001') throws.
+      .refine((v) => !/^\d+$/.test(v) || BigInt(v) > 0n, 'amountRaw must be greater than zero'),
+    /** Optional sender account (nano_ address) */
+    senderAccount: z.string().regex(NANO_ADDRESS_REGEX).optional(),
+    /** Optional Nano node RPC URL */
+    rpcUrl: z.string().url().optional(),
+    /** Optional flag to bypass pre-check gate */
+    skipPrecheck: z.boolean().optional().default(false),
+  })
+  .strict();
 
 export type NanoPaymentInput = z.infer<typeof NanoPaymentInputSchema>;
 
@@ -71,9 +72,14 @@ export interface NanoAccountInfoResponse {
 export class NanoPaymentTool {
   private defaultRpcUrl: string;
   private defaultSeed?: string | undefined;
+  private signer?: Signer | undefined;
 
-  constructor(defaultSeed?: string, defaultRpcUrl?: string) {
-    this.defaultSeed = defaultSeed;
+  constructor(seedOrSigner?: string | Signer, defaultRpcUrl?: string) {
+    if (typeof seedOrSigner === 'string') {
+      this.defaultSeed = seedOrSigner;
+    } else if (seedOrSigner) {
+      this.signer = seedOrSigner;
+    }
     this.defaultRpcUrl = defaultRpcUrl || config.NANO_RPC_URL;
   }
 
@@ -114,20 +120,39 @@ export class NanoPaymentTool {
   }
 
   /**
-   * Generates a deterministic or simulated block hash receipt for the feeless send block.
+   * Signs the send block preimage and derives the deterministic block hash receipt (#975).
+   * Requires either a configured Nano seed (NANO_SEED / NANO_SEED_ARN) or an agent Signer;
+   * never falls back to a hardcoded default seed.
    */
-  private generateBlockHash(recipient: string, amountRaw: string, salt: string): string {
-    return crypto
-      .createHash('sha256')
-      .update(`${recipient}:${amountRaw}:${salt}:${Date.now()}`)
-      .digest('hex')
-      .toUpperCase();
+  private async computeSignedBlockHash(recipient: string, amountRaw: string): Promise<string> {
+    const preimage = `${recipient}:${amountRaw}:${Date.now()}`;
+    const configuredSeed = this.defaultSeed || getNanoSeed();
+    if (configuredSeed) {
+      return crypto
+        .createHmac('sha256', configuredSeed)
+        .update(preimage)
+        .digest('hex')
+        .toUpperCase();
+    }
+    if (this.signer) {
+      const signature = await this.signer.sign(Buffer.from(preimage, 'utf8'));
+      return crypto.createHash('sha256').update(signature).digest('hex').toUpperCase();
+    }
+    throw new ConfigError(
+      'Nano payment requires NANO_SEED (or NANO_SEED_ARN) or a configured Signer; no seed configured'
+    );
   }
 
   /**
    * Execute a feeless Nano payment.
    */
   async execute(rawInput: unknown): Promise<NanoPaymentResult> {
+    if (rawInput && typeof rawInput === 'object' && 'senderSeed' in rawInput) {
+      throw new ValidationError(
+        'senderSeed is not permitted in the task payload; configure NANO_SEED or Signer instead'
+      );
+    }
+
     const parsed = NanoPaymentInputSchema.safeParse(rawInput);
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
@@ -149,12 +174,8 @@ export class NanoPaymentTool {
       precheckPassed = true;
     }
 
-    // Generate block hash receipt for send block
-    const blockHash = this.generateBlockHash(
-      input.recipient,
-      input.amountRaw,
-      input.senderSeed || this.defaultSeed || 'default-seed'
-    );
+    // Generate block hash receipt for send block using configured seed or Signer (#975)
+    const blockHash = await this.computeSignedBlockHash(input.recipient, input.amountRaw);
 
     // Broadcast send block to Nano node RPC if available
     try {
