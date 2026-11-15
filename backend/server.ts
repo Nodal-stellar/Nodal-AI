@@ -226,6 +226,30 @@ const STREAM_PATH = '/stream';
 const ADMIN_PAUSE_PATH = '/admin/pause';
 const ADMIN_RESUME_PATH = '/admin/resume';
 
+const CORS_ALLOW_METHODS = 'GET, POST, OPTIONS';
+const CORS_ALLOW_HEADERS = 'Authorization, Content-Type, Accept';
+
+/**
+ * Returns the request Origin if it is explicitly listed in CORS_ALLOWED_ORIGINS.
+ * Wildcard "*" is never accepted so authenticated endpoints cannot be exposed to arbitrary origins (#966).
+ */
+function resolveAllowedOrigin(req: http.IncomingMessage): string | undefined {
+  const raw = config.CORS_ALLOWED_ORIGINS ?? process.env.CORS_ALLOWED_ORIGINS;
+  if (!raw) return undefined;
+
+  const requestOrigin = req.headers['origin'];
+  if (!requestOrigin || typeof requestOrigin !== 'string' || requestOrigin === '*') {
+    return undefined;
+  }
+
+  const allowedOrigins = raw
+    .split(',')
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0 && o !== '*');
+
+  return allowedOrigins.includes(requestOrigin) ? requestOrigin : undefined;
+}
+
 /**
  * Creates and returns the health-check HTTP server.
  * Does NOT call `.listen()` — the caller (typically `index.ts`) is responsible
@@ -234,6 +258,49 @@ const ADMIN_RESUME_PATH = '/admin/resume';
  */
 export function createHealthServer(agent?: PayFiAgent): http.Server {
   const server = http.createServer((req, res) => {
+    const allowedOrigin = resolveAllowedOrigin(req);
+
+    if (allowedOrigin) {
+      const originalWriteHead = res.writeHead.bind(res);
+      res.writeHead = ((
+        statusCode: number,
+        statusMessageOrHeaders?: string | http.OutgoingHttpHeaders | http.OutgoingHttpHeader[],
+        maybeHeaders?: http.OutgoingHttpHeaders | http.OutgoingHttpHeader[]
+      ) => {
+        const corsHeaders: Record<string, string> = {
+          'Access-Control-Allow-Origin': allowedOrigin,
+          Vary: 'Origin',
+        };
+        if (typeof statusMessageOrHeaders === 'string') {
+          return originalWriteHead(statusCode, statusMessageOrHeaders, {
+            ...corsHeaders,
+            ...(maybeHeaders as http.OutgoingHttpHeaders | undefined),
+          });
+        }
+        return originalWriteHead(statusCode, {
+          ...corsHeaders,
+          ...(statusMessageOrHeaders as http.OutgoingHttpHeaders | undefined),
+        });
+      }) as typeof res.writeHead;
+    }
+
+    // ── OPTIONS preflight (#966) ───────────────────────────────────────────
+    if (req.method === 'OPTIONS') {
+      if (allowedOrigin) {
+        res.writeHead(204, {
+          'Access-Control-Allow-Origin': allowedOrigin,
+          'Access-Control-Allow-Methods': CORS_ALLOW_METHODS,
+          'Access-Control-Allow-Headers': CORS_ALLOW_HEADERS,
+          'Access-Control-Max-Age': '86400',
+          Vary: 'Origin',
+        });
+      } else {
+        res.writeHead(204);
+      }
+      res.end();
+      return;
+    }
+
     // ── GET /health ────────────────────────────────────────────────────────
     if (req.method === 'GET' && req.url === HEALTH_PATH) {
       // Delegate to the real implementation: it probes Horizon, Soroban and
@@ -635,7 +702,6 @@ function handleStream(
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     Connection: 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
   });
 
   // Helper to send SSE events

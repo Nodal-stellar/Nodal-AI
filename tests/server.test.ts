@@ -608,4 +608,68 @@ describe('backend/server.ts — health check HTTP server', () => {
       expect(res._statusCode).toBe(401);
     });
   });
+
+  describe('CORS and OPTIONS preflight (#966)', () => {
+    beforeEach(() => {
+      delete process.env.CORS_ALLOWED_ORIGINS;
+    });
+
+    it('responds 204 with CORS allow headers on OPTIONS preflight from an allowed origin', () => {
+      process.env.CORS_ALLOWED_ORIGINS = 'http://localhost:5173, https://dashboard.example.com';
+      createHealthServer();
+
+      const res = makeRes();
+      capturedHandler!(
+        makeReq('OPTIONS', '/status', {
+          origin: 'http://localhost:5173',
+          'access-control-request-method': 'GET',
+          'access-control-request-headers': 'authorization',
+        }),
+        res
+      );
+
+      expect(res._statusCode).toBe(204);
+      expect(res._headers['Access-Control-Allow-Origin']).toBe('http://localhost:5173');
+      expect(res._headers['Access-Control-Allow-Methods']).toContain('GET');
+      expect(res._headers['Access-Control-Allow-Methods']).toContain('POST');
+      expect(res._headers['Access-Control-Allow-Headers']).toContain('Authorization');
+      expect(res._headers['Vary']).toBe('Origin');
+    });
+
+    it('includes Access-Control-Allow-Origin on actual API responses for an allowed origin', () => {
+      process.env.CORS_ALLOWED_ORIGINS = 'http://localhost:5173';
+      createHealthServer();
+
+      const res = makeRes();
+      capturedHandler!(makeReq('GET', '/status', { origin: 'http://localhost:5173' }), res);
+
+      expect(res._statusCode).toBe(200);
+      expect(res._headers['Access-Control-Allow-Origin']).toBe('http://localhost:5173');
+      expect(res._headers['Vary']).toBe('Origin');
+    });
+
+    it('emits no CORS headers for an unlisted origin or when CORS_ALLOWED_ORIGINS is unset', () => {
+      process.env.CORS_ALLOWED_ORIGINS = 'http://localhost:5173';
+      createHealthServer();
+
+      const preflightRes = makeRes();
+      capturedHandler!(
+        makeReq('OPTIONS', '/status', { origin: 'https://evil.example.com' }),
+        preflightRes
+      );
+      expect(preflightRes._statusCode).toBe(204);
+      expect(preflightRes._headers['Access-Control-Allow-Origin']).toBeUndefined();
+
+      const getRes = makeRes();
+      capturedHandler!(makeReq('GET', '/status', { origin: 'https://evil.example.com' }), getRes);
+      expect(getRes._statusCode).toBe(200);
+      expect(getRes._headers['Access-Control-Allow-Origin']).toBeUndefined();
+
+      delete process.env.CORS_ALLOWED_ORIGINS;
+      const unsetRes = makeRes();
+      capturedHandler!(makeReq('GET', '/status', { origin: 'http://localhost:5173' }), unsetRes);
+      expect(unsetRes._statusCode).toBe(200);
+      expect(unsetRes._headers['Access-Control-Allow-Origin']).toBeUndefined();
+    });
+  });
 });
