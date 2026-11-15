@@ -146,3 +146,108 @@ describe('x402DiscoveryMiddleware', () => {
     expect(readPaymentOffers(doc, 'POST', '/data')).toBeUndefined();
   });
 });
+
+describe('nodalPaywall asset configuration (#928)', () => {
+  let facilitatorServer: http.Server | undefined;
+  let sellerServer: http.Server | undefined;
+
+  afterEach(async () => {
+    if (sellerServer) await new Promise<void>((r) => sellerServer!.close(() => r()));
+    if (facilitatorServer) await new Promise<void>((r) => facilitatorServer!.close(() => r()));
+    sellerServer = undefined;
+    facilitatorServer = undefined;
+  });
+
+  async function startFacilitator(): Promise<string> {
+    facilitatorServer = http.createServer((req, res) => {
+      if (req.url === '/supported') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            kinds: [{ x402Version: 2, scheme: 'exact', network: 'stellar:testnet' }],
+            extensions: [],
+          })
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((r) => facilitatorServer!.listen(0, '127.0.0.1', () => r()));
+    return `http://127.0.0.1:${(facilitatorServer!.address() as AddressInfo).port}`;
+  }
+
+  async function probe402Requirements(
+    paywallOpts: Parameters<typeof import('../backend/x402/middleware').nodalPaywall>[0]
+  ) {
+    const express = (await import('express')).default;
+    const { nodalPaywall } = await import('../backend/x402/middleware');
+    const app = express();
+    app.get('/paid', nodalPaywall(paywallOpts), (_req, res) => {
+      res.json({ ok: true });
+    });
+    sellerServer = await new Promise<http.Server>((r) => {
+      const s = app.listen(0, '127.0.0.1', () => r(s));
+    });
+    const url = `http://127.0.0.1:${(sellerServer.address() as AddressInfo).port}/paid`;
+    const res = await fetch(url);
+    expect(res.status).toBe(402);
+    const header = res.headers.get('PAYMENT-REQUIRED');
+    expect(header).toBeTruthy();
+    return JSON.parse(Buffer.from(header!, 'base64').toString('utf8')) as {
+      accepts: Array<{ scheme: string; network: string; amount: string; asset: string; payTo: string }>;
+    };
+  }
+
+  it('includes the configured asset SAC contract in 402 requirements instead of defaulting to USDC', async () => {
+    const { Asset, Networks } = await import('@stellar/stellar-sdk');
+    const facilitatorUrl = await startFacilitator();
+    const expectedEurcSac = new Asset('EURC', USDC_ISSUER).contractId(Networks.TESTNET);
+    const defaultUsdcSac = new Asset('USDC', USDC_ISSUER).contractId(Networks.TESTNET);
+
+    const pr = await probe402Requirements({
+      price: '0.25',
+      asset: 'EURC',
+      payTo: PAY_TO,
+      facilitatorUrl,
+    });
+
+    expect(pr.accepts[0]).toMatchObject({
+      scheme: 'exact',
+      network: 'stellar:testnet',
+      amount: '2500000',
+      asset: expectedEurcSac,
+      payTo: PAY_TO,
+    });
+    expect(pr.accepts[0]!.asset).not.toBe(defaultUsdcSac);
+  });
+
+  it('resolves native XLM and explicit SAC contract IDs when passed as asset', async () => {
+    const { Asset, Networks } = await import('@stellar/stellar-sdk');
+    const facilitatorUrl = await startFacilitator();
+    const nativeSac = Asset.native().contractId(Networks.TESTNET);
+
+    const xlmPr = await probe402Requirements({
+      price: '1.5',
+      asset: 'XLM',
+      payTo: PAY_TO,
+      facilitatorUrl,
+    });
+    expect(xlmPr.accepts[0]!.asset).toBe(nativeSac);
+    expect(xlmPr.accepts[0]!.amount).toBe('15000000');
+
+    await new Promise<void>((r) => sellerServer!.close(() => r()));
+    sellerServer = undefined;
+
+    const customSac = new Asset('BRLT', USDC_ISSUER).contractId(Networks.TESTNET);
+    const contractPr = await probe402Requirements({
+      price: '0.01',
+      asset: customSac,
+      payTo: PAY_TO,
+      facilitatorUrl,
+    });
+    expect(contractPr.accepts[0]!.asset).toBe(customSac);
+    expect(contractPr.accepts[0]!.amount).toBe('100000');
+  });
+});
+
