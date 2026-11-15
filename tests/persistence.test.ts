@@ -5,8 +5,12 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import Database from 'better-sqlite3';
 import { saveResult, getResults, _setDb, closeDb } from '../backend/persistence';
+import { configureSqlitePragmas, SQLITE_BUSY_TIMEOUT_MS } from '../backend/db/client';
 import type { AgentResult } from '../backend/agent';
 
 function makeInMemoryDb(): Database.Database {
@@ -210,5 +214,55 @@ describe('persistence', () => {
     _setDb(null);
     expect(() => closeDb()).not.toThrow();
     expect(() => closeDb()).not.toThrow();
+  });
+
+  // ─── SQLite WAL mode & busy_timeout tests (#962) ───────────────────────────
+
+  it('applies journal_mode=WAL, busy_timeout=5000, and foreign_keys=ON on file-backed DB (#962)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nodal-wal-'));
+    const dbPath = join(dir, 'test.db');
+    const fileDb = new Database(dbPath);
+    try {
+      _setDb(fileDb);
+
+      const journalMode = fileDb.pragma('journal_mode', { simple: true });
+      const busyTimeout = fileDb.pragma('busy_timeout', { simple: true });
+      const foreignKeys = fileDb.pragma('foreign_keys', { simple: true });
+
+      expect(String(journalMode).toLowerCase()).toBe('wal');
+      expect(busyTimeout).toBe(SQLITE_BUSY_TIMEOUT_MS);
+      expect(foreignKeys).toBe(1);
+    } finally {
+      closeDb();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('allows concurrent readers and writers across two handles without SQLITE_BUSY (#962)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nodal-wal-conc-'));
+    const dbPath = join(dir, 'concurrent.db');
+    const writerDb = new Database(dbPath);
+    const readerDb = new Database(dbPath);
+    try {
+      _setDb(writerDb);
+      configureSqlitePragmas(readerDb);
+
+      for (let i = 0; i < 25; i++) {
+        saveResult(
+          makeResult({
+            data: { index: i },
+            timestamp: `2026-06-25T22:00:${String(i).padStart(2, '0')}.000Z`,
+          })
+        );
+        const rows = readerDb.prepare('SELECT COUNT(*) AS cnt FROM agent_results').get() as {
+          cnt: number;
+        };
+        expect(rows.cnt).toBe(i + 1);
+      }
+    } finally {
+      readerDb.close();
+      closeDb();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

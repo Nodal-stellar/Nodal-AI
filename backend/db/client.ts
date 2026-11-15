@@ -6,10 +6,24 @@
  * health endpoint and a close() method called during graceful shutdown.
  */
 
+import type Database from 'better-sqlite3';
 import { createLogger } from '../utils/logger';
 import { getStorage } from './storage';
 
 const log = createLogger('database');
+
+/** Default SQLite busy timeout in milliseconds (#962). */
+export const SQLITE_BUSY_TIMEOUT_MS = 5000;
+
+/**
+ * Apply concurrency and integrity pragmas (`journal_mode=WAL`,
+ * `busy_timeout=5000`, `foreign_keys=ON`) when opening a SQLite connection (#962).
+ */
+export function configureSqlitePragmas(sqliteDb: Database.Database): void {
+  sqliteDb.pragma('journal_mode = WAL');
+  sqliteDb.pragma(`busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+  sqliteDb.pragma('foreign_keys = ON');
+}
 
 export class DatabaseManager {
   private static instance: DatabaseManager | null = null;
