@@ -7,9 +7,56 @@
 
 import { z } from 'zod';
 import { PayFiAgent, AgentTask, TaskType, VALUE_MOVING_TASK_TYPES, Plan } from './agent';
+import { LLM_LIMITS, llmUsage } from './ai/llm';
 import { createLogger } from './utils/logger';
 
 const log = createLogger('planner');
+
+const MAX_LLM_RETRIES = 2;
+const DEFAULT_LLM_TIMEOUT_MS = 120_000;
+const DEFAULT_RETRY_BASE_DELAY_MS = 250;
+
+function positiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function estimateTokens(text: string): number {
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+function retryDelayMs(baseDelayMs: number, attempt: number, retryAfter: string | null): number {
+  if (retryAfter) {
+    const seconds = Number.parseFloat(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return Math.min(seconds * 1_000, 30_000);
+    }
+  }
+
+  const exponential = baseDelayMs * 2 ** attempt;
+  return exponential + Math.floor(Math.random() * Math.max(1, baseDelayMs));
+}
+
+interface PlannerOptions {
+  llmEndpoint?: string;
+  llmApiKey?: string;
+  llmTimeoutMs?: number;
+  llmRetryBaseDelayMs?: number;
+  sessionId?: string;
+}
+
+interface LlmResponseData {
+  choices?: Array<{ message?: { content?: string } }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
+}
 
 // Tool schemas for the LLM
 const TOOL_SCHEMAS = {
@@ -209,11 +256,20 @@ export class Planner {
   private agent: PayFiAgent;
   private llmEndpoint?: string | undefined;
   private llmApiKey?: string | undefined;
+  private readonly llmTimeoutMs: number;
+  private readonly llmRetryBaseDelayMs: number;
+  private readonly sessionId: string;
 
-  constructor(agent: PayFiAgent, options: { llmEndpoint?: string; llmApiKey?: string } = {}) {
+  constructor(agent: PayFiAgent, options: PlannerOptions = {}) {
     this.agent = agent;
     this.llmEndpoint = options.llmEndpoint ?? process.env.LLM_ENDPOINT;
     this.llmApiKey = options.llmApiKey ?? process.env.LLM_API_KEY;
+    this.llmTimeoutMs =
+      options.llmTimeoutMs ?? positiveInt(process.env.LLM_TIMEOUT_MS, DEFAULT_LLM_TIMEOUT_MS);
+    this.llmRetryBaseDelayMs =
+      options.llmRetryBaseDelayMs ??
+      positiveInt(process.env.LLM_RETRY_BASE_DELAY_MS, DEFAULT_RETRY_BASE_DELAY_MS);
+    this.sessionId = options.sessionId ?? 'planner';
   }
 
   /**
@@ -221,9 +277,14 @@ export class Planner {
    *
    * @param request - User's request in natural language
    * @param options.runReadonly - Whether to run read-only tools during planning (default: true)
+   * @param options.sessionId - Usage budget session identifier (default: planner)
    */
-  async plan(request: string, options: { runReadonly?: boolean } = {}): Promise<Plan> {
+  async plan(
+    request: string,
+    options: { runReadonly?: boolean; sessionId?: string } = {}
+  ): Promise<Plan> {
     const { runReadonly = true } = options;
+    const sessionId = options.sessionId ?? this.sessionId;
 
     log.info({ request }, 'Generating plan');
 
@@ -234,7 +295,8 @@ export class Planner {
     let tasks: AgentTask[];
 
     if (this.llmEndpoint) {
-      tasks = await this.callLLM(prompt);
+      llmUsage.beginStep(sessionId);
+      tasks = await this.callLLM(prompt, sessionId);
     } else {
       // No LLM configured - return empty plan
       throw new Error('LLM not configured. Set LLM_ENDPOINT environment variable.');
@@ -283,30 +345,70 @@ export class Planner {
   /**
    * Call LLM endpoint with prompt.
    */
-  private async callLLM(prompt: string): Promise<AgentTask[]> {
+  private async callLLM(prompt: string, sessionId: string): Promise<AgentTask[]> {
     if (!this.llmEndpoint) {
       throw new Error('LLM endpoint not configured');
     }
 
-    const response = await fetch(this.llmEndpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.llmApiKey ? { Authorization: `Bearer ${this.llmApiKey}` } : {}),
-      },
-      body: JSON.stringify({
-        model: process.env.LLM_MODEL ?? 'gpt-4',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.1,
-      }),
-    });
+    const maxTokens = Math.min(
+      positiveInt(process.env.LLM_MAX_TOKENS, 4_096),
+      LLM_LIMITS.maxTokensPerRequest
+    );
+    const estimatedTokens = estimateTokens(prompt) + maxTokens;
+    llmUsage.assertStepBudget(sessionId, estimatedTokens);
 
-    if (!response.ok) {
-      throw new Error(`LLM call failed: ${response.status} ${response.statusText}`);
+    let response: Response | undefined;
+    for (let attempt = 0; attempt <= MAX_LLM_RETRIES; attempt += 1) {
+      try {
+        response = await fetch(this.llmEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(this.llmApiKey ? { Authorization: `Bearer ${this.llmApiKey}` } : {}),
+          },
+          body: JSON.stringify({
+            model: process.env.LLM_MODEL ?? 'gpt-4',
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.1,
+            max_tokens: maxTokens,
+          }),
+          signal: AbortSignal.timeout(this.llmTimeoutMs),
+        });
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'TimeoutError') {
+          throw new Error(`LLM call timed out after ${this.llmTimeoutMs}ms`);
+        }
+        throw error;
+      }
+
+      if (response.ok) break;
+
+      if (!isRetryableStatus(response.status) || attempt === MAX_LLM_RETRIES) {
+        throw new Error(`LLM call failed: ${response.status} ${response.statusText}`);
+      }
+
+      await new Promise<void>((resolve) => {
+        setTimeout(
+          resolve,
+          retryDelayMs(
+            this.llmRetryBaseDelayMs,
+            attempt,
+            response?.headers.get('retry-after') ?? null
+          )
+        );
+      });
     }
 
-    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    if (!response?.ok) {
+      throw new Error('LLM call failed without a response');
+    }
+
+    const data = (await response.json()) as LlmResponseData;
     const content = data.choices?.[0]?.message?.content ?? '';
+
+    const promptTokens = data.usage?.prompt_tokens ?? estimateTokens(prompt);
+    const completionTokens = data.usage?.completion_tokens ?? estimateTokens(content);
+    llmUsage.recordRequest({ sessionId, promptTokens, completionTokens });
 
     return parseTasks(content);
   }
