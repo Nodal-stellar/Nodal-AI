@@ -373,16 +373,38 @@ export interface AgentTask {
 /**
  * An ordered list of tasks awaiting execution, with a human-readable summary
  * to confirm before anything runs (see `planner.ts` / `executor.ts`).
+ *
+ * After creation the object is frozen; callers must not mutate it.
+ * `planHash` is a SHA-256 over the canonical (sorted-key) JSON of `tasks` and
+ * is re-verified by `executePlan` to detect any tampering between approval and
+ * execution.
  */
 export interface Plan {
-  id: string;
-  tasks: AgentTask[];
+  readonly id: string;
+  readonly tasks: readonly AgentTask[];
   /** Summary shown to the user before execution. */
-  summary: string;
+  readonly summary: string;
   /** ISO-8601 creation time. */
-  createdAt: string;
+  readonly createdAt: string;
   /** ISO-8601 time after which the plan may no longer be executed. */
-  expiresAt: string;
+  readonly expiresAt: string;
+  /**
+   * SHA-256 hex digest of the canonical JSON representation of `tasks`.
+   * Canonical JSON sorts object keys recursively so the hash is independent
+   * of key-insertion order.
+   */
+  readonly planHash: string;
+}
+
+/**
+ * Approval token returned by `executePlan` after the user confirms a plan.
+ * `executePlan` binds execution to this token: it re-derives the hash and
+ * refuses if the plan has been mutated since approval.
+ */
+export interface PlanApprovalToken {
+  readonly planId: string;
+  readonly planHash: string;
+  readonly expiresAt: string;
 }
 
 // ─── Type-safe payloads and results (#type-safe-tasks) ────────────────────────
