@@ -11,7 +11,7 @@
     "setup": "npx ts-node scripts/setup.ts",
     "doctor": "npx ts-node scripts/doctor.ts",
     "audit:verify": "npx ts-node scripts/audit_verify.ts",
-    "build": "node init && tsc && node -e \"require('fs').cpSync('backend/db/migrations', 'dist/backend/db/migrations', { recursive: true })\"",
+    "build": "tsc && node -e \"require('fs').cpSync('backend/db/migrations', 'dist/backend/db/migrations', { recursive: true })\"",
     "pretest": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test:fuzz": "vitest run tests/fuzz/**",
