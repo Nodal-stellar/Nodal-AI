@@ -3,9 +3,23 @@
  *
  * ExecutePlan: Human-readable summary generation with confirm/deny flow.
  * AI-generated payments must never execute silently.
+ *
+ * Plan integrity (issue #B):
+ *   `createPlan` computes `planHash` over canonical JSON of tasks and deep-
+ *   freezes the returned Plan.  `executePlan` accepts an optional
+ *   `approvalToken`; when supplied it calls `verifyApprovalToken` and refuses
+ *   execution on hash mismatch or expiry.  This guarantees that what the user
+ *   reviewed is exactly what runs.
  */
 
-import { PayFiAgent, AgentTask, AgentResult, Plan, VALUE_MOVING_TASK_TYPES } from './agent';
+import { PayFiAgent, AgentTask, AgentResult, Plan, PlanApprovalToken, VALUE_MOVING_TASK_TYPES } from './agent';
+import {
+  buildPlan,
+  computePlanHash,
+  createApprovalToken,
+  verifyApprovalToken,
+  PlanIntegrityError,
+} from './planner';
 import { createLogger } from './utils/logger';
 
 const log = createLogger('executor');
@@ -20,6 +34,12 @@ export interface ExecutePlanOptions {
   confirm?: ConfirmHandler;
   /** Timeout in ms for unconfirmed plans (default: 5 minutes) */
   confirmationTimeoutMs?: number;
+  /**
+   * Approval token previously returned by `createApprovalToken`.
+   * When provided, `executePlan` re-derives the plan hash and refuses
+   * execution if the plan was mutated or the token has expired (issue #B).
+   */
+  approvalToken?: PlanApprovalToken;
 }
 
 /**
@@ -88,24 +108,19 @@ function generateTaskSummary(task: AgentTask): string {
 /**
  * Generate full plan summary from tasks.
  */
-export function generatePlanSummary(tasks: AgentTask[]): string {
+export function generatePlanSummary(tasks: readonly AgentTask[]): string {
   return tasks.map(generateTaskSummary).join('; ');
 }
 
 /**
- * Create a Plan object from tasks.
+ * Create a frozen, integrity-stamped Plan object from tasks.
+ *
+ * The returned Plan is deep-frozen and carries a `planHash` derived from the
+ * canonical (sorted-key) JSON of `tasks`.  Pass the plan to
+ * `createApprovalToken` to get a token to supply back to `executePlan`.
  */
 export function createPlan(tasks: AgentTask[], expirationMs = 300000): Plan {
-  const now = new Date();
-  const expires = new Date(now.getTime() + expirationMs);
-
-  return {
-    id: `plan_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-    tasks,
-    summary: generatePlanSummary(tasks),
-    createdAt: now.toISOString(),
-    expiresAt: expires.toISOString(),
-  };
+  return buildPlan(tasks, expirationMs);
 }
 
 /**
@@ -116,33 +131,56 @@ export function planHasValueMovingTasks(plan: Plan): boolean {
 }
 
 /**
- * Execute a plan with optional confirmation.
+ * Execute a plan with optional confirmation and integrity verification.
+ *
+ * When `options.approvalToken` is supplied, this function calls
+ * `verifyApprovalToken` before doing anything else.  Any hash mismatch or
+ * expired token causes an immediate rejection without touching the network
+ * (issue #B).
  *
  * @param agent - The PayFiAgent instance
- * @param plan - The plan to execute
- * @param options - Execution options including confirm callback
+ * @param plan - The plan to execute (must be the frozen object returned by createPlan)
+ * @param options - Execution options including confirm callback and approval token
  */
 export async function executePlan(
   agent: PayFiAgent,
   plan: Plan,
   options: ExecutePlanOptions = {}
 ): Promise<AgentResult[]> {
-  const { confirm, confirmationTimeoutMs = 5 * 60 * 1000 } = options;
+  const { confirm, confirmationTimeoutMs = 5 * 60 * 1000, approvalToken } = options;
 
-  // Check plan expiration
+  // ── Integrity check (issue #B) ───────────────────────────────────────────
+  if (approvalToken) {
+    try {
+      verifyApprovalToken(plan, approvalToken);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn({ planId: plan.id, error: message }, 'Plan integrity check failed');
+      return [
+        {
+          success: false,
+          taskType: 'stellar_payment' as const,
+          error: message,
+          errorType: 'PLAN_INTEGRITY_VIOLATION',
+        },
+      ];
+    }
+  }
+
+  // ── Expiry check ─────────────────────────────────────────────────────────
   if (new Date(plan.expiresAt) < new Date()) {
     log.warn({ planId: plan.id }, 'Plan expired');
     return [
       {
         success: false,
-        taskType: 'stellar_payment' as any,
+        taskType: 'stellar_payment' as const,
         error: 'Plan has expired',
         errorType: 'PLAN_EXPIRED',
       },
     ];
   }
 
-  // Check if confirmation is needed (plan has value-moving tasks)
+  // ── Confirmation gate ─────────────────────────────────────────────────────
   const needsConfirmation = planHasValueMovingTasks(plan);
 
   if (needsConfirmation && confirm) {
@@ -158,7 +196,7 @@ export async function executePlan(
       return [
         {
           success: false,
-          taskType: 'stellar_payment' as any,
+          taskType: 'stellar_payment' as const,
           error: 'Plan denied by user',
           errorType: 'PLAN_DENIED',
         },
@@ -166,11 +204,23 @@ export async function executePlan(
     }
   }
 
-  // Execute the plan
+  // ── Execute ───────────────────────────────────────────────────────────────
   log.info({ planId: plan.id, summary: plan.summary }, 'Executing plan');
-  const results = await agent.runSequence(plan.tasks);
+  const results = await agent.runSequence(plan.tasks as AgentTask[]);
 
   return results;
 }
 
-export { PayFiAgent, AgentTask, AgentResult, Plan, VALUE_MOVING_TASK_TYPES };
+export {
+  PayFiAgent,
+  AgentTask,
+  AgentResult,
+  Plan,
+  PlanApprovalToken,
+  VALUE_MOVING_TASK_TYPES,
+  buildPlan,
+  computePlanHash,
+  createApprovalToken,
+  verifyApprovalToken,
+  PlanIntegrityError,
+};

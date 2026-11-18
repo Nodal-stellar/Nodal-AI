@@ -3,15 +3,92 @@
  *
  * AI-powered planner using function calling.
  * agent.plan("swap 50 XLM to USDC and send half to GB...") returns a structured Plan.
+ *
+ * Policy enforcement (issue #A):
+ *   Any task that fails `validateTaskPolicy` causes the WHOLE plan to be
+ *   rejected immediately.  `plan()` throws a `PlanPolicyError` that carries
+ *   per-task rejection reasons so callers can surface them to the user rather
+ *   than silently dropping tasks.
+ *
+ * Plan integrity (issue #B):
+ *   `createPlan` computes `planHash = sha256(canonicalJSON(tasks))` and deep-
+ *   freezes the returned Plan object so it cannot be mutated after creation.
+ *   `executePlan` recomputes the hash and throws `PlanIntegrityError` on
+ *   mismatch.  `createApprovalToken` binds {planId, planHash, expiresAt} into
+ *   an opaque token that expires with the plan.
  */
 
+import { createHash } from 'crypto';
 import { z } from 'zod';
-import { PayFiAgent, AgentTask, TaskType, VALUE_MOVING_TASK_TYPES, Plan } from './agent';
+import { PayFiAgent, AgentTask, TaskType, VALUE_MOVING_TASK_TYPES, Plan, PlanApprovalToken } from './agent';
 import { createLogger } from './utils/logger';
 
 const log = createLogger('planner');
 
-// Tool schemas for the LLM
+// ─── Canonical JSON (key-order independent) ───────────────────────────────────
+
+/**
+ * Recursively sort object keys so two objects that differ only in insertion
+ * order produce identical JSON — and therefore identical hashes.
+ */
+function canonicalise(value: unknown): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(canonicalise);
+  const obj = value as Record<string, unknown>;
+  const sorted: Record<string, unknown> = {};
+  for (const key of Object.keys(obj).sort()) {
+    sorted[key] = canonicalise(obj[key]);
+  }
+  return sorted;
+}
+
+/**
+ * Compute SHA-256 over the canonical JSON representation of `tasks`.
+ * Key order in each task payload does not affect the result.
+ */
+export function computePlanHash(tasks: readonly AgentTask[]): string {
+  const canonical = JSON.stringify(canonicalise(tasks));
+  return createHash('sha256').update(canonical).digest('hex');
+}
+
+// ─── Deep freeze ─────────────────────────────────────────────────────────────
+
+function deepFreeze<T>(value: T): T {
+  if (value === null || typeof value !== 'object') return value;
+  Object.freeze(value);
+  for (const v of Object.values(value as Record<string, unknown>)) {
+    deepFreeze(v);
+  }
+  return value;
+}
+
+// ─── Errors ───────────────────────────────────────────────────────────────────
+
+/** Thrown when one or more tasks fail the policy check (issue #A). */
+export class PlanPolicyError extends Error {
+  /** Per-task rejection details keyed by task type (may repeat if same type appears multiple times). */
+  readonly rejections: ReadonlyArray<{ taskType: string; reason: string }>;
+
+  constructor(rejections: ReadonlyArray<{ taskType: string; reason: string }>) {
+    const lines = rejections.map((r) => `  ${r.taskType}: ${r.reason}`).join('\n');
+    super(`Plan rejected — ${rejections.length} task(s) failed policy:\n${lines}`);
+    this.name = 'PlanPolicyError';
+    this.rejections = rejections;
+    Object.setPrototypeOf(this, PlanPolicyError.prototype);
+  }
+}
+
+/** Thrown when `executePlan` detects that the plan was mutated after approval (issue #B). */
+export class PlanIntegrityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PlanIntegrityError';
+    Object.setPrototypeOf(this, PlanIntegrityError.prototype);
+  }
+}
+
+// ─── Tool schemas ─────────────────────────────────────────────────────────────
+
 const TOOL_SCHEMAS = {
   stellar_payment: {
     name: 'stellar_payment',
@@ -132,9 +209,8 @@ const READONLY_TOOLS = new Set([
   'network_status',
 ]);
 
-/**
- * Prompt template for the planner.
- */
+// ─── Prompt ───────────────────────────────────────────────────────────────────
+
 const PLANNER_PROMPT = `You are a financial planning assistant for the Stellar blockchain. 
 Given a user request, produce a sequence of tasks to execute.
 
@@ -154,9 +230,8 @@ User request: {request}
 
 Respond with JSON array of tasks:`;
 
-/**
- * Parse LLM response into validated tasks.
- */
+// ─── Task parsing ─────────────────────────────────────────────────────────────
+
 function parseTasks(response: string): AgentTask[] {
   try {
     const parsed = JSON.parse(response);
@@ -167,12 +242,10 @@ function parseTasks(response: string): AgentTask[] {
       const schema = TOOL_SCHEMAS[taskType as keyof typeof TOOL_SCHEMAS];
 
       if (schema) {
-        // Validate with schema
         const validated = schema.inputSchema.parse(task.payload);
         return { type: taskType, payload: validated };
       }
 
-      // Unknown type - still include but won't be validated
       return { type: taskType, payload: task.payload };
     });
   } catch (err) {
@@ -181,11 +254,17 @@ function parseTasks(response: string): AgentTask[] {
   }
 }
 
+// ─── Policy validation ────────────────────────────────────────────────────────
+
 /**
- * Validate a task against policy.
+ * Validate a single task against policy.
+ *
+ * NOTE: The planner intentionally blocks value-moving tasks here — they should
+ * only run during *execution*, not planning.  Read-only tasks are always
+ * allowed.  Unknown types that are neither in TOOL_SCHEMAS nor READONLY_TOOLS
+ * are rejected so the LLM cannot smuggle unexpected operations through.
  */
 function validateTaskPolicy(task: AgentTask): { valid: boolean; reason?: string } {
-  // Check if value-moving tool is being used during planning
   if (VALUE_MOVING_TASK_TYPES.has(task.type)) {
     return {
       valid: false,
@@ -193,7 +272,6 @@ function validateTaskPolicy(task: AgentTask): { valid: boolean; reason?: string 
     };
   }
 
-  // Validate task type is known
   const knownTypes = Object.keys(TOOL_SCHEMAS);
   if (!knownTypes.includes(task.type) && !READONLY_TOOLS.has(task.type)) {
     return { valid: false, reason: `Unknown task type: ${task.type}` };
@@ -202,8 +280,73 @@ function validateTaskPolicy(task: AgentTask): { valid: boolean; reason?: string 
   return { valid: true };
 }
 
+// ─── Plan creation helpers ────────────────────────────────────────────────────
+
 /**
- * Planner class - generates structured plans from natural language.
+ * Build a frozen Plan from a validated task list.
+ *
+ * The returned object is deep-frozen so callers cannot mutate it after the
+ * hash is computed (issue #B).
+ */
+export function buildPlan(tasks: AgentTask[], expirationMs = 5 * 60 * 1000): Plan {
+  const planHash = computePlanHash(tasks);
+  const now = new Date();
+  const plan: Plan = {
+    id: `plan_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+    tasks,
+    summary: tasks.map((t) => `${t.type}`).join('; '),
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + expirationMs).toISOString(),
+    planHash,
+  };
+  return deepFreeze(plan);
+}
+
+/**
+ * Create an approval token bound to the plan's id, hash, and expiry.
+ * Pass this token to `executePlan` to prove the plan was reviewed and has not
+ * been tampered with.
+ */
+export function createApprovalToken(plan: Plan): PlanApprovalToken {
+  return Object.freeze<PlanApprovalToken>({
+    planId: plan.id,
+    planHash: plan.planHash,
+    expiresAt: plan.expiresAt,
+  });
+}
+
+/**
+ * Re-derive the hash from a plan and verify it matches the approval token.
+ *
+ * @throws PlanIntegrityError when:
+ *   - The token is for a different plan.
+ *   - The token is expired.
+ *   - The recomputed hash does not match the token hash (tasks were mutated).
+ */
+export function verifyApprovalToken(plan: Plan, token: PlanApprovalToken): void {
+  if (token.planId !== plan.id) {
+    throw new PlanIntegrityError(
+      `Approval token is for plan ${token.planId}, not ${plan.id}`
+    );
+  }
+  if (new Date(token.expiresAt) < new Date()) {
+    throw new PlanIntegrityError(
+      `Approval token for plan ${plan.id} has expired`
+    );
+  }
+  const recomputed = computePlanHash(plan.tasks);
+  if (recomputed !== token.planHash) {
+    throw new PlanIntegrityError(
+      `Plan ${plan.id} hash mismatch: tasks were mutated after approval`
+    );
+  }
+}
+
+// ─── Planner class ────────────────────────────────────────────────────────────
+
+/**
+ * Planner — generates structured, frozen, integrity-stamped Plans from natural
+ * language requests.
  */
 export class Planner {
   private agent: PayFiAgent;
@@ -217,39 +360,51 @@ export class Planner {
   }
 
   /**
-   * Generate a plan from natural language request.
+   * Generate a plan from a natural language request.
    *
-   * @param request - User's request in natural language
-   * @param options.runReadonly - Whether to run read-only tools during planning (default: true)
+   * Policy enforcement (issue #A):
+   *   If ANY task fails `validateTaskPolicy`, the whole plan is rejected and a
+   *   `PlanPolicyError` is thrown with per-task rejection reasons.  Dropping a
+   *   task silently would produce a plan that does something different from what
+   *   the user asked (e.g. keeping the payment while dropping the swap).
+   *
+   * @param request - User's natural-language request.
+   * @param options.runReadonly - Whether to run read-only tools during planning (default: true).
+   * @throws PlanPolicyError when any task fails policy.
+   * @throws Error when the LLM is not configured or returns unparseable output.
    */
   async plan(request: string, options: { runReadonly?: boolean } = {}): Promise<Plan> {
     const { runReadonly = true } = options;
 
     log.info({ request }, 'Generating plan');
 
-    // Build prompt
     const prompt = PLANNER_PROMPT.replace('{request}', request);
 
-    // Call LLM
     let tasks: AgentTask[];
-
     if (this.llmEndpoint) {
       tasks = await this.callLLM(prompt);
     } else {
-      // No LLM configured - return empty plan
       throw new Error('LLM not configured. Set LLM_ENDPOINT environment variable.');
     }
 
-    // Validate each task
-    const validatedTasks: AgentTask[] = [];
+    // ── Policy validation (issue #A) ─────────────────────────────────────────
+    // Collect ALL rejections first so the error message is complete, then fail
+    // the whole plan in one shot instead of silently dropping tasks.
+    const rejections: Array<{ taskType: string; reason: string }> = [];
     for (const task of tasks) {
       const policy = validateTaskPolicy(task);
       if (!policy.valid) {
         log.warn({ taskType: task.type, reason: policy.reason }, 'Task failed policy check');
-        continue;
+        rejections.push({ taskType: task.type, reason: policy.reason ?? 'policy violation' });
       }
+    }
 
-      // Run read-only tools during planning if enabled
+    if (rejections.length > 0) {
+      throw new PlanPolicyError(rejections);
+    }
+
+    // ── Optional read-only pre-flight ────────────────────────────────────────
+    for (const task of tasks) {
       if (runReadonly && READONLY_TOOLS.has(task.type)) {
         try {
           const result = await this.agent.run(task);
@@ -263,26 +418,15 @@ export class Planner {
           log.warn({ taskType: task.type, error: err }, 'Read-only tool failed during planning');
         }
       }
-
-      validatedTasks.push(task);
     }
 
-    // Create plan
-    const plan: Plan = {
-      id: `plan_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-      tasks: validatedTasks,
-      summary: validatedTasks.map((t) => `${t.type}`).join('; '),
-      createdAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
-    };
+    // ── Build frozen, hashed plan (issue #B) ─────────────────────────────────
+    const plan = buildPlan(tasks);
 
-    log.info({ planId: plan.id, taskCount: validatedTasks.length }, 'Plan generated');
+    log.info({ planId: plan.id, taskCount: tasks.length, planHash: plan.planHash }, 'Plan generated');
     return plan;
   }
 
-  /**
-   * Call LLM endpoint with prompt.
-   */
   private async callLLM(prompt: string): Promise<AgentTask[]> {
     if (!this.llmEndpoint) {
       throw new Error('LLM endpoint not configured');
