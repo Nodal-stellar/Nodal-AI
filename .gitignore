@@ -34,8 +34,6 @@ contracts/agent_policy/test_snapshots/
 contracts/escrow/bindings/
 
 # Environment secrets — never commit real .env files
-.env
-.env.*
 !.env.example
 
 # Cryptographic key files
@@ -50,7 +48,6 @@ Thumbs.db
 agent.db
 agent.db-shm
 agent.db-wal
-.vscode/
 .idea/
 *.swp
 *.swo
@@ -81,3 +78,4 @@ docs/public/api/
 docs/x402-v2-changes.md
 CHANGES_SUMMARY.md
 IMPLEMENTATION_NOTES.md
+config.bat
