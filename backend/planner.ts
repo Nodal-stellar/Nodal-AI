@@ -228,7 +228,9 @@ export class Planner {
     log.info({ request }, 'Generating plan');
 
     // Build prompt
-    const prompt = PLANNER_PROMPT.replace('{request}', request);
+    // A string replacement would interpret $, $&, $' and $$ in user input as
+    // replacement patterns, mangling the request and injecting template text.
+    const prompt = PLANNER_PROMPT.replace('{request}', () => request);
 
     // Call LLM
     let tasks: AgentTask[];
