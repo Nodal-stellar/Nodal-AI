@@ -53,6 +53,10 @@
  *   - `SPENDING_LIMITS` set: each listed asset is capped by its own limit.
  *     Unlisted assets are denied unless `SPENDING_LIMITS_ALLOW_UNKNOWN=true`,
  *     in which case `AGENT_SPENDING_LIMIT` caps each of them.
+ *   - Nano payments are charged as "XNO" (#977), converted from raw by
+ *     `nanoRawToTrackerAmount()` (backend/utils/nano_amount.ts) and rounded
+ *     up to 7 decimals, so `SPENDING_LIMITS='XNO:1'` caps them. Pass the
+ *     literal key — `assetKey('XNO')` maps a code with no issuer to "XLM".
  *
  * ## BigInt stroop arithmetic (issue #734)
  * Amounts are parsed with `toStroops()` and accumulated as BigInt stroops;

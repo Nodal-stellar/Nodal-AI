@@ -82,6 +82,7 @@ import * as rpcClient from './rpc_client';
 import { createLogger, generateCorrelationId } from './utils/logger';
 import { spendingTracker, assetKey } from './spending_tracker';
 import { toStroops, tryToStroops, stroopsToString, STROOPS_PER_UNIT } from './utils/amount';
+import { nanoRawToTrackerAmount, NANO_ASSET_KEY } from './utils/nano_amount';
 import { failureAlerts } from './alerts';
 import { dispatchWebhook } from './webhook';
 import { createAgentSigner, Signer } from './signer';
@@ -185,6 +186,13 @@ function taskSpends(task: AgentTask): TaskSpend[] {
     case 'dex_offer':
       // Only guard non-zero amounts (delete action sets amount to "0")
       return p.amount && p.amount !== '0' ? one(p.amount, assetObjectKey(p.selling)) : [];
+
+    case 'nano_payment':
+      // Raw → XNO, rounded up to the tracker's 7 decimals (#977). A malformed
+      // amountRaw reserves nothing here; the tool's schema rejects it.
+      return typeof p.amountRaw === 'string' && /^\d+$/.test(p.amountRaw)
+        ? one(nanoRawToTrackerAmount(p.amountRaw), NANO_ASSET_KEY)
+        : [];
 
     default:
       return [];
