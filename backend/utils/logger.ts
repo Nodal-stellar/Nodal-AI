@@ -26,6 +26,11 @@ export const REDACT_PATHS = [
   'payload.secretKey',
   'data.secret',
   'data.secretKey',
+  // Issue #907: raw natural-language request text can carry PII (names,
+  // addresses, account details).  Always strip it from structured log output;
+  // the planner logs a hash+length at info level instead.
+  'request',
+  '*.request',
 ];
 
 // Matches Stellar secret keys (S + 55 base32 chars) anywhere in a string value.
