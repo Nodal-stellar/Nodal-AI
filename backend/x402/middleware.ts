@@ -42,6 +42,7 @@ import { HTTPFacilitatorClient } from '@x402/core/server';
 import { ExactStellarScheme } from '@x402/stellar/exact/server';
 import { config } from '../config';
 import { toCaip2 } from '../network';
+import { fromStroops, toStroops } from '../utils/amount';
 import { createLogger } from '../utils/logger';
 import { stellarPublicKeySchema } from '../utils/stellarSchemas';
 
@@ -207,8 +208,6 @@ export function nodalPaywall(
 /** Where the discovery document is served. */
 export const OPENAPI_DISCOVERY_PATH = '/.well-known/openapi.json';
 
-const STROOPS_PER_UNIT = 10_000_000n;
-
 const PaidRouteSchema = z
   .object({
     method: z.enum(['get', 'post', 'put', 'patch', 'delete']),
@@ -270,20 +269,13 @@ interface OpenApiOperation {
   'x-payment-info': { offers: PaymentOffer[] };
 }
 
-/** CAIP-2 identifier for a configured Stellar network. */
-export function caip2Network(network: string): string {
-  return network === 'mainnet' ? 'stellar:pubnet' : `stellar:${network}`;
-}
-
-function toStroops(decimal: string): string {
-  const [whole = '0', fraction = ''] = decimal.split('.');
-  return (BigInt(whole) * STROOPS_PER_UNIT + BigInt(fraction.padEnd(7, '0'))).toString();
-}
-
-function fromStroops(stroops: string): string {
-  const value = BigInt(stroops);
-  return `${value / STROOPS_PER_UNIT}.${(value % STROOPS_PER_UNIT).toString().padStart(7, '0')}`;
-}
+/**
+ * CAIP-2 identifier for a configured Stellar network.
+ *
+ * @deprecated Use `toCaip2` from `backend/network`. Kept as an alias for one
+ * release so external imports keep working.
+ */
+export const caip2Network = toCaip2;
 
 /**
  * Build the OpenAPI discovery document from the seller's route config.
@@ -291,19 +283,19 @@ function fromStroops(stroops: string): string {
  * @throws {z.ZodError} If a route has an invalid method, path, price, or payTo.
  */
 export function buildOpenApiDocument(options: DiscoveryOptions): OpenApiDocument {
-  const network = caip2Network(config.STELLAR_NETWORK);
+  const network = toCaip2(config.STELLAR_NETWORK);
   const paths: OpenApiDocument['paths'] = {};
 
   for (const raw of options.routes) {
     const route = PaidRouteSchema.parse(raw);
-    const amount = toStroops(route.price);
+    const stroops = toStroops(route.price);
     const offer: PaymentOffer = {
-      amount,
+      amount: stroops.toString(),
       currency: route.assetIssuer ? `${route.assetCode}:${route.assetIssuer}` : route.assetCode,
       method: 'stellar',
       intent: 'charge',
       protocol: 'x402',
-      price: fromStroops(amount),
+      price: fromStroops(stroops),
       asset: route.assetIssuer
         ? { code: route.assetCode, issuer: route.assetIssuer }
         : { code: route.assetCode },

@@ -42,12 +42,12 @@ import { z } from 'zod';
 import { config, MAINNET_SPENDING_CAP } from '../config';
 import { AgentPausedError, PolicyViolationError, ValidationError } from '../errors';
 import { isPaused } from '../kill_switch';
+import { toCaip2 } from '../network';
 import { loadAccount, prepareSorobanTx, resolveNetworkPassphrase } from '../rpc_client';
 import { createAgentSigner, Signer } from '../signer';
 import { spendingTracker } from '../spending_tracker';
 import { SOROBAN_TX_TIMEOUT } from '../tools/SorobanInvokeTool';
 import { createLogger } from '../utils/logger';
-import { caip2Network } from '../x402/middleware';
 
 const log = createLogger('mpp-charge');
 
@@ -283,7 +283,7 @@ export class MppChargeClient {
 
   constructor(signer: Signer = createAgentSigner()) {
     this.signer = signer;
-    this.network = caip2Network(config.STELLAR_NETWORK);
+    this.network = toCaip2(config.STELLAR_NETWORK);
     this.networkPassphrase = resolveNetworkPassphrase(config.STELLAR_NETWORK);
   }
 
