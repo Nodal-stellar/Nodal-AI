@@ -16,6 +16,7 @@ import {
   x402DiscoveryMiddleware,
   type DiscoveryOptions,
 } from '../backend/x402/middleware';
+import { NetworkTimeoutError, ValidationError } from '../backend/errors';
 
 vi.mock('../backend/config', () => ({
   config: {
@@ -145,4 +146,121 @@ describe('x402DiscoveryMiddleware', () => {
     expect(readPaymentOffers(doc, 'GET', '/free')).toBeUndefined();
     expect(readPaymentOffers(doc, 'POST', '/data')).toBeUndefined();
   });
+});
+
+describe('discoverPaymentOffers with an untrusted seller', () => {
+  let server: http.Server | undefined;
+
+  afterEach(async () => {
+    if (server) {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server!.close(() => resolve()));
+    }
+    server = undefined;
+  });
+
+  /** A seller whose discovery endpoint is answered by `handler`. */
+  async function startRawSeller(handler: http.RequestListener): Promise<string> {
+    server = http.createServer(handler);
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', () => resolve()));
+    return `http://127.0.0.1:${(server!.address() as AddressInfo).port}`;
+  }
+
+  function sendJson(res: http.ServerResponse, body: unknown): void {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(body));
+  }
+
+  it('marks valid offers as untrusted', async () => {
+    const baseUrl = await startRawSeller((_req, res) =>
+      sendJson(res, buildOpenApiDocument(options))
+    );
+
+    const offers = await discoverPaymentOffers(baseUrl, 'GET', '/data');
+
+    expect(offers?.[0]?.untrusted).toBe(true);
+    expect(offers?.[0]?.payTo).toBe(PAY_TO);
+  });
+
+  it('throws NetworkTimeoutError for a slow document', async () => {
+    const baseUrl = await startRawSeller((_req, res) => {
+      setTimeout(() => sendJson(res, buildOpenApiDocument(options)), 500);
+    });
+
+    await expect(
+      discoverPaymentOffers(baseUrl, 'GET', '/data', { timeoutMs: 50 })
+    ).rejects.toBeInstanceOf(NetworkTimeoutError);
+  });
+
+  it('throws ValidationError for a document over the declared size limit', async () => {
+    const baseUrl = await startRawSeller((_req, res) =>
+      sendJson(res, { padding: 'x'.repeat(2048) })
+    );
+
+    await expect(
+      discoverPaymentOffers(baseUrl, 'GET', '/data', { maxBytes: 1024 })
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it('throws ValidationError for a streamed document that grows past the limit', async () => {
+    const baseUrl = await startRawSeller((_req, res) => {
+      // No Content-Length: the limit has to be enforced while reading.
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      for (let i = 0; i < 8; i++) res.write('x'.repeat(512));
+      res.end();
+    });
+
+    await expect(
+      discoverPaymentOffers(baseUrl, 'GET', '/data', { maxBytes: 1024 })
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it('throws ValidationError for a document that is not JSON', async () => {
+    const baseUrl = await startRawSeller((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{not json');
+    });
+
+    await expect(discoverPaymentOffers(baseUrl, 'GET', '/data')).rejects.toBeInstanceOf(
+      ValidationError
+    );
+  });
+
+  it.each([
+    ['a non-object document', null],
+    [
+      'an offer with an invalid payTo',
+      {
+        paths: {
+          '/data': {
+            get: { 'x-payment-info': { offers: [{ ...validOffer(), payTo: 'GBAD' }] } },
+          },
+        },
+      },
+    ],
+    [
+      'an offer with a non-integer amount',
+      {
+        paths: {
+          '/data': {
+            get: { 'x-payment-info': { offers: [{ ...validOffer(), amount: '1.5' }] } },
+          },
+        },
+      },
+    ],
+    [
+      'offers that are not an array',
+      { paths: { '/data': { get: { 'x-payment-info': { offers: 'free' } } } } },
+    ],
+  ])('throws ValidationError for %s', async (_label, body) => {
+    const baseUrl = await startRawSeller((_req, res) => sendJson(res, body));
+
+    await expect(discoverPaymentOffers(baseUrl, 'GET', '/data')).rejects.toBeInstanceOf(
+      ValidationError
+    );
+  });
+
+  function validOffer() {
+    return buildOpenApiDocument(options).paths['/data']!['get']!['x-payment-info'].offers[0]!;
+  }
 });

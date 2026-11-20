@@ -41,6 +41,7 @@ import { paymentMiddlewareFromConfig, type SchemeRegistration } from '@x402/expr
 import { HTTPFacilitatorClient } from '@x402/core/server';
 import { ExactStellarScheme } from '@x402/stellar/exact/server';
 import { config } from '../config';
+import { NetworkTimeoutError, ValidationError } from '../errors';
 import { toCaip2 } from '../network';
 import { fromStroops, toStroops } from '../utils/amount';
 import { createLogger } from '../utils/logger';
@@ -349,6 +350,69 @@ export function x402DiscoveryMiddleware(options: DiscoveryOptions) {
 
 // ─── Buyer side ──────────────────────────────────────────────────────────────
 
+/** Upper bound on a discovery request, response headers and body included. */
+export const DISCOVERY_TIMEOUT_MS = 5_000;
+
+/** Largest discovery document a buyer will read. */
+export const DISCOVERY_MAX_BYTES = 256 * 1024;
+
+export interface DiscoverPaymentOffersOptions {
+  /** Defaults to {@link DISCOVERY_TIMEOUT_MS}. */
+  timeoutMs?: number;
+  /** Defaults to {@link DISCOVERY_MAX_BYTES}. */
+  maxBytes?: number;
+}
+
+/**
+ * A payment offer read from a seller's discovery document.
+ *
+ * Every field comes from the seller, so the AI layer must treat it as
+ * untrusted data (in particular `description`), never as instructions.
+ */
+export type DiscoveredPaymentOffer = PaymentOffer & { readonly untrusted: true };
+
+const DiscoveredOfferSchema = z.object({
+  amount: z.string().regex(/^\d+$/, 'amount must be an integer number of stroops'),
+  currency: z.string().min(1),
+  method: z.literal('stellar'),
+  intent: z.literal('charge'),
+  protocol: z.literal('x402'),
+  price: z.string().regex(/^\d+(\.\d{1,7})?$/, 'price must be a Stellar decimal'),
+  asset: z.object({
+    code: z.string().min(1).max(12),
+    issuer: z.string().optional(),
+  }),
+  network: z.string().min(1),
+  payTo: stellarPublicKeySchema('payTo'),
+  description: z.string().optional(),
+});
+
+/** Read a response body, failing as soon as it exceeds `maxBytes`. */
+async function readLimitedBody(res: globalThis.Response, maxBytes: number): Promise<string> {
+  const declared = Number(res.headers.get('content-length'));
+  if (declared > maxBytes) {
+    throw new ValidationError(
+      `Discovery document is ${declared} bytes, over the ${maxBytes}-byte limit`
+    );
+  }
+  if (!res.body) return '';
+
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new ValidationError(`Discovery document exceeds the ${maxBytes}-byte limit`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 /** The payment offers a discovery document publishes for one operation, if any. */
 export function readPaymentOffers(
   doc: OpenApiDocument,
@@ -361,15 +425,68 @@ export function readPaymentOffers(
 /**
  * Fetch a seller's discovery document and return what an operation costs,
  * without calling (or paying for) the operation itself.
+ *
+ * The document comes from the seller, so it is bounded and validated: the
+ * request is aborted after `timeoutMs`, the body may not exceed `maxBytes`,
+ * and the operation's offers must match the offer schema. The returned offers
+ * are marked `untrusted` for the AI layer.
+ *
+ * @throws {NetworkTimeoutError} If the document is not received within `timeoutMs`.
+ * @throws {ValidationError} If the document is too large, not JSON, or its
+ *   offers are malformed.
  */
 export async function discoverPaymentOffers(
   baseUrl: string,
   method: string,
-  path: string
-): Promise<PaymentOffer[] | undefined> {
-  const res = await fetch(new URL(OPENAPI_DISCOVERY_PATH, baseUrl));
-  if (!res.ok) {
-    throw new Error(`Discovery document request failed with HTTP ${res.status}`);
+  path: string,
+  options: DiscoverPaymentOffersOptions = {}
+): Promise<DiscoveredPaymentOffer[] | undefined> {
+  const timeoutMs = options.timeoutMs ?? DISCOVERY_TIMEOUT_MS;
+  const maxBytes = options.maxBytes ?? DISCOVERY_MAX_BYTES;
+
+  let text: string;
+  try {
+    const res = await fetch(new URL(OPENAPI_DISCOVERY_PATH, baseUrl), {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      throw new Error(`Discovery document request failed with HTTP ${res.status}`);
+    }
+    text = await readLimitedBody(res, maxBytes);
+  } catch (err) {
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      throw new NetworkTimeoutError(`Discovery document not received within ${timeoutMs}ms`, err);
+    }
+    throw err;
   }
-  return readPaymentOffers((await res.json()) as OpenApiDocument, method, path);
+
+  let doc: unknown;
+  try {
+    doc = JSON.parse(text);
+  } catch (err) {
+    throw new ValidationError('Discovery document is not valid JSON', err);
+  }
+  if (typeof doc !== 'object' || doc === null) {
+    throw new ValidationError('Discovery document must be a JSON object');
+  }
+
+  const offers = readPaymentOffers(doc as OpenApiDocument, method, path);
+  if (offers === undefined) return undefined;
+
+  const parsed = z.array(DiscoveredOfferSchema).safeParse(offers);
+  if (!parsed.success) {
+    throw new ValidationError(
+      `Discovery document has malformed payment offers: ${parsed.error.message}`,
+      parsed.error
+    );
+  }
+  return parsed.data.map(({ asset, description, ...offer }) => ({
+    ...offer,
+    asset:
+      asset.issuer !== undefined
+        ? { code: asset.code, issuer: asset.issuer }
+        : { code: asset.code },
+    ...(description !== undefined && { description }),
+    untrusted: true as const,
+  }));
 }
