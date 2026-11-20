@@ -368,6 +368,11 @@ export interface AgentTask {
    * Keys expire after 24 hours.
    */
   idempotencyKey?: string;
+  /**
+   * Hold this value-moving task for human approval regardless of
+   * APPROVAL_THRESHOLD (used by the MCP server's `approve` payment mode, #917).
+   */
+  requireApproval?: boolean;
 }
 
 /**
@@ -1050,18 +1055,22 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
   // ─── Human-in-the-loop approvals (#736) ───────────────────────────────────
 
   /**
-   * Hold a task above APPROVAL_THRESHOLD as `pending_approval` instead of
-   * executing it. Its amount is reserved against the spending window straight
-   * away, so a pile of pending approvals cannot together exceed the limit, and
-   * a notification webhook is sent.
+   * Hold a task above APPROVAL_THRESHOLD (or any task with `requireApproval`)
+   * as `pending_approval` instead of executing it. Its amount is reserved
+   * against the spending window straight away, so a pile of pending approvals
+   * cannot together exceed the limit, and a notification webhook is sent.
    *
    * @returns the pending result, or null when the task does not need approval.
    */
   private holdForApproval(task: AgentTask, correlationId: string): AgentResult | null {
-    if (config.APPROVAL_THRESHOLD === undefined) return null;
-    const amount = taskAmount(task);
-    if (amount === null || !(parseFloat(amount) > parseFloat(config.APPROVAL_THRESHOLD))) {
-      return null;
+    let amount = taskAmount(task);
+    if (task.requireApproval) {
+      amount = amount ?? '0';
+    } else {
+      if (config.APPROVAL_THRESHOLD === undefined) return null;
+      if (amount === null || !(parseFloat(amount) > parseFloat(config.APPROVAL_THRESHOLD))) {
+        return null;
+      }
     }
 
     const reservationIds = reserveTaskSpends(task);
@@ -1096,7 +1105,9 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
         approvalId: approval.id,
         expiresAt: new Date(approval.expiresAt).toISOString(),
       },
-      error: `Amount ${amount} exceeds APPROVAL_THRESHOLD of ${config.APPROVAL_THRESHOLD} — awaiting approval`,
+      error: task.requireApproval
+        ? `${task.type} requires human approval — awaiting approval`
+        : `Amount ${amount} exceeds APPROVAL_THRESHOLD of ${config.APPROVAL_THRESHOLD} — awaiting approval`,
       errorType: ErrorType.PendingApproval,
       correlationId,
     };

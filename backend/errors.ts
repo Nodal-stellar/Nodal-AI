@@ -64,6 +64,18 @@ export class NetworkTimeoutError extends StructuredError {
   }
 }
 
+/**
+ * Soroban RPC could not be reached, so an operation that needs live ledger
+ * data was not attempted (e.g. an x402 auth entry was not signed, #923).
+ * Retryable: release any reservation and try again.
+ */
+export class RpcUnavailableError extends NetworkTimeoutError {
+  constructor(message: string, cause?: unknown) {
+    super(message, cause);
+    Object.setPrototypeOf(this, RpcUnavailableError.prototype);
+  }
+}
+
 export class ValidationError extends StructuredError {
   constructor(message: string, cause?: unknown) {
     super(message, ErrorType.ValidationError, cause);

@@ -5,7 +5,10 @@
  * Exposes tools over stdio and HTTP transports.
  */
 
-import { PayFiAgent, VALUE_MOVING_TASK_TYPES } from '../agent';
+import { PayFiAgent, AgentTask, VALUE_MOVING_TASK_TYPES } from '../agent';
+import { config } from '../config';
+import { ErrorType } from '../errors';
+import { generatePlanSummary } from '../executor';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger('mcp');
@@ -52,6 +55,17 @@ function getMCPTools(agent: PayFiAgent): MCPTool[] {
     });
 }
 
+/**
+ * How value-moving tool calls are handled (#917):
+ *   approve (default) — create a pending approval; a human approves it via
+ *                       the dashboard / POST /approvals/:id before anything moves.
+ *   direct            — execute immediately. Refused on mainnet unless
+ *                       MCP_FORCE_DIRECT_PAYMENTS=true.
+ */
+function getPaymentMode(): 'approve' | 'direct' {
+  return process.env.MCP_PAYMENT_MODE === 'direct' ? 'direct' : 'approve';
+}
+
 function toolToMCPSchema(tool: MCPTool): object {
   return {
     name: tool.name,
@@ -63,7 +77,10 @@ function toolToMCPSchema(tool: MCPTool): object {
 /**
  * Handle MCP request and return response.
  */
-async function handleRequest(agent: PayFiAgent, request: MCPRequest): Promise<MCPResponse> {
+export async function handleRequest(
+  agent: PayFiAgent,
+  request: MCPRequest
+): Promise<MCPResponse> {
   const { id } = request;
 
   try {
@@ -107,7 +124,50 @@ async function handleRequest(agent: PayFiAgent, request: MCPRequest): Promise<MC
           // Additional check handled by filter
         }
 
-        const result = await agent.run({ type: toolName, payload: args });
+        const paymentMode = getPaymentMode();
+        if (
+          tool.valueMoving &&
+          paymentMode === 'direct' &&
+          config.STELLAR_NETWORK === 'mainnet' &&
+          process.env.MCP_FORCE_DIRECT_PAYMENTS !== 'true'
+        ) {
+          return {
+            jsonrpc: '2.0',
+            id,
+            error: {
+              code: -32000,
+              message:
+                'MCP_PAYMENT_MODE=direct is refused on mainnet unless MCP_FORCE_DIRECT_PAYMENTS=true',
+            },
+          };
+        }
+
+        const task: AgentTask = {
+          type: toolName,
+          payload: args,
+          ...(tool.valueMoving && paymentMode === 'approve' ? { requireApproval: true } : {}),
+        };
+        const result = await agent.run(task);
+
+        if (result.errorType === ErrorType.PendingApproval) {
+          // Nothing moved: return the approval id and a deterministic summary
+          // so a human can review and approve it.
+          return {
+            jsonrpc: '2.0',
+            id,
+            result: {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    ...(result.data as object),
+                    summary: generatePlanSummary([task]),
+                  }),
+                },
+              ],
+            },
+          };
+        }
 
         if (!result.success) {
           return {
@@ -172,8 +232,9 @@ export async function startMCPServer(agent: PayFiAgent): Promise<void> {
  * Start MCP server over HTTP.
  */
 import express from 'express';
+import type { Server } from 'http';
 
-export function startMCPHTTPServer(agent: PayFiAgent, port = 3001): void {
+export function startMCPHTTPServer(agent: PayFiAgent, port = 3001): Server {
   const app = express();
   app.use(express.json());
 
@@ -187,5 +248,5 @@ export function startMCPHTTPServer(agent: PayFiAgent, port = 3001): void {
     res.json({ tools: tools.map(toolToMCPSchema) });
   });
 
-  app.listen(port, () => log.info({ port }, 'MCP HTTP server started'));
+  return app.listen(port, () => log.info({ port }, 'MCP HTTP server started'));
 }

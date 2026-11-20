@@ -56,7 +56,7 @@ import { config, MAINNET_SPENDING_CAP } from '../config';
 import { createLogger } from '../utils/logger';
 import { toCaip2 } from '../network';
 import { spendingTracker } from '../spending_tracker';
-import { PolicyViolationError } from '../errors';
+import { PolicyViolationError, RpcUnavailableError } from '../errors';
 import type { Signer } from '../signer';
 import { sorobanServer } from '../rpc_client';
 
@@ -93,20 +93,23 @@ class NodalClientStellarSigner implements ClientStellarSigner {
    * and Nodal's Signer.signAuthEntry (xdr.SorobanAuthorizationEntry in/out).
    */
   async signAuthEntry(entryXdr: string, opts: { networkPassphrase: string }): Promise<string> {
-    // Deserialise the incoming base64 XDR → SorobanAuthorizationEntry
-    const entry = xdr.SorobanAuthorizationEntry.fromXDR(entryXdr, 'base64');
-
     // Derive the ledger expiry: current ledger + buffer
     let validUntilLedgerSeq: number;
     try {
       const latestLedger = await sorobanServer.getLatestLedger();
       validUntilLedgerSeq = latestLedger.sequence + DEFAULT_AUTH_EXPIRY_LEDGERS;
-    } catch {
-      // If we cannot fetch the ledger, use a reasonable absolute value.
-      // ExactStellarScheme will re-simulate and may override this.
-      validUntilLedgerSeq = 0;
-      log.warn('Could not fetch latest ledger for auth entry expiry; using 0');
+    } catch (err) {
+      // Without the current ledger any expiry we pick is wrong (0 is already
+      // expired), so refuse to sign rather than hand out an unusable signature.
+      log.warn('Could not fetch latest ledger for auth entry expiry; not signing');
+      throw new RpcUnavailableError(
+        'x402 v2: Soroban RPC is unavailable; cannot derive the auth entry expiry ledger',
+        err
+      );
     }
+
+    // Deserialise the incoming base64 XDR → SorobanAuthorizationEntry
+    const entry = xdr.SorobanAuthorizationEntry.fromXDR(entryXdr, 'base64');
 
     const signed = await this.signer.signAuthEntry(
       entry,
@@ -191,6 +194,51 @@ function assertPayToAllowed(payTo: string, selfAddress: string): void {
     throw new PolicyViolationError(
       `x402 v2: payTo ${payTo} is not permitted by the ${policy} payment destination policy`
     );
+  }
+}
+
+/** Hosts allowed over plain HTTP outside mainnet (local development). */
+const LOCALHOST_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * Normalise an ALLOWED_X402_ORIGINS entry to a full origin
+ * (`scheme://host[:port]`). Bare hostnames mean the default HTTPS origin.
+ */
+function normalizeOrigin(entry: string): string {
+  const withScheme = entry.includes('://') ? entry : `https://${entry}`;
+  try {
+    return new URL(withScheme).origin;
+  } catch {
+    return entry;
+  }
+}
+
+/**
+ * Guard the resource URL before any request is made: it must be HTTPS (plain
+ * HTTP only for localhost off mainnet) and, when ALLOWED_X402_ORIGINS is set,
+ * its full origin (scheme, host and port) must be listed.
+ */
+function assertOriginAllowed(url: URL): void {
+  if (url.protocol !== 'https:') {
+    const devLocalhost =
+      url.protocol === 'http:' &&
+      LOCALHOST_HOSTNAMES.has(url.hostname) &&
+      config.STELLAR_NETWORK !== 'mainnet';
+    if (!devLocalhost) {
+      throw new Error(`x402 v2: refusing non-HTTPS resource origin: ${url.origin}`);
+    }
+  }
+
+  if (config.ALLOWED_X402_ORIGINS) {
+    const allowedOrigins = new Set(
+      config.ALLOWED_X402_ORIGINS.split(',')
+        .map((o) => o.trim())
+        .filter((o) => o.length > 0)
+        .map(normalizeOrigin)
+    );
+    if (!allowedOrigins.has(url.origin)) {
+      throw new Error(`x402 v2: untrusted resource origin: ${url.origin}`);
+    }
   }
 }
 
@@ -298,6 +346,9 @@ export class X402FetchClient {
   async fetch(url: string | URL, init?: RequestInit): Promise<X402FetchResult> {
     const urlStr = url instanceof URL ? url.toString() : url;
 
+    // ── 0. Origin guard (before any request leaves the agent) ────────────────
+    assertOriginAllowed(new URL(urlStr));
+
     // ── 1. Probe request ─────────────────────────────────────────────────────
     const probeResponse = await globalThis.fetch(urlStr, init);
 
@@ -338,14 +389,6 @@ export class X402FetchClient {
     assertAmountWithinLimits(chosen.amount);
     assertPayToAllowed(chosen.payTo, this.agentAddress);
 
-    if (config.ALLOWED_X402_ORIGINS) {
-      const allowedOrigins = new Set(config.ALLOWED_X402_ORIGINS.split(',').map((o) => o.trim()));
-      const hostname = new URL(urlStr).hostname;
-      if (!allowedOrigins.has(hostname)) {
-        throw new Error(`x402 v2: untrusted resource origin: ${hostname}`);
-      }
-    }
-
     // ── 5. Reserve spend ─────────────────────────────────────────────────────
     const reservationId = spendingTracker.reserve(chosen.amount);
 
@@ -355,6 +398,9 @@ export class X402FetchClient {
       paymentPayload = await this.httpClient.createPaymentPayload(paymentRequired);
     } catch (err) {
       spendingTracker.release(reservationId);
+      // Keep the typed error so the caller can tell an RPC outage (retryable)
+      // from other signing failures.
+      if (err instanceof RpcUnavailableError) throw err;
       throw new Error(
         `x402 v2: failed to create payment payload for ${urlStr}: ${err instanceof Error ? err.message : String(err)}`
       );
@@ -365,6 +411,9 @@ export class X402FetchClient {
 
     const paidResponse = await globalThis.fetch(urlStr, {
       ...init,
+      // Never follow a redirect with the payment header attached: it could
+      // forward the signed payment to another origin.
+      redirect: 'manual',
       headers: {
         ...(init?.headers as Record<string, string> | undefined),
         ...paymentHeaders,

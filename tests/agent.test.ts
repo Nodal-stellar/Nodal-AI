@@ -1768,6 +1768,35 @@ describe('PayFiAgent — approval threshold (#736)', () => {
     expect(spendingTracker.totalWithReserved()).toBe(0);
   });
 
+  it('holds a requireApproval task below the threshold without executing it (#917)', async () => {
+    const result = await agent.run({
+      ...bigPayment,
+      payload: { ...bigPayment.payload, amount: '10' },
+      requireApproval: true,
+    });
+
+    expect(result.errorType).toBe(ErrorType.PendingApproval);
+    expect(savePendingApproval).toHaveBeenCalledTimes(1);
+    const paymentTool = vi.mocked(StellarPaymentTool).mock.results[0]!.value;
+    expect(paymentTool.execute).not.toHaveBeenCalled();
+  });
+
+  it('executes an approved requireApproval task once (#917)', async () => {
+    await agent.run({
+      ...bigPayment,
+      payload: { ...bigPayment.payload, amount: '10' },
+      requireApproval: true,
+    });
+    const approval = heldApproval();
+    vi.mocked(getPendingApproval).mockReturnValue(approval);
+
+    const outcome = await agent.approve(approval.id);
+
+    expect(outcome?.result?.success).toBe(true);
+    const paymentTool = vi.mocked(StellarPaymentTool).mock.results[0]!.value;
+    expect(paymentTool.execute).toHaveBeenCalledTimes(1);
+  });
+
   it('returns null for an unknown approval id', async () => {
     vi.mocked(getPendingApproval).mockReturnValue(undefined);
 
