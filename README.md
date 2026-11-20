@@ -634,6 +634,15 @@ app.get('/api/premium-data', (req, res) => {
 });
 ```
 
+`nodalPaywall` gates whichever route it is mounted on, for any HTTP method:
+```typescript
+import { nodalPaywall } from './backend/x402/middleware';
+
+app.post('/api/generate', nodalPaywall({ price: '0.01', asset: 'USDC' }), (req, res) => {
+  res.json({ result: 'Generated content here' });
+});
+```
+
 ### Legacy mode
 
 Set `X402_USE_LEGACY=1` to use the legacy JSON challenge format with SHA-256(nonce)[0:28] memo:
