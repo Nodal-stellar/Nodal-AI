@@ -39,6 +39,7 @@ import {
   getErrorType,
   sanitizeCause,
 } from './errors';
+import type { ClaimableBalanceInput } from './tools/ClaimableBalanceTool';
 import { StellarPaymentTool } from './tools/StellarPaymentTool';
 import { SorobanInvokeTool } from './tools/SorobanInvokeTool';
 import { X402PaymentTool, X402Challenge, X402ChallengeSchema } from './tools/X402PaymentTool';
@@ -149,6 +150,12 @@ function taskSpends(task: AgentTask): TaskSpend[] {
   switch (task.type) {
     case 'stellar_payment':
       return one(p.amount, assetFieldsKey(p.assetCode, p.assetIssuer, 'XLM'));
+
+    case 'claimable_balance':
+      // Creating a balance submits an outgoing transaction; claiming one does not.
+      return p.action === 'create'
+        ? one(p.amount, assetFieldsKey(p.assetCode, p.assetIssuer, 'XLM'))
+        : [];
 
     case 'x402_respond':
       return one(
@@ -266,6 +273,11 @@ function taskDestinations(task: AgentTask): string[] {
       destinations.push((pay as Record<string, unknown>)?.destination);
     }
   }
+  if (task.type === 'claimable_balance' && p.action === 'create' && Array.isArray(p.claimants)) {
+    for (const claimant of p.claimants) {
+      destinations.push((claimant as Record<string, unknown>)?.destination);
+    }
+  }
   return destinations.filter((d): d is string => typeof d === 'string' && d.length > 0);
 }
 
@@ -318,6 +330,7 @@ export type BuiltinTaskType =
   | 'soroban_query'
   | 'x402_respond'
   | 'account_info'
+  | 'claimable_balance'
   | 'change_trust'
   | 'multisig_payment'
   | 'batch_payment'
@@ -401,6 +414,7 @@ export type TaskPayloadMap = {
   soroban_invoke: { contractId: string; method: string; args?: unknown[] };
   x402_respond: { challenge: unknown };
   account_info: { accountId?: string };
+  claimable_balance: ClaimableBalanceInput;
   change_trust: { assetCode: string; assetIssuer: string; limit?: string };
   multisig_payment: {
     destination: string;
@@ -472,6 +486,7 @@ export type TaskResultMap = {
   soroban_invoke: { simulationResult: unknown };
   x402_respond: { txHash: string; nonce: string; payer: string; signedAt: string };
   account_info: unknown;
+  claimable_balance: { txHash: string; ledger: number };
   change_trust: { txHash: string; ledger: number };
   multisig_payment: { txHash: string; ledger: number };
   batch_payment: { txHashes: string[]; ledger: number };
@@ -556,14 +571,15 @@ export interface AgentResult {
 }
 
 /**
- * Tasks that sign and submit a transaction from the agent account. These are
- * halted while the kill switch is engaged; every other task is read-only and
- * keeps working.
+ * Task types with at least one operation that moves value or spends fees.
+ * Payload-sensitive tasks are narrowed by isValueMovingTask() before guards
+ * such as the kill switch, destination policy, and approval gate are applied.
  */
 export const VALUE_MOVING_TASK_TYPES: ReadonlySet<TaskType> = new Set<TaskType>([
   'stellar_payment',
   'soroban_invoke',
   'x402_respond',
+  'claimable_balance',
   'change_trust',
   'multisig_payment',
   'batch_payment',
@@ -579,6 +595,20 @@ export const VALUE_MOVING_TASK_TYPES: ReadonlySet<TaskType> = new Set<TaskType>(
   'set_options',
   'cross_border_payment',
 ]);
+
+/**
+ * Whether this particular task payload can move value out of the agent account.
+ * Claimable-balance creation funds a balance for claimants; claiming an
+ * existing balance is an incoming transfer and does not use the outgoing
+ * spending, destination, pause, or approval guards.
+ */
+export function isValueMovingTask(task: AgentTask): boolean {
+  if (task.type === 'claimable_balance') {
+    const payload = task.payload as ClaimableBalanceInput | null | undefined;
+    return payload?.action === 'create';
+  }
+  return VALUE_MOVING_TASK_TYPES.has(task.type);
+}
 
 // ─── Middleware types ─────────────────────────────────────────────────────────────
 
@@ -1357,17 +1387,17 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
       // tool succeeds, released if anything before that throws.
       let reservationIds: string[] = [];
       try {
-        if (VALUE_MOVING_TASK_TYPES.has(task.type) && isPaused()) {
+        if (isValueMovingTask(task) && isPaused()) {
           throw new AgentPausedError(
             `Agent is paused — ${task.type} is halted until an operator resumes it`
           );
         }
 
-        if (VALUE_MOVING_TASK_TYPES.has(task.type)) {
+        if (isValueMovingTask(task)) {
           assertDestinationsAllowed(task);
         }
 
-        if (VALUE_MOVING_TASK_TYPES.has(task.type) && !this.approvedTasks.has(task)) {
+        if (isValueMovingTask(task) && !this.approvedTasks.has(task)) {
           const held = this.holdForApproval(task, correlationId);
           if (held) return held;
         }

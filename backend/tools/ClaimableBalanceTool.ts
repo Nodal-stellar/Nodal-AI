@@ -41,18 +41,25 @@ const ClaimantSchema = z.object({
   predicate: ClaimPredicateSchema.optional(),
 });
 
-const CreateClaimableBalanceSchema = z.object({
-  action: z.literal('create'),
-  assetCode: z.string().min(1).max(12),
-  assetIssuer: stellarPublicKeySchema('Asset issuer').optional(),
-  amount: z.string().min(1),
-  claimants: z.array(ClaimantSchema).min(1),
-});
+const CreateClaimableBalanceSchema = z
+  .object({
+    action: z.literal('create'),
+    assetCode: z.string().min(1).max(12),
+    assetIssuer: stellarPublicKeySchema('Asset issuer').optional(),
+    amount: z.string().min(1),
+    claimants: z.array(ClaimantSchema).min(1),
+  })
+  .refine((input) => input.assetCode === 'XLM' || Boolean(input.assetIssuer), {
+    message: 'assetIssuer is required for non-native assets',
+    path: ['assetIssuer'],
+  });
 
 const ClaimClaimableBalanceSchema = z.object({
   action: z.literal('claim'),
   balanceId: z.string().min(1),
 });
+
+export type ClaimPredicate = z.infer<typeof ClaimPredicateSchema>;
 
 export const ClaimableBalanceInputSchema = z.discriminatedUnion('action', [
   CreateClaimableBalanceSchema,
