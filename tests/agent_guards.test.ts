@@ -36,6 +36,7 @@ import {
 } from '../backend/persistence';
 import { StellarRPCError } from '../backend/rpc_client';
 import { assetKey } from '../backend/spending_tracker';
+import { RAW_PER_XNO } from '../backend/utils/nano_amount';
 import { dispatchWebhook } from '../backend/webhook';
 
 const { log } = vi.hoisted(() => {
@@ -123,6 +124,7 @@ const TOOL_FIELDS = {
   dex_offer: ['dexOfferTool', 'execute'],
   account_info: ['accountInfoTool', 'fetch'],
   friendbot: ['friendBotTool', 'execute'],
+  nano_payment: ['nanoPaymentTool', 'execute'],
 } as const;
 
 describe('PayFiAgent guards', () => {
@@ -531,6 +533,82 @@ describe('PayFiAgent guards', () => {
 
       expect(result.success).toBe(false);
       expect(spendingTracker.totalWithReserved()).toBe(0);
+    });
+  });
+
+  describe('nano payments and the spending tracker (#977)', () => {
+    const NANO_DEST = 'nano_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3';
+    const xnoRaw = (xno: bigint) => (xno * RAW_PER_XNO).toString();
+    const payNano = (amountRaw: string) =>
+      agent.run({
+        type: 'nano_payment',
+        payload: { recipient: NANO_DEST, amountRaw },
+      } as AgentTask);
+
+    it("SPENDING_LIMITS='XNO:1' blocks a 2 XNO payment before it is sent", async () => {
+      (config.SPENDING_LIMITS_MAP as Map<string, string>).set('XNO', '1');
+      const send = stubTool('nano_payment');
+
+      const result = await payNano(xnoRaw(2n));
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/XNO/);
+      expect(send).not.toHaveBeenCalled();
+      expect(spendingTracker.totalForAsset('XNO')).toBe(0n);
+    });
+
+    it('reserves the payment as XNO and commits it on success', async () => {
+      (config.SPENDING_LIMITS_MAP as Map<string, string>).set('XNO', '1');
+      stubTool('nano_payment');
+
+      const calls = await spendsOf({
+        type: 'nano_payment',
+        payload: { recipient: NANO_DEST, amountRaw: (RAW_PER_XNO / 2n).toString() },
+      });
+
+      expect(calls).toEqual([['0.5000000', 'XNO']]);
+      expect(spendingTracker.totalForAsset('XNO')).toBe(5_000_000n);
+      expect(spendingTracker.total()).toBe(0.5);
+    });
+
+    it('counts payments cumulatively against the XNO limit', async () => {
+      (config.SPENDING_LIMITS_MAP as Map<string, string>).set('XNO', '1');
+      const send = stubTool('nano_payment');
+      const sixTenths = ((RAW_PER_XNO * 6n) / 10n).toString();
+
+      expect((await payNano(sixTenths)).success).toBe(true);
+      expect((await payNano(sixTenths)).success).toBe(false);
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it('rounds a sub-unit raw amount up, so it is never counted as zero', async () => {
+      stubTool('nano_payment');
+
+      expect(await spendsOf({ type: 'nano_payment', payload: { amountRaw: '1' } })).toEqual([
+        ['0.0000001', 'XNO'],
+      ]);
+    });
+
+    it('releases the reservation when the send fails', async () => {
+      stubTool('nano_payment').mockRejectedValue(new Error('node unreachable'));
+
+      const result = await payNano(xnoRaw(1n));
+
+      expect(result.success).toBe(false);
+      expect(spendingTracker.totalWithReserved()).toBe(0);
+    });
+
+    it('is denied when SPENDING_LIMITS lists other assets but not XNO', async () => {
+      (config.SPENDING_LIMITS_MAP as Map<string, string>).set('XLM', '100');
+      mutableConfig.SPENDING_LIMITS_ALLOW_UNKNOWN = false;
+      const send = stubTool('nano_payment');
+
+      try {
+        expect((await payNano(xnoRaw(1n))).success).toBe(false);
+        expect(send).not.toHaveBeenCalled();
+      } finally {
+        mutableConfig.SPENDING_LIMITS_ALLOW_UNKNOWN = true;
+      }
     });
   });
 
