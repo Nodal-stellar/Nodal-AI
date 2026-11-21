@@ -12,7 +12,8 @@
  *   - Request bodies are limited to MCP_MAX_BODY_BYTES (default 1 MiB).
  */
 
-import { PayFiAgent, VALUE_MOVING_TASK_TYPES } from '../agent';
+import { PayFiAgent } from '../agent';
+import { config } from '../config';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger('mcp');
@@ -56,10 +57,12 @@ function safeEqual(a: string, b: string): boolean {
 
 /**
  * Build tool schema for MCP from agent tools.
- * Read-only tools exposed by default; value-moving require MCP_ALLOW_PAYMENTS.
+ * Read-only tools exposed by default; value-moving require the validated
+ * MCP_ALLOW_PAYMENTS setting, so `TRUE` and `1` are handled like the rest of
+ * the app.
  */
-function getMCPTools(agent: PayFiAgent): MCPTool[] {
-  const allowPayments = process.env.MCP_ALLOW_PAYMENTS === 'true';
+export function getMCPTools(agent: PayFiAgent): MCPTool[] {
+  const allowPayments = config.MCP_ALLOW_PAYMENTS;
 
   return agent
     .getTools()
@@ -124,10 +127,6 @@ async function handleRequest(agent: PayFiAgent, request: MCPRequest): Promise<MC
             id,
             error: { code: -32601, message: `Tool not found: ${toolName}` },
           };
-        }
-
-        if (tool.valueMoving && !VALUE_MOVING_TASK_TYPES.has(toolName as any)) {
-          // Additional check handled by filter
         }
 
         const result = await agent.run({ type: toolName, payload: args });
