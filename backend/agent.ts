@@ -556,9 +556,16 @@ export interface AgentResult {
 }
 
 /**
- * Tasks that sign and submit a transaction from the agent account. These are
- * halted while the kill switch is engaged; every other task is read-only and
- * keeps working.
+ * Tasks that move value out of the agent's control: they sign and submit a
+ * transaction (Stellar/Soroban) or broadcast a payment on another rail
+ * (x402, Nano). These are halted while the kill switch is engaged, gated
+ * behind MCP_ALLOW_PAYMENTS on the MCP gateway, held for approval above
+ * APPROVAL_THRESHOLD, and rejected by the planner; every other task is
+ * read-only and keeps working.
+ *
+ * Invariant (#948): every built-in tool whose registry entry declares
+ * `valueMoving: true` MUST appear here — tests/agent_guards.test.ts pins this
+ * so a payment rail can never silently bypass the kill switch again.
  */
 export const VALUE_MOVING_TASK_TYPES: ReadonlySet<TaskType> = new Set<TaskType>([
   'stellar_payment',
@@ -578,6 +585,8 @@ export const VALUE_MOVING_TASK_TYPES: ReadonlySet<TaskType> = new Set<TaskType>(
   'swap',
   'set_options',
   'cross_border_payment',
+  // Nano micro-payments send funds on the Nano rail (#715) — value-moving (#948).
+  'nano_payment',
 ]);
 
 // ─── Middleware types ─────────────────────────────────────────────────────────────

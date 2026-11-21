@@ -18,7 +18,10 @@ describe('NanoPaymentTool — Feeless settlement rail (#715)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    tool = new NanoPaymentTool();
+    // Inject a seed directly: execute() requires one since the default-seed
+    // fallback was removed from task payloads (a seed comes from NANO_SEED /
+    // NANO_SEED_ARN via getNanoSeed(), not from the caller).
+    tool = new NanoPaymentTool('ab'.repeat(32));
   });
 
   describe('Input validation', () => {

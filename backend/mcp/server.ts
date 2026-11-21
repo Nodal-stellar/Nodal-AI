@@ -13,7 +13,7 @@
  */
 
 import { createHash, timingSafeEqual } from 'crypto';
-import { PayFiAgent } from '../agent';
+import { PayFiAgent, VALUE_MOVING_TASK_TYPES } from '../agent';
 import { config } from '../config';
 import { createLogger } from '../utils/logger';
 
@@ -44,8 +44,7 @@ export interface MCPResponse {
  * Constant-time string comparison to prevent timing-based token oracle attacks.
  */
 function safeEqual(a: string, b: string): boolean {
-  // Use Node's built-in timingSafeEqual for byte-level protection.
-  const { timingSafeEqual } = require('crypto') as typeof import('crypto');
+  // Use Node's built-in timingSafeEqual (imported at the top) for byte-level protection.
   const aBuf = Buffer.from(a, 'utf8');
   const bBuf = Buffer.from(b, 'utf8');
   if (aBuf.length !== bBuf.length) {
@@ -59,8 +58,14 @@ function safeEqual(a: string, b: string): boolean {
 /**
  * Build tool schema for MCP from agent tools.
  * Read-only tools exposed by default; value-moving require MCP_ALLOW_PAYMENTS.
+ *
+ * A tool is payment-gated when its registry entry declares `valueMoving: true`
+ * OR its name is in VALUE_MOVING_TASK_TYPES (#948). The set is the same one the
+ * kill switch, approval holds and planner gate on, so a registry flag that is
+ * missing or wrong can no longer expose a value-moving task (e.g. nano_payment)
+ * over MCP while payments are disallowed.
  */
-function getMCPTools(agent: PayFiAgent): MCPTool[] {
+export function getMCPTools(agent: PayFiAgent): MCPTool[] {
   const allowPayments = config.MCP_ALLOW_PAYMENTS;
 
   return agent
@@ -69,7 +74,7 @@ function getMCPTools(agent: PayFiAgent): MCPTool[] {
       name: tool.name,
       description: tool.description,
       inputSchema: tool.inputSchema,
-      valueMoving: tool.valueMoving,
+      valueMoving: tool.valueMoving || VALUE_MOVING_TASK_TYPES.has(tool.name),
     }))
     .filter((tool) => {
       if (!tool.valueMoving) return true;
@@ -87,8 +92,10 @@ function toolToMCPSchema(tool: MCPTool): object {
 
 /**
  * Handle MCP request and return response.
+ * Exported for tests so the gateway paths (tools/list, tools/call) can be
+ * exercised without binding a transport.
  */
-async function handleRequest(agent: PayFiAgent, request: MCPRequest): Promise<MCPResponse> {
+export async function handleRequest(agent: PayFiAgent, request: MCPRequest): Promise<MCPResponse> {
   const { id } = request;
 
   try {
@@ -241,9 +248,7 @@ export function startMCPHTTPServer(agent: PayFiAgent, port = 3001): void {
   if (apiToken) {
     app.use((req, res, next) => {
       const authHeader = req.headers['authorization'] ?? '';
-      const supplied = authHeader.startsWith('Bearer ')
-        ? authHeader.slice('Bearer '.length)
-        : '';
+      const supplied = authHeader.startsWith('Bearer ') ? authHeader.slice('Bearer '.length) : '';
 
       if (!safeEqual(supplied, apiToken)) {
         res.status(401).json({ error: 'Unauthorized' });

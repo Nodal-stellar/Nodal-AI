@@ -42,6 +42,9 @@ vi.mock('../backend/config', () => {
       MAX_CONCURRENT_TASKS: 1,
       agentKeypair: () => Keypair.fromSecret(secret),
     },
+    // PayFiAgent's constructor builds a NanoPaymentTool, which resolves the
+    // seed through this module-level export.
+    getNanoSeed: () => undefined,
   };
 });
 

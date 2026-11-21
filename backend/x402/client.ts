@@ -55,7 +55,7 @@ import type { ClientStellarSigner, RpcConfig } from '@x402/stellar';
 
 import { config, MAINNET_SPENDING_CAP } from '../config';
 import { createLogger } from '../utils/logger';
-import { fromStroops, toStroops, tryToStroops } from '../utils/amount';
+import { atomicAmountToStroops, fromStroops, toStroops, tryToStroops } from '../utils/amount';
 import { toCaip2 } from '../network';
 import { assetKey, spendingTracker } from '../spending_tracker';
 import { PolicyViolationError } from '../errors';
@@ -431,8 +431,10 @@ export class X402FetchClient {
     }
 
     // ── 5. Reserve spend ─────────────────────────────────────────────────────
+    // chosen.amount is atomic (smallest units); the tracker wants a decimal
+    // string, so convert via the stroops bigint computed above.
     const reservationId = spendingTracker.reserve(
-      chosen.amount,
+      fromStroops(amountStroops),
       assetKeyForRequirement(chosen.asset)
     );
 

@@ -56,6 +56,9 @@ vi.mock('../backend/config', () => {
       AGENT_PUBLIC_KEY: Keypair.fromSecret(secret).publicKey(),
       agentKeypair: () => Keypair.fromSecret(secret),
     },
+    // PayFiAgent's constructor builds a NanoPaymentTool, which resolves the
+    // seed through this module-level export.
+    getNanoSeed: () => undefined,
   };
 });
 

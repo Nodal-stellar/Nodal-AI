@@ -177,6 +177,9 @@ vi.mock('../backend/config', () => ({
     }),
   },
   MAINNET_SPENDING_CAP: 10_000,
+  // PayFiAgent's constructor builds a NanoPaymentTool, which resolves the
+  // seed through this module-level export.
+  getNanoSeed: () => undefined,
 }));
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

@@ -35,6 +35,7 @@ import { LedgerInfoTool } from '../backend/tools/LedgerInfoTool';
 import { NetworkStatusTool } from '../backend/tools/NetworkStatusTool';
 import { OfferBookTool } from '../backend/tools/OfferBookTool';
 import { SorobanStorageTool } from '../backend/tools/SorobanStorageTool';
+import { NanoPaymentTool } from '../backend/tools/NanoPaymentTool';
 import { ValidationError, UnauthorizedError, ErrorType } from '../backend/errors';
 import { isPaused } from '../backend/kill_switch';
 import { config } from '../backend/config';
@@ -251,6 +252,19 @@ vi.mock('../backend/tools/SorobanStorageTool', () => ({
   }),
 }));
 
+vi.mock('../backend/tools/NanoPaymentTool', () => ({
+  NanoPaymentInputSchema: passthroughSchema,
+  NanoPaymentTool: vi.fn().mockImplementation(function () {
+    return {
+      execute: vi.fn().mockResolvedValue({
+        blockHash: 'mock_nano_block',
+        network: 'nano',
+        precheckPassed: true,
+      }),
+    };
+  }),
+}));
+
 vi.mock('../backend/tools/ContractEventListener', () => ({
   listen: vi.fn().mockReturnValue(() => {}),
 }));
@@ -330,6 +344,8 @@ vi.mock('../backend/config', () => ({
     }),
   },
   MAINNET_SPENDING_CAP: 10_000,
+  // Module-level export used by NanoPaymentTool's constructor.
+  getNanoSeed: () => undefined,
 }));
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -1650,6 +1666,59 @@ describe('PayFiAgent — kill switch (#743)', () => {
     expect(result.data).toEqual({ accountId: DEST });
   });
 
+  // ── #948: nano_payment must be classified as value-moving ─────────────────
+
+  const nanoTask = {
+    type: 'nano_payment' as const,
+    payload: {
+      recipient: 'nano_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3',
+      amountRaw: '1000000000000000000000000000',
+    },
+  };
+
+  it('rejects nano_payment with AGENT_PAUSED while the kill switch is engaged', async () => {
+    vi.mocked(isPaused).mockReturnValue(true);
+
+    const result = await agent.run(nanoTask);
+
+    expect(result.success).toBe(false);
+    expect(result.errorType).toBe(ErrorType.AgentPaused);
+    expect(result.error).toMatch(/Agent is paused/);
+    expect(result.error).toMatch(/nano_payment/);
+    const nanoTool = vi.mocked(NanoPaymentTool).mock.results[0]!.value;
+    expect(nanoTool.execute).not.toHaveBeenCalled();
+    expect(spendingTracker.total()).toBe(0);
+  });
+
+  it('runs nano_payment again once the agent is resumed', async () => {
+    vi.mocked(isPaused).mockReturnValue(true);
+    expect((await agent.run(nanoTask)).success).toBe(false);
+
+    vi.mocked(isPaused).mockReturnValue(false);
+    const result = await agent.run(nanoTask);
+
+    expect(result.success).toBe(true);
+    expect(result.errorType).toBeUndefined();
+    const nanoTool = vi.mocked(NanoPaymentTool).mock.results[0]!.value;
+    expect(nanoTool.execute).toHaveBeenCalledWith(nanoTask.payload);
+  });
+
+  it('stops a runSequence at a nano_payment while paused, like other value-moving tasks', async () => {
+    vi.mocked(isPaused).mockReturnValue(true);
+
+    const results = await agent.runSequence([
+      { type: 'account_info', payload: {} },
+      nanoTask,
+      { type: 'account_info', payload: {} },
+    ]);
+
+    expect(results).toHaveLength(2);
+    expect(results[0]!.success).toBe(true);
+    expect(results[1]!.success).toBe(false);
+    expect(results[1]!.errorType).toBe(ErrorType.AgentPaused);
+    expect(results[1]!.taskType).toBe('nano_payment');
+  });
+
   it('runs value-moving tasks again once resumed', async () => {
     vi.mocked(isPaused).mockReturnValue(true);
     expect((await agent.run(paymentTask)).success).toBe(false);
@@ -1662,7 +1731,13 @@ describe('PayFiAgent — kill switch (#743)', () => {
   });
 
   it('classifies signing tasks as value-moving and lookups as read-only', () => {
-    for (const type of ['stellar_payment', 'x402_respond', 'soroban_invoke', 'swap'] as const) {
+    for (const type of [
+      'stellar_payment',
+      'x402_respond',
+      'soroban_invoke',
+      'swap',
+      'nano_payment',
+    ] as const) {
       expect(VALUE_MOVING_TASK_TYPES.has(type)).toBe(true);
     }
     for (const type of [

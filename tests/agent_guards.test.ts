@@ -37,6 +37,7 @@ import {
 import { StellarRPCError } from '../backend/rpc_client';
 import { assetKey } from '../backend/spending_tracker';
 import { dispatchWebhook } from '../backend/webhook';
+import { _resetKillSwitch, pauseAgent, resumeAgent } from '../backend/kill_switch';
 
 const { log } = vi.hoisted(() => {
   const log: Record<string, ReturnType<typeof vi.fn>> = {
@@ -100,9 +101,13 @@ vi.mock('../backend/config', () => {
       MAX_CONCURRENT_TASKS: 10,
       PAYMENT_DESTINATION_POLICY: 'open',
       PAYMENT_DESTINATIONS: [],
+      NANO_RPC_URL: 'http://127.0.0.1:7076',
       agentKeypair: () => Keypair.fromSecret(secret),
     },
     MAINNET_SPENDING_CAP: 10_000,
+    // PayFiAgent's constructor builds a NanoPaymentTool, which resolves the
+    // seed through this module-level export (#948 tests construct a real agent).
+    getNanoSeed: () => undefined,
   };
 });
 
@@ -455,6 +460,7 @@ describe('PayFiAgent guards', () => {
           'fee_bump',
           'liquidity_pool',
           'multisig_payment',
+          'nano_payment',
           'path_payment',
           'sequence_number',
           'set_options',
@@ -466,6 +472,66 @@ describe('PayFiAgent guards', () => {
           'x402_respond',
         ].sort()
       );
+    });
+
+    it('keeps the registry and the kill-switch set in sync (#948)', () => {
+      // Every built-in tool flagged valueMoving: true must be in
+      // VALUE_MOVING_TASK_TYPES, or it bypasses the kill switch, MCP gating and
+      // planner approvals. nano_payment regressed exactly this way.
+      const valueMovingTools = agent
+        .getTools()
+        .filter((tool) => tool.valueMoving)
+        .map((tool) => tool.name);
+
+      expect(valueMovingTools.length).toBeGreaterThan(0);
+      for (const name of valueMovingTools) {
+        expect(
+          VALUE_MOVING_TASK_TYPES.has(name),
+          `tool "${name}" is valueMoving: true in the registry but missing from VALUE_MOVING_TASK_TYPES`
+        ).toBe(true);
+      }
+      // The Nano rail is the concrete case from #948.
+      expect(agent.getTools().some((tool) => tool.name === 'nano_payment')).toBe(true);
+      expect(VALUE_MOVING_TASK_TYPES.has('nano_payment')).toBe(true);
+    });
+
+    it('halts nano_payment while the kill switch is engaged, but not read-only tasks (#948)', async () => {
+      const execute = vi.fn().mockResolvedValue({ blockHash: 'b', network: 'nano' });
+      (agent as unknown as Record<string, unknown>).nanoPaymentTool = { execute };
+
+      pauseAgent('test incident');
+      try {
+        const nano = await agent.run({
+          type: 'nano_payment',
+          payload: {
+            recipient: 'nano_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3',
+            amountRaw: '42',
+          },
+        } as AgentTask);
+        expect(nano.success).toBe(false);
+        expect(nano.errorType).toBe(ErrorType.AgentPaused);
+        expect(nano.error).toMatch(/Agent is paused/);
+        expect(execute).not.toHaveBeenCalled();
+
+        // Read-only tasks keep working while paused.
+        stubTool('account_info', { accountId: DEST });
+        const read = await agent.run({ type: 'account_info', payload: {} } as AgentTask);
+        expect(read.success).toBe(true);
+      } finally {
+        resumeAgent();
+        _resetKillSwitch();
+      }
+
+      // And it runs again once resumed.
+      const after = await agent.run({
+        type: 'nano_payment',
+        payload: {
+          recipient: 'nano_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3',
+          amountRaw: '42',
+        },
+      } as AgentTask);
+      expect(after.success).toBe(true);
+      expect(execute).toHaveBeenCalledTimes(1);
     });
   });
 

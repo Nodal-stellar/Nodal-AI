@@ -62,6 +62,9 @@ vi.mock('../backend/config', () => ({
       secret: () => 'SADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP54X',
     }),
   },
+  // PayFiAgent's constructor builds a NanoPaymentTool, which resolves the
+  // seed through this module-level export.
+  getNanoSeed: () => undefined,
 }));
 
 describe('PayFiAgent integration', () => {

@@ -164,6 +164,15 @@ export function tryToStroops(decimal: string): bigint | null {
 }
 
 /**
+ * Convert an x402 atomic amount (integer string in the asset's smallest unit,
+ * e.g. stroops for XLM) to a stroops bigint. x402 `PaymentRequirements.amount`
+ * is already atomic, so this is a plain integer parse, not a decimal one.
+ */
+export function atomicAmountToStroops(atomic: string): bigint {
+  return BigInt(atomic);
+}
+
+/**
  * Zod schema for validating a positive Stellar payment amount.
  */
 export const positiveAmountSchema = z

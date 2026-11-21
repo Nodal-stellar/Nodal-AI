@@ -64,7 +64,7 @@ function sendRequest(
 // ─── Build a test Express app mirroring startMCPHTTPServer middleware ─────────
 
 function buildTestApp(opts: {
-  apiToken?: string;
+  apiToken?: string | undefined;
   maxBodyBytes?: number;
   allowPayments?: boolean;
 }) {
@@ -84,7 +84,7 @@ function buildTestApp(opts: {
   if (apiToken) {
     const { timingSafeEqual } = require('crypto') as typeof import('crypto');
 
-    function safeEqual(a: string, b: string): boolean {
+    const safeEqual = (a: string, b: string): boolean => {
       const aBuf = Buffer.from(a, 'utf8');
       const bBuf = Buffer.from(b, 'utf8');
       if (aBuf.length !== bBuf.length) {
@@ -92,7 +92,7 @@ function buildTestApp(opts: {
         return false;
       }
       return timingSafeEqual(aBuf, bBuf);
-    }
+    };
 
     app.use((req, res, next) => {
       const authHeader = req.headers['authorization'] ?? '';

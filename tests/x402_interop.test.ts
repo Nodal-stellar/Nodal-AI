@@ -83,10 +83,16 @@ vi.mock('../backend/config', () => {
     SPENDING_LIMITS_MAP: new Map<string, string>(),
     SPENDING_LIMITS_ALLOW_UNKNOWN: false,
     NANO_RPC_URL: 'http://127.0.0.1:7076',
+    NANO_ENABLED: false,
+    MCP_HOST: '127.0.0.1',
+    MCP_MAX_BODY_BYTES: 1_048_576,
   };
 
   return {
     config: mockConfig,
+    // PayFiAgent's constructor builds a NanoPaymentTool, which resolves the
+    // seed through this module-level export.
+    getNanoSeed: () => undefined,
   };
 });
 
@@ -183,6 +189,8 @@ function createValidChallenge(overrides: Record<string, unknown> = {}): any {
 const PAID_URL = 'https://api.example.com/data';
 const EURC_ISSUER = 'GDHU6WRG4IEQXM5NZ4BMPKOXHW76MZM4Y2IEMFDVXBSDP6SJY4ITNPP2';
 const EURC_KEY = `EURC:${EURC_ISSUER}`;
+// x402 v2 requirements carry the SAC contract id, not the code:issuer form (#922).
+const EURC_SAC = new Asset('EURC', EURC_ISSUER).contractId(Networks.TESTNET);
 const USDC_KEY = 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
 
 /** Temporarily override mutable config fields for one test. */
@@ -522,7 +530,7 @@ describe('x402 v2 Interoperability', () => {
     // #921: the reservation is keyed by the asset actually paid.
     it('reserves a payment in another allowed asset under that asset key', async () => {
       httpClient.getPaymentRequiredResponse.mockReturnValue({
-        accepts: [requirement({ asset: EURC_KEY })],
+        accepts: [requirement({ asset: EURC_SAC })],
       });
       stubPaidServer();
 
@@ -545,7 +553,7 @@ describe('x402 v2 Interoperability', () => {
 
     it('denies an asset missing from SPENDING_LIMITS unless unknown assets are allowed', async () => {
       httpClient.getPaymentRequiredResponse.mockReturnValue({
-        accepts: [requirement({ asset: EURC_KEY })],
+        accepts: [requirement({ asset: EURC_SAC })],
       });
 
       await withConfig(

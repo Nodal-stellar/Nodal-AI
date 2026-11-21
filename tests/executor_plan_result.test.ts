@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { executePlan, createPlan, PlanResult } from '../backend/executor';
+import { executePlan, createPlan, planHasValueMovingTasks, PlanResult } from '../backend/executor';
 import type { AgentTask } from '../backend/agent';
 
 // ─── Fake timer infrastructure ────────────────────────────────────────────────
@@ -20,9 +20,11 @@ function makeAgent(opts: { runSequenceResult?: unknown[]; runSequenceThrows?: bo
     run: vi.fn().mockResolvedValue({ success: true, taskType: 'account_info', data: {} }),
     runSequence: opts.runSequenceThrows
       ? vi.fn().mockRejectedValue(new Error('simulated failure'))
-      : vi.fn().mockResolvedValue(
-          opts.runSequenceResult ?? [{ success: true, taskType: 'stellar_payment', data: {} }]
-        ),
+      : vi
+          .fn()
+          .mockResolvedValue(
+            opts.runSequenceResult ?? [{ success: true, taskType: 'stellar_payment', data: {} }]
+          ),
   } as any;
 }
 
@@ -173,6 +175,51 @@ describe('executePlan — issue #909', () => {
 
       expect(result.status).toBe('executed');
       expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+
+  // ── #948: nano_payment plans are value-moving and need confirmation ──────
+
+  describe('nano_payment plan classification (#948)', () => {
+    const NANO_TASK: AgentTask = {
+      type: 'nano_payment',
+      payload: {
+        recipient: 'nano_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3',
+        amountRaw: '1000000',
+      },
+    };
+
+    it('planHasValueMovingTasks is true for a plan containing nano_payment', () => {
+      expect(planHasValueMovingTasks(createPlan([NANO_TASK]))).toBe(true);
+      expect(planHasValueMovingTasks(createPlan([READONLY_TASK, NANO_TASK]))).toBe(true);
+      expect(planHasValueMovingTasks(createPlan([READONLY_TASK]))).toBe(false);
+    });
+
+    it('executePlan asks for confirmation before running a nano_payment plan', async () => {
+      const plan = createPlan([NANO_TASK]);
+      const agent = makeAgent();
+
+      const confirm = vi.fn().mockResolvedValue(false); // operator denies
+      const resultPromise = executePlan(agent, plan, { confirm });
+      await vi.runAllTimersAsync();
+      const result: PlanResult = await resultPromise;
+
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(result.status).toBe('denied');
+      expect(agent.runSequence).not.toHaveBeenCalled();
+    });
+
+    it('executePlan runs a nano_payment plan once confirmed', async () => {
+      const plan = createPlan([NANO_TASK]);
+      const agent = makeAgent();
+
+      const confirm = vi.fn().mockResolvedValue(true);
+      const resultPromise = executePlan(agent, plan, { confirm });
+      await vi.runAllTimersAsync();
+      const result: PlanResult = await resultPromise;
+
+      expect(result.status).toBe('executed');
+      expect(agent.runSequence).toHaveBeenCalledWith(plan.tasks);
     });
   });
 });
