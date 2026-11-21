@@ -28,6 +28,17 @@ import * as http from 'http';
 import { createHash, timingSafeEqual } from 'crypto';
 import { config } from './config';
 import { getResults } from './persistence';
+import {
+  savePlan,
+  getPlan,
+  confirmPlan,
+  cancelPlan,
+  markPlanExecuted,
+  markPlanExecuteFailed,
+  expireOldPlans,
+  computePlanHash,
+  getPlanAuditLog,
+} from './persistence';
 import { horizonServer, sorobanServer } from './rpc_client';
 import { db } from './db/client';
 import { handleError } from './middleware/error_handler';
@@ -225,6 +236,8 @@ const APPROVALS_PATH = '/approvals';
 const STREAM_PATH = '/stream';
 const ADMIN_PAUSE_PATH = '/admin/pause';
 const ADMIN_RESUME_PATH = '/admin/resume';
+// Issue #908 — plan CRUD + confirm/cancel
+const PLANS_PATH = '/plans';
 
 /**
  * Creates and returns the health-check HTTP server.
@@ -386,6 +399,60 @@ export function createHealthServer(agent?: PayFiAgent): http.Server {
       resumeAgent('Resumed via HTTP API');
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ paused: false }));
+      return;
+    }
+
+    // ── POST /plans ────────────────────────────────────────────────────────
+    // Create a plan from a natural-language request (issue #908).
+    if (req.method === 'POST' && req.url === PLANS_PATH) {
+      if (!isAuthenticated(req)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+      }
+      void handleCreatePlan(req, res, agent);
+      return;
+    }
+
+    // ── GET /plans/:id ─────────────────────────────────────────────────────
+    if (req.method === 'GET' && req.url?.startsWith(`${PLANS_PATH}/`)) {
+      const planId = decodeURIComponent(req.url.slice(PLANS_PATH.length + 1)).split('/')[0] ?? '';
+      if (!isAuthenticated(req)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+      }
+      handleGetPlan(res, planId);
+      return;
+    }
+
+    // ── POST /plans/:id/confirm ────────────────────────────────────────────
+    if (
+      req.method === 'POST' &&
+      req.url?.match(/^\/plans\/[^/]+\/confirm$/)
+    ) {
+      if (!isAuthenticated(req)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+      }
+      const planId = decodeURIComponent(req.url.slice(PLANS_PATH.length + 1).replace(/\/confirm$/, ''));
+      void handleConfirmPlan(res, agent, planId);
+      return;
+    }
+
+    // ── POST /plans/:id/cancel ─────────────────────────────────────────────
+    if (
+      req.method === 'POST' &&
+      req.url?.match(/^\/plans\/[^/]+\/cancel$/)
+    ) {
+      if (!isAuthenticated(req)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+      }
+      const planId = decodeURIComponent(req.url.slice(PLANS_PATH.length + 1).replace(/\/cancel$/, ''));
+      handleCancelPlan(res, planId);
       return;
     }
 
@@ -725,4 +792,235 @@ function handleStream(
     clearInterval(interval);
     log.info('SSE client disconnected');
   });
+}
+
+// ─── Plan route handlers (issue #908) ────────────────────────────────────────
+
+/**
+ * POST /plans
+ *
+ * Body: { "request": "<natural-language instruction>" }
+ *
+ * Creates a plan via the agent's Planner and persists it.  Returns the plan
+ * record (status: "pending") together with its audit trail entry.
+ *
+ * Requires Bearer-token auth.
+ */
+async function handleCreatePlan(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  agent: PayFiAgent | undefined
+): Promise<void> {
+  const send = (status: number, payload: unknown): void => {
+    const body = JSON.stringify(payload);
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+    });
+    res.end(body);
+  };
+
+  if (!agent) {
+    send(503, { error: 'Agent not available' });
+    return;
+  }
+
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    send(400, { error: 'Request body must be valid JSON' });
+    return;
+  }
+
+  const request = (body as Record<string, unknown>)?.request;
+  if (typeof request !== 'string' || request.trim().length === 0) {
+    send(400, { error: '"request" must be a non-empty string' });
+    return;
+  }
+
+  try {
+    // Expire stale plans before creating a new one.
+    expireOldPlans();
+
+    const { Planner } = await import('./planner');
+    const planner = new Planner(agent);
+    const plan = await planner.plan(request.trim());
+
+    const persisted = savePlan({
+      id: plan.id,
+      hash: computePlanHash(plan.tasks),
+      tasks: JSON.stringify(plan.tasks),
+      preview: plan.summary,
+      createdAt: plan.createdAt,
+      expiresAt: plan.expiresAt,
+    });
+
+    log.info({ planId: plan.id }, 'Plan created via POST /plans');
+    send(201, { plan: persisted });
+  } catch (err) {
+    const errorResponse = handleError(err);
+    log.error({ msg: 'Failed to create plan', status: errorResponse.status, type: errorResponse.type });
+    send(errorResponse.status, errorResponse);
+  }
+}
+
+/**
+ * GET /plans/:id
+ *
+ * Returns the persisted plan record plus its audit log.
+ * Returns 404 when the plan is unknown.
+ */
+function handleGetPlan(res: http.ServerResponse, planId: string): void {
+  const send = (status: number, payload: unknown): void => {
+    const body = JSON.stringify(payload);
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+    });
+    res.end(body);
+  };
+
+  try {
+    const plan = getPlan(planId);
+    if (!plan) {
+      send(404, { error: 'Plan not found' });
+      return;
+    }
+    const auditLog = getPlanAuditLog(planId);
+    send(200, { plan, auditLog });
+  } catch (err) {
+    const errorResponse = handleError(err);
+    log.error({ msg: 'Failed to get plan', planId, status: errorResponse.status });
+    send(errorResponse.status, errorResponse);
+  }
+}
+
+/**
+ * POST /plans/:id/confirm
+ *
+ * Idempotent: a plan that is already `confirmed` or `executed` returns 200
+ * without re-executing.  A plan in any other terminal state (cancelled,
+ * expired) returns 409.
+ *
+ * On success the plan is executed via `executePlan` and the result is
+ * written to the audit log.
+ */
+async function handleConfirmPlan(
+  res: http.ServerResponse,
+  agent: PayFiAgent | undefined,
+  planId: string
+): Promise<void> {
+  const send = (status: number, payload: unknown): void => {
+    const body = JSON.stringify(payload);
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+    });
+    res.end(body);
+  };
+
+  if (!agent) {
+    send(503, { error: 'Agent not available' });
+    return;
+  }
+
+  try {
+    expireOldPlans();
+
+    const plan = getPlan(planId);
+    if (!plan) {
+      send(404, { error: 'Plan not found' });
+      return;
+    }
+
+    // Idempotency: already in a terminal state.
+    if (plan.status === 'executed') {
+      send(200, { plan, message: 'already executed' });
+      return;
+    }
+    if (plan.status === 'confirmed') {
+      send(200, { plan, message: 'already confirmed, execution in progress' });
+      return;
+    }
+    if (plan.status === 'cancelled' || plan.status === 'expired') {
+      send(409, { error: `Plan is ${plan.status} and cannot be confirmed` });
+      return;
+    }
+
+    // Atomically transition to confirmed.
+    const ok = confirmPlan(planId);
+    if (!ok) {
+      send(409, { error: 'Plan could not be confirmed (expired or already decided)' });
+      return;
+    }
+
+    log.info({ planId }, 'Plan confirmed via POST /plans/:id/confirm');
+
+    // Execute the plan.
+    const { executePlan } = await import('./executor');
+    const tasks = JSON.parse(plan.tasks) as import('./agent').AgentTask[];
+    const agentPlan: import('./agent').Plan = {
+      id: plan.id,
+      tasks,
+      summary: plan.preview,
+      createdAt: plan.createdAt,
+      expiresAt: plan.expiresAt,
+    };
+
+    try {
+      const results = await executePlan(agent, agentPlan);
+      markPlanExecuted(planId, { results });
+      const updated = getPlan(planId);
+      send(200, { plan: updated, results });
+    } catch (execErr) {
+      markPlanExecuteFailed(planId, String(execErr));
+      throw execErr;
+    }
+  } catch (err) {
+    const errorResponse = handleError(err);
+    log.error({ msg: 'Failed to confirm plan', planId, status: errorResponse.status });
+    send(errorResponse.status, errorResponse);
+  }
+}
+
+/**
+ * POST /plans/:id/cancel
+ *
+ * Cancels a pending plan.  Terminal states return 409.
+ */
+function handleCancelPlan(res: http.ServerResponse, planId: string): void {
+  const send = (status: number, payload: unknown): void => {
+    const body = JSON.stringify(payload);
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+    });
+    res.end(body);
+  };
+
+  try {
+    const plan = getPlan(planId);
+    if (!plan) {
+      send(404, { error: 'Plan not found' });
+      return;
+    }
+    if (plan.status !== 'pending') {
+      send(409, { error: `Plan is ${plan.status} and cannot be cancelled` });
+      return;
+    }
+
+    const ok = cancelPlan(planId);
+    if (!ok) {
+      send(409, { error: 'Plan could not be cancelled' });
+      return;
+    }
+
+    const updated = getPlan(planId);
+    send(200, { plan: updated });
+  } catch (err) {
+    const errorResponse = handleError(err);
+    log.error({ msg: 'Failed to cancel plan', planId, status: errorResponse.status });
+    send(errorResponse.status, errorResponse);
+  }
 }
