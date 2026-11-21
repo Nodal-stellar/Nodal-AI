@@ -274,6 +274,16 @@ export const EnvSchema = z.object({
     .transform((v) => v === 'true'),
   MCP_TRANSPORT: z.enum(['stdio', 'http']).default('stdio'),
   MCP_PORT: z.coerce.number().int().min(1).max(65535).default(3001),
+  // Bearer token required by all MCP HTTP routes. When MCP_ALLOW_PAYMENTS is
+  // true the server refuses to start without this token (see issue #911).
+  MCP_API_TOKEN: z.string().min(1).optional(),
+  // Host/IP the MCP HTTP server binds to. Defaults to 127.0.0.1 (loopback
+  // only). Set to 0.0.0.0 only when the MCP server must be reachable across
+  // the network and you have external auth/firewall in place.
+  MCP_HOST: z.string().default('127.0.0.1'),
+  // Maximum JSON body size accepted by the MCP HTTP endpoint (in bytes).
+  // Requests that exceed this limit are rejected with 413. Defaults to 1 MiB.
+  MCP_MAX_BODY_BYTES: z.coerce.number().int().min(1024).default(1_048_576),
 
   // Contract event listener polling interval in milliseconds.
   CONTRACT_EVENT_POLL_MS: z.coerce.number().int().min(100).optional(),
@@ -668,6 +678,21 @@ export interface AgentConfig {
    */
   readonly MCP_PORT: number;
   /**
+   * Bearer token required on all MCP HTTP routes. When MCP_ALLOW_PAYMENTS is
+   * true the server refuses to start if this is unset. See issue #911.
+   */
+  readonly MCP_API_TOKEN?: string | undefined;
+  /**
+   * Host the MCP HTTP server binds to. Defaults to "127.0.0.1" (loopback).
+   * Set to "0.0.0.0" only if external auth/firewall is in place.
+   */
+  readonly MCP_HOST: string;
+  /**
+   * Maximum JSON body size (bytes) accepted by the MCP HTTP endpoint.
+   * Requests exceeding this limit receive a 413 response. Defaults to 1 MiB.
+   */
+  readonly MCP_MAX_BODY_BYTES: number;
+  /**
    * Port for the health-check HTTP server.
    * Validated by EnvSchema to be an integer between 1 and 65535.
    * Defaults to 3000.
@@ -893,6 +918,20 @@ function parseConfigAndDerive(
       `⚠️  [Config] Using WEBHOOK_SECRET as the HTTP API token is deprecated — set a ` +
         `separate ADMIN_API_TOKEN so the webhook signing secret is not also an API password.\n`
     );
+  }
+
+  // ── MCP HTTP security guard ─────────────────────────────────────────────────
+  // MCP_ALLOW_PAYMENTS=true exposes value-moving tools over HTTP. Refusing to
+  // start without a bearer token prevents an open endpoint from draining the
+  // agent account. See issue #911.
+  if (raw.MCP_ALLOW_PAYMENTS && raw.MCP_TRANSPORT === 'http' && !raw.MCP_API_TOKEN) {
+    process.stderr.write(
+      `❌ [Config] MCP_API_TOKEN is required when MCP_ALLOW_PAYMENTS=true and ` +
+        `MCP_TRANSPORT=http. ` +
+        `An unauthenticated HTTP MCP endpoint with payment tools enabled would ` +
+        `allow anyone who can reach the port to move funds from the agent account.\n`
+    );
+    process.exit(1);
   }
 
   // ── Payment destination policy ─────────────────────────────────────────────

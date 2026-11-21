@@ -234,18 +234,18 @@ export class Planner {
    * @param options.runReadonly - Whether to run read-only tools during planning (default: true)
    * @param options.sessionId   - Session key used for the LLM usage tracker
    */
-  async plan(
-    request: string,
-    options: { runReadonly?: boolean; sessionId?: string } = {}
-  ): Promise<Plan> {
-    const { runReadonly = true, sessionId = 'planner' } = options;
+  async plan(request: string, options: { runReadonly?: boolean } = {}): Promise<Plan> {
+    const { runReadonly = true } = options;
 
-    // Issue #907 — never log raw request text at info level.
-    const requestHash = createHash('sha256').update(request).digest('hex').slice(0, 16);
-    log.info({ requestHash, requestLength: request.length }, 'Generating plan');
-    if (process.env.LOG_PROMPTS === 'true') {
-      log.debug({ request }, 'Generating plan (full request)');
-    }
+    log.info({ request }, 'Generating plan');
+
+    // Build prompt — use a replacer function so that special replacement
+    // patterns in the user text ($&, $', $`, $$) are never interpreted by
+    // String.prototype.replace. See issue #904.
+    const prompt = PLANNER_PROMPT.replace('{request}', () => request);
+
+    // Call LLM
+    let tasks: AgentTask[];
 
     if (!this.llmEndpoint) {
       throw new Error('LLM not configured. Set LLM_ENDPOINT environment variable.');

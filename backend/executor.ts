@@ -9,6 +9,19 @@ import { randomUUID } from 'crypto';
 import { PayFiAgent, AgentTask, AgentResult, Plan, VALUE_MOVING_TASK_TYPES } from './agent';
 import { createLogger } from './utils/logger';
 
+/**
+ * Structured result returned by executePlan.
+ * Replaces the previous pattern of faking an AgentResult with `as any` task
+ * types — callers can now discriminate on `status` without touching metrics
+ * or task-type routing. See issue #909.
+ */
+export interface PlanResult {
+  planId: string;
+  status: 'executed' | 'expired' | 'denied' | 'failed';
+  /** Populated when status is 'executed'. Empty for terminal non-execution statuses. */
+  results: AgentResult[];
+}
+
 const log = createLogger('executor');
 
 /**
@@ -119,6 +132,11 @@ export function planHasValueMovingTasks(plan: Plan): boolean {
 /**
  * Execute a plan with optional confirmation.
  *
+ * Returns a {@link PlanResult} that describes the terminal status of the plan
+ * without abusing unrelated task types. The confirmation timer is always
+ * cleared in a `finally` block so no live timers are left after the call
+ * returns. See issue #909.
+ *
  * @param agent - The PayFiAgent instance
  * @param plan - The plan to execute
  * @param options - Execution options including confirm callback
@@ -127,51 +145,46 @@ export async function executePlan(
   agent: PayFiAgent,
   plan: Plan,
   options: ExecutePlanOptions = {}
-): Promise<AgentResult[]> {
+): Promise<PlanResult> {
   const { confirm, confirmationTimeoutMs = 5 * 60 * 1000 } = options;
 
   // Check plan expiration
   if (new Date(plan.expiresAt) < new Date()) {
     log.warn({ planId: plan.id }, 'Plan expired');
-    return [
-      {
-        success: false,
-        taskType: 'stellar_payment' as any,
-        error: 'Plan has expired',
-        errorType: 'PLAN_EXPIRED',
-      },
-    ];
+    return { planId: plan.id, status: 'expired', results: [] };
   }
 
   // Check if confirmation is needed (plan has value-moving tasks)
   const needsConfirmation = planHasValueMovingTasks(plan);
 
   if (needsConfirmation && confirm) {
-    const approved = await Promise.race([
-      confirm(plan.summary),
-      new Promise<false>((_, reject) =>
-        setTimeout(() => reject(new Error('Confirmation timeout')), confirmationTimeoutMs)
-      ),
-    ]).catch(() => false);
+    // The timer handle must be captured so it can be cleared in `finally`,
+    // ensuring no live 5-minute timer outlives a completed confirmation.
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+    const approved = await new Promise<boolean>((resolve) => {
+      timeoutHandle = setTimeout(() => resolve(false), confirmationTimeoutMs);
+      confirm(plan.summary).then(resolve, () => resolve(false));
+    }).finally(() => {
+      clearTimeout(timeoutHandle);
+    });
 
     if (!approved) {
       log.info({ planId: plan.id }, 'Plan denied by user');
-      return [
-        {
-          success: false,
-          taskType: 'stellar_payment' as any,
-          error: 'Plan denied by user',
-          errorType: 'PLAN_DENIED',
-        },
-      ];
+      return { planId: plan.id, status: 'denied', results: [] };
     }
   }
 
   // Execute the plan
   log.info({ planId: plan.id, summary: plan.summary }, 'Executing plan');
-  const results = await agent.runSequence(plan.tasks);
-
-  return results;
+  try {
+    const results = await agent.runSequence(plan.tasks);
+    return { planId: plan.id, status: 'executed', results };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error({ planId: plan.id, error: message }, 'Plan execution failed');
+    return { planId: plan.id, status: 'failed', results: [] };
+  }
 }
 
 export { PayFiAgent, AgentTask, AgentResult, Plan, VALUE_MOVING_TASK_TYPES };
