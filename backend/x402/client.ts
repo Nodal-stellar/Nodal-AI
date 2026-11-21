@@ -48,6 +48,33 @@
  */
 
 import { Asset, Networks, xdr } from '@stellar/stellar-sdk';
+
+// Shared HTTP fetch helper with configurable timeout.
+export interface HttpFetchOptions {
+  /** Timeout in milliseconds (default from HTTP_TIMEOUT_MS env or 5000). */
+  timeoutMs?: number;
+  /** Additional fetch init options. */
+  init?: RequestInit;
+}
+
+/**
+ * Perform a fetch with an AbortSignal timeout.
+ * All backend outbound HTTP calls should use this instead of raw fetch.
+ */
+export async function httpFetch(url: string, options: HttpFetchOptions = {}): Promise<Response> {
+  const { timeoutMs = Number(process.env.HTTP_TIMEOUT_MS) || 5000, init = {} } = options;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    clearTimeout(timeout);
+    return response;
+  } catch (err) {
+    clearTimeout(timeout);
+    throw err;
+  }
+}
+
 import { x402Client, x402HTTPClient } from '@x402/core/client';
 import type { PaymentRequired, PaymentRequirements, SettleResponse } from '@x402/core/types';
 import { ExactStellarScheme } from '@x402/stellar/exact/client';
