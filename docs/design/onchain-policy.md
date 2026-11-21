@@ -7,6 +7,10 @@ Prototype: [`contracts/agent_policy/`](https://github.com/Nodal-stellar/Nodal-AI
 
 Today the agent's spending cap is enforced only inside the Node process:
 
+## Limitations
+
+The on‑chain policy uses a tumbling (fixed) window implementation. When the current time crosses the boundary (`now >= window_start + window`) the window resets completely, allowing the full `limit` to be spent again. Consequently, an agent can spend up to **2 × limit** in a short span around the window boundary (e.g., at `t = window‑1` and `t = window+1`). The off‑chain rolling tracker uses a sliding window, so the two layers can disagree. This behavior is intentional for the prototype but should be considered when configuring limits.
+
 - `backend/spending_tracker.ts` keeps a rolling window of payments and
   rejects anything that would exceed `AGENT_SPENDING_LIMIT` within
   `SPENDING_WINDOW_MS`.
