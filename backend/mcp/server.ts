@@ -166,9 +166,11 @@ export async function startMCPServer(agent: PayFiAgent): Promise<void> {
   log.info('Starting MCP stdio server');
 
   const readline = await import('readline');
+  // Do NOT pass `output` here. In stdio MCP mode stdout is the exclusive
+  // JSON-RPC channel; giving readline a reference to it causes echo writes
+  // that would corrupt the protocol stream even with terminal:false.
   const rl = readline.createInterface({
     input: process.stdin,
-    output: process.stdout,
     terminal: false,
   });
 

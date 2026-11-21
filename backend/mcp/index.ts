@@ -5,6 +5,12 @@
  * Compiled to dist/backend/mcp/index.js and exposed as the `nodal-mcp` bin.
  */
 
+// Normalise MCP_TRANSPORT before any module import so logger.ts picks up the
+// canonical value.  Treat missing / empty as 'stdio' (the default transport).
+if (!process.env.MCP_TRANSPORT) {
+  process.env.MCP_TRANSPORT = 'stdio';
+}
+
 import { PayFiAgent } from '../agent';
 import { config } from '../config';
 import { startMCPServer, startMCPHTTPServer } from './server';
