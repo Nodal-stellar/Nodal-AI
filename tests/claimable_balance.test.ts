@@ -70,6 +70,19 @@ describe('ClaimableBalanceTool', () => {
     } as any);
   });
 
+  it('requires an issuer for non-native claimable balance assets before loading the account', async () => {
+    await expect(
+      tool.execute({
+        action: 'create',
+        assetCode: 'USDC',
+        amount: '5',
+        claimants: [{ destination: publicKey }],
+      })
+    ).rejects.toThrow('assetIssuer is required for non-native assets');
+
+    expect(rpcClient.loadAccount).not.toHaveBeenCalled();
+  });
+
   it('creates a claimable balance with claimants', async () => {
     const result = await tool.execute({
       action: 'create',

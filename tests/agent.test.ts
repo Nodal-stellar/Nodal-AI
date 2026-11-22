@@ -207,6 +207,15 @@ vi.mock('../backend/tools/SponsoredAccountTool', () => ({
   }),
 }));
 
+vi.mock('../backend/tools/ClaimableBalanceTool', () => ({
+  ClaimableBalanceInputSchema: passthroughSchema,
+  ClaimableBalanceTool: vi.fn().mockImplementation(function () {
+    return {
+      execute: vi.fn().mockResolvedValue({ txHash: 'claimable_mock_hash', ledger: 1 }),
+    };
+  }),
+}));
+
 vi.mock('../backend/tools/AnchorQuoteTool', () => ({
   AnchorQuoteInputSchema: passthroughSchema,
   AnchorQuoteTool: vi.fn().mockImplementation(function () {

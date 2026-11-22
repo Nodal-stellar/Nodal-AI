@@ -16,6 +16,7 @@ import { z } from 'zod';
 import {
   PayFiAgent,
   VALUE_MOVING_TASK_TYPES,
+  isValueMovingTask,
   spendingTracker,
   type AgentTask,
 } from '../backend/agent';
@@ -440,6 +441,36 @@ describe('PayFiAgent guards', () => {
       expect(await spendsOf({ type: 'dex_offer', payload: {} })).toEqual([]);
     });
 
+    it('claimable_balance charges create operations by asset but not claim operations', async () => {
+      const registeredTool = agent.getTools().find((tool) => tool.name === 'claimable_balance');
+      expect(registeredTool).toBeDefined();
+      vi.spyOn(registeredTool!, 'execute').mockResolvedValue({ txHash: 'claimable-hash', ledger: 1 });
+
+      expect(
+        await spendsOf({
+          type: 'claimable_balance',
+          payload: {
+            action: 'create',
+            assetCode: 'XLM',
+            amount: '7',
+            claimants: [{ destination: DEST }],
+          },
+        })
+      ).toEqual([['7', 'XLM']]);
+
+      vi.restoreAllMocks();
+      const registeredToolAgain = agent.getTools().find((tool) => tool.name === 'claimable_balance');
+      vi.spyOn(registeredToolAgain!, 'execute').mockResolvedValue({ txHash: 'claim-hash', ledger: 1 });
+
+      expect(
+        await spendsOf({
+          type: 'claimable_balance',
+          payload: { action: 'claim', balanceId: 'balance-id' },
+        })
+      ).toEqual([]);
+      vi.restoreAllMocks();
+    });
+
     it('read-only tasks are not charged, whatever their payload says', async () => {
       expect(await spendsOf({ type: 'account_info', payload: { amount: '5' } })).toEqual([]);
     });
@@ -449,6 +480,7 @@ describe('PayFiAgent guards', () => {
         [
           'batch_payment',
           'change_trust',
+          'claimable_balance',
           'cross_border_payment',
           'data_entry',
           'dex_offer',
@@ -467,6 +499,27 @@ describe('PayFiAgent guards', () => {
         ].sort()
       );
     });
+
+    it('treats only claimable balance creation as value-moving', () => {
+      expect(
+        isValueMovingTask({
+          type: 'claimable_balance',
+          payload: {
+            action: 'create',
+            assetCode: 'XLM',
+            amount: '1',
+            claimants: [{ destination: DEST }],
+          },
+        })
+      ).toBe(true);
+
+      expect(
+        isValueMovingTask({
+          type: 'claimable_balance',
+          payload: { action: 'claim', balanceId: 'balance-id' },
+        })
+      ).toBe(false);
+    });
   });
 
   describe('spending caps and reservations', () => {
@@ -479,6 +532,30 @@ describe('PayFiAgent guards', () => {
         'Payment amount 1000.0000001 XLM exceeds AGENT_SPENDING_LIMIT of 1000'
       );
       expect((await pay('1000')).success).toBe(true);
+    });
+
+    it('enforces the spending limit before creating a claimable balance', async () => {
+      const registeredTool = agent.getTools().find((tool) => tool.name === 'claimable_balance');
+      expect(registeredTool).toBeDefined();
+      const execute = vi.spyOn(registeredTool!, 'execute').mockResolvedValue({
+        txHash: 'claimable-hash',
+        ledger: 1,
+      });
+
+      const result = await agent.run({
+        type: 'claimable_balance',
+        payload: {
+          action: 'create',
+          assetCode: 'XLM',
+          amount: '1000.0000001',
+          claimants: [{ destination: DEST }],
+        },
+      } as AgentTask);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('exceeds AGENT_SPENDING_LIMIT');
+      expect(execute).not.toHaveBeenCalled();
+      vi.restoreAllMocks();
     });
 
     it('per-asset limits replace the single-payment AGENT_SPENDING_LIMIT check', async () => {
@@ -575,6 +652,23 @@ describe('PayFiAgent guards', () => {
         const result = await agent.run({ type: 'batch_payment', payload } as AgentTask);
         expect(result.errorType).toBe(ErrorType.PolicyViolation);
       }
+    });
+
+    it('applies destination policy to claimable balance beneficiaries', async () => {
+      mutableConfig.PAYMENT_DESTINATION_POLICY = 'allowlist';
+
+      const result = await agent.run({
+        type: 'claimable_balance',
+        payload: {
+          action: 'create',
+          assetCode: 'XLM',
+          amount: '1',
+          claimants: [{ destination: DEST }],
+        },
+      } as AgentTask);
+
+      expect(result.errorType).toBe(ErrorType.PolicyViolation);
+      expect(result.error).toContain(DEST);
     });
   });
 

@@ -184,6 +184,7 @@ Every `TaskType` value accepted by `PayFiAgent.run()` is listed below, together 
 | `multisig_payment` | `MultiSigPaymentTool` | Build M-of-N multisig payment transactions. Returns `unsignedXDR` until enough signatures are collected, then submits. |
 | `batch_payment` | `BatchPaymentTool` | Submit up to 100 payments in a single atomic transaction envelope. Aggregate spending limit enforced. |
 | `balance_check` | `BalanceCheckTool` | Query asset balances for any Stellar account (not just the agent). |
+| `claimable_balance` | `ClaimableBalanceTool` | Create a Stellar claimable balance for one or more claimants, or claim an existing balance when the agent is an eligible claimant. Creation is subject to outgoing spending and destination-policy guards; claiming is incoming. |
 | `path_payment` | `PathPaymentTool` | Cross-asset `pathPaymentStrictSend` via the Stellar DEX. |
 | `fee_bump` | `FeeBumpTool` | Wrap a pre-built transaction XDR in a fee-bump envelope for sponsored retry flows. |
 | `dex_offer` | `DexOfferTool` | Create, update, or delete a manage-sell offer on the Stellar DEX. |
@@ -483,6 +484,22 @@ Key design decisions:
 - Accepts a `publicKey` parameter, making it useful for inspecting counterparty accounts before executing a payment.
 - Optional `assetCode` / `assetIssuer` filters narrow the response to a specific asset. Without filters, all balances are returned.
 - Read-only. No transaction is built or submitted. Fully wired into `PayFiAgent.run()` under the `balance_check` task type like other tools.
+
+---
+
+#### `ClaimableBalanceTool`
+
+**File:** `backend/tools/ClaimableBalanceTool.ts`  
+**Task type:** `claimable_balance`  
+**Purpose:** Create Stellar claimable balances with one or more claimants, or claim an existing balance for which the agent is eligible.
+
+Key design decisions:
+- Uses the Horizon Classic `createClaimableBalance` and `claimClaimableBalance` operations. It does not invoke Soroban contracts, so the Soroban simulation gate does not apply.
+- Validates a discriminated payload: `action: "create"` requires an asset code, amount, and at least one claimant; `action: "claim"` requires a balance ID.
+- Supports unconditional, absolute-time, relative-time, NOT, AND, and OR claimant predicates. AND/OR lists are folded into Stellar's binary predicate representation.
+- Requires an issuer for non-native assets. Claimant destinations are validated as Stellar public keys.
+- Before claiming, checks Horizon's claimant endpoint to verify that the agent is listed for the requested balance.
+- The built-in task is marked value-moving, but the agent's payload-sensitive guard treats only `action: "create"` as outgoing value movement. Creation is therefore subject to spending reservations and destination policy for every claimant destination; claiming an existing balance is incoming and bypasses outgoing-spend and destination guards.
 
 ---
 

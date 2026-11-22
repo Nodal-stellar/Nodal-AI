@@ -42,6 +42,7 @@ import { LedgerInfoTool, LedgerInfoInputSchema } from './LedgerInfoTool';
 import { NetworkStatusTool } from './NetworkStatusTool';
 import { OfferBookTool, OfferBookInputSchema } from './OfferBookTool';
 import { SorobanStorageTool, SorobanStorageInputSchema } from './SorobanStorageTool';
+import { ClaimableBalanceTool, ClaimableBalanceInputSchema } from './ClaimableBalanceTool';
 
 /** Identity helper that lets TypeScript infer `I` from `inputSchema` per entry. */
 function defineTool<I, O>(tool: AgentTool<I, O>): AgentTool<I, O> {
@@ -56,6 +57,7 @@ export function createBuiltinTools(signer: Signer = createAgentSigner()): AgentT
   // Tools receive the agent-owned Signer, never the secret key itself, so the
   // raw secret is not copied into every tool instance.
   const nanoPaymentTool = new NanoPaymentTool();
+  const claimableBalanceTool = new ClaimableBalanceTool(signer);
   const paymentTool = new StellarPaymentTool(signer);
   const sorobanTool = new SorobanInvokeTool(signer);
   const sorobanQueryTool = new SorobanQueryTool(signer);
@@ -236,6 +238,14 @@ export function createBuiltinTools(signer: Signer = createAgentSigner()): AgentT
       inputSchema: SequenceNumberInputSchema,
       valueMoving: false,
       execute: (input) => sequenceNumberTool.execute(input),
+    }),
+    defineTool({
+      name: 'claimable_balance',
+      description:
+        'Create a Stellar claimable balance for one or more claimants, or claim a balance that is claimable by the agent.',
+      inputSchema: ClaimableBalanceInputSchema,
+      valueMoving: true,
+      execute: (input) => claimableBalanceTool.execute(input),
     }),
     defineTool({
       name: 'sponsored_account',
