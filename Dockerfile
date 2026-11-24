@@ -4,7 +4,11 @@
 # Stages:
 #   1. rust-builder   — compiles Soroban contract → .wasm
 #   2. node-builder   — installs deps + compiles TypeScript → dist/
-#   3. production     — slim Node runtime with compiled artefacts only
+#   3. prod-deps      — installs production-only node_modules on Alpine/musl
+#   4. production     — node:22-alpine runtime with compiled artefacts only
+#
+# The dashboard has its own stages (dashboard-builder → dashboard, nginx) and
+# is only built with `--target dashboard`; production stays the last stage.
 # =============================================================================
 
 # ─── Stage 1: Soroban / Rust contract build ───────────────────────────────────
@@ -23,31 +27,45 @@ WORKDIR /build
 
 # ── Cache layer: copy manifests first so cargo fetch is only re-run on
 #    Cargo.toml / Cargo.lock changes, not on every source edit ──────────────────
-COPY contracts/escrow/Cargo.toml ./contracts/escrow/Cargo.toml
+COPY contracts/escrow/Cargo.toml contracts/escrow/Cargo.lock ./contracts/escrow/
+COPY contracts/agent_policy/Cargo.toml ./contracts/agent_policy/
 
 # Create a stub lib.rs so `cargo build` can resolve the crate without full source
-RUN mkdir -p contracts/escrow/src && \
+RUN mkdir -p contracts/escrow/src contracts/agent_policy/src && \
     echo '#![no_std] soroban_sdk::contractimpl!(struct S;);' > contracts/escrow/src/lib.rs || \
     printf '#![no_std]\n' > contracts/escrow/src/lib.rs
 
-# Pre-fetch dependencies (cached unless Cargo.toml changes)
-RUN cargo fetch --manifest-path contracts/escrow/Cargo.toml
+# Pre-fetch dependencies (cached unless Cargo.toml or Cargo.lock changes).
+# --locked: without the lockfile cargo resolves to releases that need a newer
+# Cargo than the pinned 1.78, and the image would not match what CI tested.
+RUN cargo fetch --locked --manifest-path contracts/escrow/Cargo.toml
 
 # ── Full source copy + release build ──────────────────────────────────────────
 COPY contracts/escrow/src ./contracts/escrow/src
+COPY contracts/agent_policy/src ./contracts/agent_policy/src
+RUN cargo build --manifest-path contracts/agent_policy/Cargo.toml --target wasm32-unknown-unknown --release
 
 RUN cargo build \
+        --locked \
         --manifest-path contracts/escrow/Cargo.toml \
         --target wasm32-unknown-unknown \
-        --release && \
-    # Optional: shrink WASM with wasm-opt (installed via binaryen above)
-    wasm-opt -Oz \
-        contracts/escrow/target/wasm32-unknown-unknown/release/stellar_payfi_escrow.wasm \
-        -o contracts/escrow/target/wasm32-unknown-unknown/release/stellar_payfi_escrow.wasm \
-    || echo "wasm-opt not available, skipping optimisation"
+        --release
+
+# Optional: shrink WASM with wasm-opt (installed via binaryen above).
+# Write to a temp file and only replace the original once wasm-opt succeeds, so
+# a failed/interrupted run can never leave a truncated .wasm behind.
+RUN WASM=contracts/escrow/target/wasm32-unknown-unknown/release/stellar_payfi_escrow.wasm && \
+    if ! command -v wasm-opt >/dev/null 2>&1; then \
+        echo "wasm-opt not installed, skipping optimisation"; \
+    elif wasm-opt -Oz "$WASM" -o "$WASM.opt"; then \
+        mv "$WASM.opt" "$WASM"; \
+    else \
+        rm -f "$WASM.opt"; \
+        echo "wasm-opt failed, keeping unoptimised $WASM"; \
+    fi
 
 # ─── Stage 2: Node.js / TypeScript build ──────────────────────────────────────
-FROM node:20-slim AS node-builder
+FROM node:22-slim AS node-builder
 
 WORKDIR /build
 
@@ -63,30 +81,78 @@ COPY backend/ ./backend/
 
 RUN npm run build
 
-# ─── Stage 3: Production image ────────────────────────────────────────────────
-FROM node:20-slim AS production
+# ─── Stage 2b: Dashboard build (#970) ─────────────────────────────────────────
+# Built in its own stage so the agent image never installs dashboard deps.
+FROM node:22-slim AS dashboard-builder
+
+WORKDIR /build/apps/dashboard
+
+COPY apps/dashboard/package.json apps/dashboard/package-lock.json ./
+RUN npm ci --ignore-scripts
+
+COPY apps/dashboard/index.html apps/dashboard/vite.config.ts \
+     apps/dashboard/tsconfig.json apps/dashboard/tsconfig.app.json \
+     apps/dashboard/tsconfig.node.json ./
+COPY apps/dashboard/public ./public
+COPY apps/dashboard/src ./src
+
+RUN npm run build
+
+# ─── Stage 2c: Dashboard runtime (#970) ───────────────────────────────────────
+# Static production build served by nginx; used by the compose `dashboard`
+# profile (`docker build --target dashboard`). Not part of the agent image.
+FROM nginx:1.27-alpine AS dashboard
+
+COPY apps/dashboard/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=dashboard-builder /build/apps/dashboard/dist /usr/share/nginx/html
+
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1/ || exit 1
+
+# ─── Stage 3: Production dependencies (Alpine / musl) ─────────────────────────
+# Installed on the same musl base as the final image so native modules
+# (e.g. better-sqlite3) resolve/link correctly; kept out of the final stage
+# so no compiler toolchain ships in the production image.
+FROM node:22-alpine AS prod-deps
+
+WORKDIR /build
+
+# Toolchain for compiling better-sqlite3 (no musl prebuilt binary is published)
+RUN apk add --no-cache python3 make g++
+
+COPY package.json package-lock.json* ./
+# --ignore-scripts skips better-sqlite3's install script, which builds its
+# native binding; rebuild just that package so the addon exists at runtime.
+RUN npm ci --omit=dev --ignore-scripts && \
+    npm rebuild better-sqlite3 && \
+    npm cache clean --force
+
+# ─── Stage 4: Production image ────────────────────────────────────────────────
+FROM node:22-alpine AS production
 
 LABEL org.opencontainers.image.title="Nodal AI Agent"
 LABEL org.opencontainers.image.description="Stellar PayFi Agent Kit"
 
-# Non-root user for security
-RUN addgroup --system agent && adduser --system --ingroup agent agent
+# Non-root user for security (Alpine/busybox adduser syntax)
+RUN addgroup -S agent && adduser -S -G agent agent
 
 WORKDIR /app
 
-# ── Runtime deps only ─────────────────────────────────────────────────────────
-COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev --ignore-scripts && \
-    npm cache clean --force
+# ── Runtime deps only — pre-built in prod-deps, nothing compiled here ────────
+COPY --from=prod-deps /build/node_modules ./node_modules
 
 # ── Compiled TypeScript ───────────────────────────────────────────────────────
 COPY --from=node-builder /build/dist ./dist
 
 # ── Compiled WASM contract ────────────────────────────────────────────────────
-RUN mkdir -p contracts/escrow
 COPY --from=rust-builder \
     /build/contracts/escrow/target/wasm32-unknown-unknown/release/stellar_payfi_escrow.wasm \
     ./contracts/escrow/stellar_payfi_escrow.wasm
+COPY --from=rust-builder \
+    /build/contracts/agent_policy/target/wasm32-unknown-unknown/release/stellar_agent_policy.wasm \
+    ./contracts/agent_policy/stellar_agent_policy.wasm
 
 # Ensure compiled output is readable by the non-root user
 RUN chown -R agent:agent /app
@@ -97,9 +163,14 @@ USER agent
 # Expose default port (override via env)
 EXPOSE 3000
 
-# Health check — verify configuration and startup logic compiles/resolves
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD node -e "require('./dist/backend/config')" || exit 1
+# Health check — probe the running process's GET /health endpoint (served by
+# backend/server.ts). Deliberately does NOT require('./dist/backend/config'):
+# that would re-run full config validation (and a Secrets Manager fetch when
+# AGENT_SECRET_KEY_ARN is set) on every tick. A container whose config is
+# invalid never starts the health server, so this probe still fails for it.
+# Node's http module is used because the Alpine base image ships without curl.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.HEALTH_PORT||3000)+'/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1)).setTimeout(8000,function(){this.destroy()})"
 
-# Entry point
-CMD ["node", "dist/backend/agent.js"]
+# Entry point — index.js loads config, then starts the agent and health server
+CMD ["node", "dist/backend/index.js"]

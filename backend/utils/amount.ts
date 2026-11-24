@@ -1,0 +1,219 @@
+/**
+ * backend/utils/amount.ts
+ *
+ * Strict integer (stroop) arithmetic for Stellar monetary values.
+ *
+ * Why BigInt?
+ *   Stellar amounts have up to 7 decimal places (1 XLM = 10,000,000 stroops).
+ *   Using IEEE-754 `number` accumulates rounding error past ~15 significant
+ *   digits and silently accepts inputs like '1e3', '0x10', or ' 5 ' that
+ *   Stellar would reject.  All comparisons and accumulation must happen in
+ *   integer stroop space.
+ *
+ * Usage:
+ *   import { toStroops, stroopsToString, STROOPS_PER_UNIT } from "./amount";
+ *   const a = toStroops("9.9999999"); // 99_999_999n
+ *   const b = toStroops("0.0000001"); //         1n
+ *   a + b === 100_000_000n            // true — no float error
+ *
+ * Rejects (throws):
+ *   - Scientific notation  ("1e3", "2.5E+4")
+ *   - Hex literals          ("0x10")
+ *   - Leading/trailing whitespace (" 5 ")
+ *   - Negative values       ("-1")
+ *   - More than 7 decimal places ("1.00000001")
+ *   - Empty string, NaN, Infinity
+ *
+ * Also provides validation helpers and zod schemas for Stellar amount handling
+ * (Issue #830).
+ */
+
+import { z } from 'zod';
+
+/** 1 unit = 10,000,000 stroops (7 decimal places) */
+export const STROOP_SCALE = 10_000_000n;
+export const MAX_DECIMAL_PLACES = 7;
+
+/** Number of stroops in one unit (1 XLM = 10_000_000 stroops). Alias of STROOP_SCALE (#734). */
+export const STROOPS_PER_UNIT = STROOP_SCALE;
+
+/**
+ * Regex for valid non-negative Stellar amounts with up to 7 decimal places.
+ * Rejects negative numbers, scientific notation (exponent), non-numeric chars,
+ * and numbers with >7 decimal places.
+ */
+export const STELLAR_AMOUNT_REGEX = /^\d+(\.\d{1,7})?$/;
+
+/**
+ * Regex for strictly positive Stellar amounts (rejects 0, 0.0, 0.0000000).
+ */
+export const POSITIVE_STELLAR_AMOUNT_REGEX = /^(?!0(\.0+)?$)\d+(\.\d{1,7})?$/;
+
+/**
+ * Convert a decimal string representation of an amount into stroops (BigInt).
+ *
+ * @param decimal - String representation of the amount (e.g. "10", "1.5000000").
+ * @returns Amount in stroops as a BigInt.
+ * @throws {TypeError} If `decimal` is not a string.
+ * @throws {Error} If `decimal` is negative, exponent notation, NaN, non-numeric,
+ *                 or has more than 7 decimal places.
+ */
+export function toStroops(decimal: string): bigint {
+  return toAtomicUnits(decimal, MAX_DECIMAL_PLACES);
+}
+
+/**
+ * Convert a decimal string into atomic (base) units at an arbitrary scale.
+ * Generalizes {@link toStroops} (which is `toAtomicUnits(decimal, 7)`) to
+ * other token decimal counts, e.g. 18 for Nano's raw units (#1007).
+ *
+ * @param decimal - String representation of the amount (e.g. "10", "1.5").
+ * @param decimals - Number of decimal places the atomic unit represents.
+ * @throws {TypeError} If `decimal` is not a string.
+ * @throws {Error} If `decimal` is negative, exponent notation, NaN, non-numeric,
+ *                 or has more than `decimals` decimal places.
+ */
+export function toAtomicUnits(decimal: string, decimals: number): bigint {
+  if (typeof decimal !== 'string') {
+    throw new TypeError(`Amount must be a string, got ${typeof decimal}`);
+  }
+
+  // Explicit rejections with clear messages
+  if (decimal.includes('e') || decimal.includes('E')) {
+    throw new Error(`Invalid amount: exponent notation is not supported ("${decimal}")`);
+  }
+  if (decimal.includes('-')) {
+    throw new Error(`Invalid amount: negative amounts are not allowed ("${decimal}")`);
+  }
+  if (decimal === 'NaN' || Number.isNaN(Number(decimal))) {
+    throw new Error(`Invalid amount: non-numeric or NaN value ("${decimal}")`);
+  }
+  if (decimal.includes('.')) {
+    const parts = decimal.split('.');
+    if (parts.length !== 2) {
+      throw new Error(`Invalid amount: multiple decimal points found in ("${decimal}")`);
+    }
+    if (parts[1]!.length > decimals) {
+      throw new Error(`Invalid amount: exceeds maximum ${decimals} decimal places ("${decimal}")`);
+    }
+  }
+
+  const amountRegex = decimals > 0 ? new RegExp(`^\\d+(\\.\\d{1,${decimals}})?$`) : /^\d+$/;
+  if (!amountRegex.test(decimal)) {
+    throw new Error(`Invalid amount format: "${decimal}"`);
+  }
+
+  const scale = 10n ** BigInt(decimals);
+  const [whole = '0', fraction = ''] = decimal.split('.');
+  return BigInt(whole) * scale + BigInt(fraction.padEnd(decimals, '0'));
+}
+
+/**
+ * Convert an amount in stroops (BigInt) to a canonical 7-decimal-place string.
+ *
+ * @param stroops - Amount in stroops as a non-negative BigInt.
+ * @returns 7-decimal-place string (e.g. 10_000_000n -> "1.0000000").
+ * @throws {TypeError} If `stroops` is not a bigint.
+ * @throws {RangeError} If `stroops` is negative.
+ */
+export function fromStroops(stroops: bigint): string {
+  return fromAtomicUnits(stroops, MAX_DECIMAL_PLACES);
+}
+
+/**
+ * Convert an atomic (base) unit amount back to a decimal string at an
+ * arbitrary scale. Generalizes {@link fromStroops} (`fromAtomicUnits(v, 7)`).
+ *
+ * @param atomic - Amount in atomic units as a non-negative BigInt.
+ * @param decimals - Number of decimal places the atomic unit represents.
+ * @throws {TypeError} If `atomic` is not a bigint.
+ * @throws {RangeError} If `atomic` is negative.
+ */
+export function fromAtomicUnits(atomic: bigint, decimals: number): string {
+  if (typeof atomic !== 'bigint') {
+    throw new TypeError(`amount must be a bigint, got ${typeof atomic}`);
+  }
+  if (atomic < 0n) {
+    throw new RangeError(`amount cannot be negative, got ${atomic}`);
+  }
+  if (decimals === 0) {
+    return atomic.toString();
+  }
+  const scale = 10n ** BigInt(decimals);
+  const whole = atomic / scale;
+  const fraction = atomic % scale;
+  return `${whole}.${fraction.toString().padStart(decimals, '0')}`;
+}
+
+/**
+ * Convert a stroop count back to a canonical 7-decimal-place string.
+ * Useful for display and logging.
+ *
+ * @example stroopsToString(10_000_001n) === "1.0000001"
+ * @example stroopsToString(            1n) === "0.0000001"
+ */
+export function stroopsToString(stroops: bigint): string {
+  const units = stroops / STROOPS_PER_UNIT;
+  const frac = stroops % STROOPS_PER_UNIT;
+  return `${units}.${String(frac).padStart(7, '0')}`;
+}
+
+/**
+ * Compare two valid decimal amount strings.
+ * Returns -1 if a < b, 0 if a == b, and 1 if a > b.
+ *
+ * @throws If either `a` or `b` cannot be converted to stroops.
+ */
+export function compareAmounts(a: string, b: string): number {
+  const stroopsA = toStroops(a);
+  const stroopsB = toStroops(b);
+  if (stroopsA < stroopsB) return -1;
+  if (stroopsA > stroopsB) return 1;
+  return 0;
+}
+
+/**
+ * Check if a string is a valid non-negative Stellar amount with up to 7 decimal places.
+ */
+export function isValidAmount(decimal: string): boolean {
+  try {
+    toStroops(decimal);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Safely attempt to parse an amount to stroops, returning null if invalid.
+ */
+export function tryToStroops(decimal: string): bigint | null {
+  try {
+    return toStroops(decimal);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Convert a stroop count or Stellar decimal string to a JavaScript number.
+ * CAUTION: Only for display/metrics/logging. Never use for financial comparisons or calculations (#956).
+ */
+export function amountToNumber(amount: string | bigint): number {
+  const stroops = typeof amount === 'bigint' ? amount : toStroops(amount);
+  return Number(stroops) / Number(STROOP_SCALE);
+}
+
+/**
+ * Zod schema for validating a positive Stellar payment amount.
+ */
+export const positiveAmountSchema = z
+  .string()
+  .regex(POSITIVE_STELLAR_AMOUNT_REGEX, 'Amount must be a valid Stellar decimal')
+  .refine((v) => {
+    try {
+      return toStroops(v) > 0n;
+    } catch {
+      return false;
+    }
+  }, 'Amount must be greater than zero');

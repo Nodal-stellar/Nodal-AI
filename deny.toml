@@ -1,0 +1,72 @@
+# deny.toml
+#
+# cargo-deny configuration for both Rust contracts (contracts/escrow,
+# contracts/agent_policy). CI runs `cargo deny check advisories bans
+# licenses` against each crate's own Cargo.lock (#991): npm dependencies
+# were already audited in CI, but a yanked crate or an advisory in
+# soroban-sdk's dependency tree went unnoticed on the Rust side.
+#
+# Run locally with, e.g.:
+#   cargo deny check --manifest-path contracts/escrow/Cargo.toml advisories bans licenses
+
+[advisories]
+# Fail the build on any open RustSec advisory or yanked crate in the
+# dependency tree. This is the default, stated explicitly so a future
+# cargo-deny upgrade that changes the default can't silently weaken it.
+yanked = "deny"
+
+# Advisories that are currently unavoidable: each comes from a dependency
+# pinned transitively by soroban-sdk 20.5.0 (itself pinned by the
+# rust-toolchain.toml 1.78.0 pin — see ci.yml), with no non-breaking
+# upgrade available. Re-run `cargo deny check advisories` after any
+# soroban-sdk bump and drop entries that no longer apply; a *new* advisory
+# not in this list still fails the build.
+ignore = [
+    # adler (unmaintained; superseded by adler2) — pulled in by
+    # soroban-env-host's flate2 dependency.
+    "RUSTSEC-2025-0056",
+    # curve25519-dalek timing-variability advisories — pulled in by
+    # soroban-env-host/soroban-sdk via ed25519-dalek/k256. No fixed
+    # version compatible with soroban-sdk 20.5.0 exists yet.
+    "RUSTSEC-2026-0387",
+    "RUSTSEC-2024-0344",
+    # paste (unmaintained) — pulled in by soroban-wasmi via wasmi_core.
+    "RUSTSEC-2024-0436",
+]
+
+[licenses]
+# Every license actually in use across both contracts' dependency trees
+# today (see the license policy note below). Anything not on this list
+# fails the build, so adding a dependency with a new license is a
+# deliberate, reviewed change to this file.
+#
+# License policy: only permissive (non-copyleft) licenses are allowed —
+# MIT/Apache-2.0-family, BSD variants, Unicode-3.0, Unlicense, Zlib, the
+# Boost Software License, and the LLVM exception to Apache-2.0. No
+# GPL/LGPL/AGPL or other copyleft license is permitted for either
+# contract's dependency tree.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "0BSD",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Soroban's dependency tree pulls in multiple versions of several crates
+# (e.g. via differing elliptic-curve/digest requirements); that's expected
+# and not itself a problem worth failing CI over.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

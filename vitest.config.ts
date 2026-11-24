@@ -47,11 +47,20 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    // Discover all test files under tests/ (excludes e2e — use npm run test:e2e)
+    // Discover all test files under tests/. E2E needs a live network, so it only
+    // joins the run with RUN_E2E=true (see npm run test:e2e); an exclude here
+    // would also win over a file named on the command line, so it must not be
+    // unconditional or the E2E scripts report "No test files found".
     include: ["tests/**/*.test.ts"],
-    exclude: ["tests/e2e/**"],
+    exclude: process.env.RUN_E2E === "true" ? [] : ["tests/e2e/**"],
+    // Never read or write the developer's ./agent.db from a test run.
+    env: { DB_PATH: ":memory:" },
     // Each test file runs in its own isolated context — prevents mock bleed
     isolate: true,
+    // Global setup file: enforces vi.useRealTimers() + vi.restoreAllMocks() after every
+    // test to prevent fake timer and spy state from leaking across test files.
+    // See tests/helpers/globalSetup.ts for the full rationale.
+    setupFiles: ["./tests/helpers/globalSetup.ts", "./tests/helpers/expectLoggedError.ts"],
     // restoreMocks: true automatically calls vi.restoreAllMocks() after every test to restore original implementations
     restoreMocks: true,
     // clearMocks: true automatically resets mock.calls, mock.instances, etc. between tests so call history doesn't bleed

@@ -1,15 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+venv/
+.env
+*.pyc
+
+# Node
 node_modules/
 dist/
-coverage/
-**/target/
-**/Cargo.lock
-contracts/escrow/test_snapshots/
-.env
-.env.*
-!.env.example
-*.key
-*.pem
-*.p12
+npm-debug.log*
+.yarn-integrity
 
-# Vitest snapshot files — auto-generated, do not commit
-tests/__snapshots__/
+# OS
+.DS_Store
+Thumbs.db
+
+# Stryker
+.stryker-tmp/
+.coverage
+coverage/
+
+# Local session notes (not committed)
+SESSION_CHANGES.md

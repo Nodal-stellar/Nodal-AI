@@ -1,0 +1,12 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`backend/server.ts — health check HTTP server > GET /health > health response matches expected shape 1`] = `
+{
+  "components": {
+    "database": "up",
+    "horizon": "up",
+    "soroban": "up",
+  },
+  "status": "ok",
+}
+`;
