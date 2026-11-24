@@ -91,7 +91,7 @@ export class MultiSigPaymentTool {
       // Apply additional signatures from provided decorated signatures (XDR-encoded)
       for (const sigXdr of input.signatures) {
         try {
-          const decorated = Keypair.fromPublicKey(sigXdr);
+          void Keypair.fromPublicKey(sigXdr);
           // sigXdr is treated as a public key here only for type checking;
           // external signers attach their signature to the XDR directly.
         } catch {

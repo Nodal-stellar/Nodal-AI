@@ -50,7 +50,6 @@ vi.mock("../backend/config", () => {
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
 const AGENT_SECRET = "SBZ7EYXHNB4WPPIWC5YAMH2U4L4QU6DKYXQWG4I55G6O4CLE4BBHCE73";
-const INNER_SECRET = "SDPFZL3WZFXHQVLZX3TUZ5VXYYNZGLHC5BKWBHXMB5E6D64B2YJJFHF5";
 const DEST_KEY = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
 
 /** Build a minimal signed transaction XDR to use as inner tx in tests */

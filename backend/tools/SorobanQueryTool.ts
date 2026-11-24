@@ -53,13 +53,13 @@ export class SorobanQueryTool {
   async query(rawInput: unknown): Promise<SorobanQueryResult> {
     const input = SorobanQueryInputSchema.parse(rawInput);
 
-    let contract: any;
+    let contract: { call: (method: string, ...args: xdr.ScVal[]) => ReturnType<typeof Operation.manageData> } | Contract;
     try {
       contract = new Contract(input.contractId);
     } catch {
       contract = {
-        call: (method: string, ...args: any[]) =>
-          Operation.manageData({ name: `invoke:${method}`, value: "mock" }),
+        call: (_method: string, ..._args: xdr.ScVal[]) =>
+          Operation.manageData({ name: `invoke:${_method}`, value: "mock" }),
       };
     }
 

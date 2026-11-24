@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Keypair, nativeToScVal, xdr } from "@stellar/stellar-sdk";
-import { SorobanQueryTool, SorobanQueryInputSchema } from "../backend/tools/SorobanQueryTool";
+import { nativeToScVal } from "@stellar/stellar-sdk";
+import { SorobanQueryTool } from "../backend/tools/SorobanQueryTool";
 import * as rpcClient from "../backend/rpc_client";
 
 vi.mock("../backend/rpc_client", () => ({

@@ -49,7 +49,7 @@ export class BalanceCheckTool {
 
     const account = await loadAccount(input.publicKey);
 
-    let balances: BalanceLine[] = account.balances.map((b: any) => ({
+    let balances: BalanceLine[] = account.balances.map((b: { asset_type: string; asset_code?: string; asset_issuer?: string; balance: string }) => ({
       assetType: b.asset_type,
       assetCode: b.asset_type !== "native" ? b.asset_code : undefined,
       assetIssuer: b.asset_type !== "native" ? b.asset_issuer : undefined,

@@ -29,8 +29,8 @@
  * Example: If balance_check.test.ts also mocks rpcClient, it won't affect this file's mocks.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { Keypair, nativeToScVal, xdr } from "@stellar/stellar-sdk";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { nativeToScVal } from "@stellar/stellar-sdk";
 import { SorobanInvokeTool, SorobanInvokeInputSchema, SOROBAN_TX_TIMEOUT_SECONDS } from "../backend/tools/SorobanInvokeTool";
 import * as rpcClient from "../backend/rpc_client";
 
@@ -100,7 +100,7 @@ vi.mock("../backend/config", () => {
  * Test fixtures: reusable constants and helper functions.
  */
 
-const TEST_SECRET = "SBZ7EYXHNB4WPPIWC5YAMH2U4L4QU6DKYXQWG4I55G6O4CLE4BBHCE73";
+const _TEST_SECRET = "SBZ7EYXHNB4WPPIWC5YAMH2U4L4QU6DKYXQWG4I55G6O4CLE4BBHCE73";
 const VALID_CONTRACT =
   "CDPVBHPSVYKWSI5ECEA4DASBG3RBNU5EHEE3DHNFX7RMBCZV66CSC7NH";
 

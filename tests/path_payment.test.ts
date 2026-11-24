@@ -5,7 +5,6 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Keypair } from "@stellar/stellar-sdk";
 import { PathPaymentTool } from "../backend/tools/PathPaymentTool";
 import * as rpcClient from "../backend/rpc_client";
 

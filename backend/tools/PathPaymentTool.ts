@@ -17,9 +17,6 @@ import { z } from "zod";
 import { config } from "../config";
 import { logger } from "../logger";
 import { loadAccount, resolveNetworkPassphrase, submitTransaction } from "../rpc_client";
-import { createLogger } from "../utils/logger";
-
-const log = createLogger("path-payment");
 
 // ─── Input schema ─────────────────────────────────────────────────────────────
 

@@ -29,7 +29,7 @@ describe("config.ts startup validation", () => {
   let originalEnv: NodeJS.ProcessEnv;
   let exitSpy: any;
   let stderrSpy: any;
-  let stdoutSpy: any;
+  let _stdoutSpy: any;
 
   beforeEach(() => {
     vi.resetModules();
@@ -39,7 +39,7 @@ describe("config.ts startup validation", () => {
       throw new Error(`process.exit: ${code}`);
     });
     stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    _stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   });
 
   afterEach(() => {

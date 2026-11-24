@@ -9,15 +9,11 @@ import {
   TransactionBuilder,
   FeeBumpTransaction,
   Transaction,
-  Networks,
 } from "@stellar/stellar-sdk";
 import { z } from "zod";
 import { config } from "../config";
 import { logger } from "../logger";
 import { resolveNetworkPassphrase, submitTransaction } from "../rpc_client";
-import { createLogger } from "../utils/logger";
-
-const log = createLogger("fee-bump");
 
 // ─── Input schema ─────────────────────────────────────────────────────────────
 

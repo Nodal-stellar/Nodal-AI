@@ -5,7 +5,6 @@
  * Detects HTTP 429 responses, extracts Retry-After, and pauses outbound traffic.
  */
 
-import { logger } from "./logger";
 import { createLogger } from "./utils/logger";
 
 const log = createLogger("network");
@@ -60,7 +59,7 @@ export function handleRateLimitResponse(retryAfterHeader?: string | null): void 
   globalBackoff.retryAfterSeconds = waitSeconds;
   globalBackoff.until = Date.now() + waitSeconds * 1000;
 
-  log.warn([Network] Rate limit reached. Throttling outbound traffic for  seconds.);
+  log.warn(`[Network] Rate limit reached. Throttling outbound traffic for ${waitSeconds} seconds.`);
 
   // Schedule auto-clear when the backoff expires
   const remaining = globalBackoff.until - Date.now();

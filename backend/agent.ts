@@ -20,9 +20,6 @@ import { AccountInfoTool } from "./tools/AccountInfoTool";
 import { TrustlineTool } from "./tools/TrustlineTool";
 import { MultiSigPaymentTool } from "./tools/MultiSigPaymentTool";
 import { horizonServer } from "./rpc_client";
-import { createLogger, generateCorrelationId } from "./utils/logger";
-
-const log = createLogger("orchestrator");
 
 // ─── Task types ───────────────────────────────────────────────────────────────
 
@@ -166,8 +163,8 @@ export class PayFiAgent extends EventEmitter {
       .payments()
       .forAccount(config.AGENT_PUBLIC_KEY)
       .stream({
-        onmessage: (payment: any) => {
-          const memo: string = payment.memo ?? "";
+        onmessage: (payment: Record<string, unknown>) => {
+          const memo: string = typeof payment.memo === "string" ? payment.memo : "";
           if (!memo.startsWith("x402:")) return;
           try {
             const challenge: X402Challenge = JSON.parse(

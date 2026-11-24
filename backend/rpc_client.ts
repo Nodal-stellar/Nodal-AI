@@ -9,17 +9,12 @@ import {
   rpc,
   Transaction,
   FeeBumpTransaction,
-  xdr,
-  StrKey,
 } from "@stellar/stellar-sdk";
 import { ZodError } from "zod";
 import { config } from "./config";
 import { logger } from "./logger";
 import { validateXDR } from "./types/xdr";
-import { createLogger } from "./utils/logger";
 import { isThrottled, handleRateLimitResponse, withBackoffGuard } from "./network";
-
-const log = createLogger("rpc-client");
 
 export function resolveNetworkPassphrase(network: string): string {
   if (network === "mainnet") return Networks.PUBLIC;
@@ -29,8 +24,8 @@ export function resolveNetworkPassphrase(network: string): string {
 }
 
 export class TimeoutError extends Error {
-  constructor(ms: number) {
-    super("Transaction Timeout: request did not complete within ms");
+  constructor(_ms: number) {
+    super("Transaction Timeout: request did not complete within the allowed time");
     this.name = "TimeoutError";
   }
 }

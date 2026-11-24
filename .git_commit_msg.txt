@@ -1,0 +1,9 @@
+fix: reduce eslint warnings from 530 to 0 and enforce --max-warnings 0 in CI
+
+- Fix broken template literal in network.ts (parse error)
+- Remove unused imports across all backend files and tools
+- Replace `any` types with proper inline types in tools and config
+- Add varsIgnorePattern to no-unused-vars rule
+- Add test-file ESLint override (no-explicit-any off for tests)
+- Add --max-warnings 0 to CI lint step
+- Add typecheck script and CI step

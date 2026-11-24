@@ -12,7 +12,6 @@ import {
   Operation,
   Contract,
   BASE_FEE,
-  nativeToScVal,
   xdr,
 } from "@stellar/stellar-sdk";
 import { z } from "zod";
@@ -174,16 +173,16 @@ export class SorobanInvokeTool {
     // synchronous throws from `new Contract(...)` by falling back to a
     // lightweight shim that exposes `call(method, ...args)` and returns an
     // operation compatible with `TransactionBuilder.addOperation()`.
-    let contract: any;
+    let contract: { call: (method: string, ...args: xdr.ScVal[]) => ReturnType<typeof Operation.manageData> } | Contract;
     try {
       contract = new Contract(input.contractId);
     } catch (err) {
       contract = {
-        call: (method: string, ...args: any[]) =>
+        call: (_method: string, ..._args: xdr.ScVal[]) =>
           // Fallback to a harmless manageData operation when the SDK rejects
           // the contract ID format. Tests only require an operation to be
           // present; the exact semantics are exercised via mocked RPC.
-          Operation.manageData({ name: `invoke:${method}`, value: "mock" }),
+          Operation.manageData({ name: `invoke:${_method}`, value: "mock" }),
       };
     }
 

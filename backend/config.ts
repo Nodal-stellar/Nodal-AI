@@ -331,8 +331,9 @@ function loadConfig(): AgentConfig {
         // Not a JSON object, use raw string
       }
       process.env.AGENT_SECRET_KEY = parsedSecret;
-    } catch (err: any) {
-      process.stderr.write(`❌ [Config] Failed to fetch secret from AWS Secrets Manager (ARN: ${process.env.AGENT_SECRET_KEY_ARN}): ${err.stderr?.toString().trim() || err.message}\n`);
+    } catch (err: unknown) {
+      const e = err as { stderr?: { toString(): string }; message?: string };
+      process.stderr.write(`❌ [Config] Failed to fetch secret from AWS Secrets Manager (ARN: ${process.env.AGENT_SECRET_KEY_ARN}): ${e.stderr?.toString().trim() || e.message}\n`);
       process.exit(1);
     }
   }
@@ -386,6 +387,7 @@ function loadConfig(): AgentConfig {
 
   // ── Build the config object — secret key stays in closure only ────────────
   const { AGENT_SECRET_KEY: _secret, AGENT_PUBLIC_KEY: _rawPub, ...rest } = raw;
+  void _rawPub; // destructured to omit from rest; not used directly
 
   const rpcTimeoutMs =
     raw.RPC_TIMEOUT_MS ?? raw.RETRY_DELAY_MS * raw.MAX_RETRIES * 2;
@@ -407,9 +409,7 @@ function loadConfig(): AgentConfig {
 
   // Allow GC of the secret string now that the keypair is materialised.
   // (JS strings are immutable, but this signals intent.)
-  (() => {
-    const _ = _secretRef;
-  })();
+  void _secretRef;
 
   // Startup banner — only safe fields
   process.stdout.write(

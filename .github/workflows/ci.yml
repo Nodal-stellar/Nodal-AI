@@ -25,6 +25,9 @@ jobs:
       - name: Build TypeScript
         run: npm run build
 
+      - name: Typecheck
+        run: npm run typecheck
+
   lint:
     runs-on: ubuntu-latest
 
@@ -37,7 +40,7 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm run lint
+      - run: npm run lint -- --max-warnings 0 -- --max-warnings 0
 
   test:
     runs-on: ubuntu-latest

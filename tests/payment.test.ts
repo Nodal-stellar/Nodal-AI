@@ -6,11 +6,10 @@
  * timeout simulation, insufficient funds, and memo edge cases.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Keypair } from "@stellar/stellar-sdk";
 import { z } from "zod";
 import { StellarPaymentTool } from "../backend/tools/StellarPaymentTool";
-import { SubmitResultSchema } from "../backend/tools/StellarPaymentTool";
 import * as rpcClient from "../backend/rpc_client";
 
 // ─── Module mock ──────────────────────────────────────────────────────────────

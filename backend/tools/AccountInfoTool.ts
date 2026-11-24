@@ -17,7 +17,7 @@ export class AccountInfoTool {
   async fetch(): Promise<AccountInfo> {
     const account = await loadAccount(config.AGENT_PUBLIC_KEY);
 
-    const balances = (account.balances as any[]).map((b) => ({
+    const balances = (account.balances as { asset_type: string; asset_code?: string; asset_issuer?: string; balance: string }[]).map((b) => ({
       asset: b.asset_type === "native" ? "XLM" : `${b.asset_code}:${b.asset_issuer}`,
       balance: b.balance,
     }));

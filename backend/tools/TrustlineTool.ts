@@ -6,7 +6,7 @@
 import { Keypair, TransactionBuilder, Operation, Asset, BASE_FEE } from "@stellar/stellar-sdk";
 import { z } from "zod";
 import { config } from "../config";
-import { loadAccount, submitTransaction, horizonServer, resolveNetworkPassphrase } from "../rpc_client";
+import { loadAccount, submitTransaction, resolveNetworkPassphrase } from "../rpc_client";
 
 export const TrustlineInputSchema = z.object({
   assetCode: z.string().min(1).max(12),
@@ -28,7 +28,7 @@ export class TrustlineTool {
 
   async checkTrustline(assetCode: string, assetIssuer: string): Promise<boolean> {
     const account = await loadAccount(this.keypair.publicKey());
-    return (account.balances as any[]).some(
+    return (account.balances as { asset_type: string; asset_code?: string; asset_issuer?: string }[]).some(
       (b) => b.asset_type !== "native" && b.asset_code === assetCode && b.asset_issuer === assetIssuer
     );
   }

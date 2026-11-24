@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, vi, beforeEach } from "vitest";
+﻿import { describe, it, expect, beforeEach } from "vitest";
 
 // We test the network module directly
 import { isThrottled, handleRateLimitResponse, getBackoffStatus } from "../backend/network";
