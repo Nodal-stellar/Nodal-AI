@@ -37,7 +37,7 @@ describe('config.ts startup validation', () => {
   let originalEnv: NodeJS.ProcessEnv;
   let exitSpy: any;
   let stderrSpy: any;
-  let stdoutSpy: any;
+  let _stdoutSpy: any;
 
   beforeEach(() => {
     vi.resetModules();

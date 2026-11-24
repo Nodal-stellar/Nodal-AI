@@ -358,7 +358,8 @@ export class X402PaymentTool {
     }
   }
 
-  private extractOp(op: any) {
+  private extractOp(op: Record<string, unknown>) {
+    const asset = op.asset as { code?: string } | undefined;
     return {
       to: op.to || op.destination,
       amount: op.amount,
