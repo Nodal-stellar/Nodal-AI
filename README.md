@@ -231,7 +231,7 @@ The container forwards port `3000` and preinstalls `dbaeumer.vscode-eslint`, `es
 
 ## Security Policy
 
-Security is the foundation of PayFi. See [SECURITY.md](./SECURITY.md) for the full responsible disclosure policy, response SLAs, core security invariants, and secret management guidelines.
+Security is the foundation of PayFi. See [SECURITY.md](./SECURITY.md) for the full responsible disclosure policy, response SLAs, core security invariants, and secret management guidelines. See [AI Payment Safety](./docs/guide/ai-safety.md) for every way an LLM, MCP client, or event can cause a payment, and which controls apply.
 
 To report a vulnerability privately, use [GitHub Security Advisories](https://github.com/Nodal-stellar/Nodal-AI/security/advisories/new).
 
@@ -588,6 +588,17 @@ Wraps a transaction in a fee-bump envelope for sponsored retry flows. This is us
 INNER_TX_XDR=AAAA... npx ts-node scripts/examples/fee_bump.ts
 ```
 
+### `trigger_escrow_release.ts` — Event-Driven Escrow Release
+
+> 🧪 **Experimental**, testnet only.
+
+Deploys an escrow, creates a payment trigger filtered by asset code and issuer, sends the buyer's payment, and observes the release. `--approval` holds the release until you approve it. Needs `TRIGGER_ALLOW_PAYMENTS=true` and `CONTRACT_WASM_PATH`; see the [walkthrough](./docs/tutorials/trigger-escrow-release.md).
+
+```bash
+npx ts-node scripts/examples/trigger_escrow_release.ts
+npx ts-node scripts/examples/trigger_escrow_release.ts --approval
+```
+
 ### `anchor_deposit.ts` — SEP-0010 + SEP-0006 anchor deposit
 
 Demonstrates a complete PayFi onboarding scenario by combining `StellarIdentityTool` (SEP-0010 web auth) with an anchor USDC deposit flow:
@@ -863,6 +874,122 @@ agent.destroy();
 
 ---
 
+## AI & Automation
+
+Features that let an AI client, an LLM, or an on-chain event drive the agent. Each links to a full guide. Read [AI Payment Safety](./docs/guide/ai-safety.md) before you enable payments on any of them.
+
+| Feature | Status | Guide |
+|---|---|---|
+| [MCP server](#mcp-server) | 🧪 Experimental | [docs/guide/mcp.md](./docs/guide/mcp.md), [client tutorial](./docs/tutorials/mcp-client.md) |
+| [Triggers](#triggers) | 🧪 Experimental | [docs/guide/triggers.md](./docs/guide/triggers.md), [escrow walkthrough](./docs/tutorials/trigger-escrow-release.md) |
+| [Natural-language planning](#natural-language-planning) | 🧪 Experimental | [docs/guide/planning.md](./docs/guide/planning.md) |
+| [Approval decisions](#approval-decisions) | Available | [docs/guide/approvals.md](./docs/guide/approvals.md) |
+| [MPP Charge](#mpp-charge-facilitator-free-payments) | Available (client) | [docs/guide/mpp.md](./docs/guide/mpp.md) |
+| [MPP Session](#mpp-session) | 🧪 Prototype, moves no funds | [docs/guide/mpp.md](./docs/guide/mpp.md#session) |
+
+### MCP Server
+
+> 🧪 **Experimental.** Start on testnet with payments off and the kill switch on, as below.
+
+Expose agent tools to Claude Desktop, Cursor, and other MCP clients.
+
+```bash
+npm run build
+node dist/backend/mcp/index.js
+```
+
+```json
+{
+  "mcpServers": {
+    "nodal-ai": {
+      "command": "node",
+      "args": ["/absolute/path/to/Nodal-AI/dist/backend/mcp/index.js"],
+      "env": {
+        "MCP_ALLOW_PAYMENTS": "false",
+        "PAUSED": "true",
+        "STELLAR_NETWORK": "testnet",
+        "HORIZON_URL": "https://horizon-testnet.stellar.org",
+        "SOROBAN_RPC_URL": "https://soroban-testnet.stellar.org",
+        "AGENT_SECRET_KEY": "S...",
+        "X402_ASSET_ISSUER": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+      }
+    }
+  }
+}
+```
+
+Config: `MCP_TRANSPORT`, `MCP_ALLOW_PAYMENTS`, `MCP_PORT`, `MCP_HOST`, `MCP_API_TOKEN`, `MCP_MAX_BODY_BYTES`. [Guide](./docs/guide/mcp.md) · [Client tutorial](./docs/tutorials/mcp-client.md)
+
+### Triggers
+
+> 🧪 **Experimental.** A library API; the agent process does not start triggers itself.
+
+Run a task when a payment arrives. Always filter by issuer as well as asset code.
+
+```typescript
+import { PayFiAgent } from "./backend/agent";
+import { TriggerManager } from "./backend/triggers";
+
+const manager = new TriggerManager(new PayFiAgent());
+await manager.createTrigger({
+  source: "payment",
+  filter: {
+    assetCode: "USDC",
+    assetIssuer: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+    minAmount: "25",
+  },
+  task: {
+    type: "stellar_payment",
+    payload: { destination: "G...", amount: "1" },
+    requireApproval: true,
+  },
+});
+```
+
+Config: `TRIGGER_ALLOW_PAYMENTS`, `TRIGGER_EVENTS_RETENTION_MS`, `CONTRACT_EVENT_POLL_MS`. [Guide](./docs/guide/triggers.md) · [Escrow release walkthrough](./docs/tutorials/trigger-escrow-release.md)
+
+### Natural-Language Planning
+
+> 🧪 **Experimental.** LLM plans contain read-only steps only; value-moving steps are discarded.
+
+Plan, show the summary, then execute. Without `confirm`, a plan runs immediately.
+
+```typescript
+import { PayFiAgent } from "./backend/agent";
+import { createPlan, executePlan } from "./backend/executor";
+import { Planner } from "./backend/planner";
+
+const agent = new PayFiAgent();
+const readPlan = await new Planner(agent).plan("Show my balances");
+
+const payPlan = createPlan([
+  { type: "stellar_payment", payload: { destination: "G...", amount: "5" } },
+]);
+const { status, results } = await executePlan(agent, payPlan, {
+  confirm: async (summary) => askOperator(summary), // your prompt; resolve true to proceed
+});
+```
+
+Config: `LLM_ENDPOINT`, `LLM_MODEL`, `LLM_API_KEY`. [Guide](./docs/guide/planning.md)
+
+### Approval Decisions
+
+A value-moving task is checked in this order: kill switch, destination policy, approval, spending limit. `requireApproval: true` holds a task whatever its amount; otherwise `APPROVAL_THRESHOLD` decides. An approved task goes through every other check again, so an approval cannot override a limit.
+
+```typescript
+const held = await agent.run({
+  type: "stellar_payment",
+  payload: { destination: "G...", amount: "5" },
+  requireApproval: true,
+});
+const { approvalId } = held.data as { approvalId: string };
+await agent.approve(approvalId, "alice"); // or agent.deny(approvalId, "alice")
+```
+
+Config: `APPROVAL_THRESHOLD`, `APPROVAL_THRESHOLDS`, `APPROVAL_TTL_MS`, `ADMIN_API_TOKEN`. [Guide](./docs/guide/approvals.md) · [HTTP API](#human-in-the-loop-approvals)
+
+---
+
 ## Cross-border payments (SEP-31)
 
 The `cross_border_payment` task sends a payment through a SEP-31 Receiving Anchor, with the agent acting as the Sending Anchor ([`backend/tools/CrossBorderPaymentTool.ts`](./backend/tools/CrossBorderPaymentTool.ts)):
@@ -1043,6 +1170,22 @@ It signs with the agent signer and applies the same spending policy as other val
 | Agent needs XLM for fees | Yes | Yes (sponsored `feePayer` mode not supported here) |
 | Replay protection | Nonce store + memo binding | HMAC-bound challenge `id` verified by the server |
 | Best for | Servers that already speak x402 | Self-hosted deployments with no third-party dependency |
+
+### MPP Session
+
+> 🧪 **Prototype.** No escrow contract is deployed, no funds move, and it refuses mainnet. Do not treat a closed channel as settled.
+
+[`backend/payments/mpp_session.ts`](./backend/payments/mpp_session.ts) models a payment channel: `openChannel` reserves the total, `commitPayment` signs an off-chain balance update, and `closeChannel` updates local state and throws `SimulatedChannelError`.
+
+```typescript
+import { MppSessionClient } from "./backend/payments/mpp_session";
+
+const client = new MppSessionClient();
+const channel = await client.openChannel("G...", "C...", "100000000", 3600); // base units, seconds
+await client.commitPayment(channel.id, "1000000");
+```
+
+Config: `AGENT_SPENDING_LIMIT`, `SPENDING_LIMITS`, `SPENDING_WINDOW_MS`, `MPP_SESSION_SWEEP_INTERVAL_MS`. [Guide](./docs/guide/mpp.md) · [Design](./docs/design/mpp-session.md)
 
 ## Handsoff notes
 
