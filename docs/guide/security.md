@@ -36,4 +36,5 @@ const agent = new Agent({
 
 ## Next Steps
 
+- [AI Payment Safety](./ai-safety.md) - Which controls apply to LLM, MCP and trigger payments
 - [API Reference](./api-reference.md) - Explore the API documentation
