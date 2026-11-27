@@ -11,6 +11,7 @@
 import { Asset, NotFoundError } from '@stellar/stellar-sdk';
 import { loadAccount } from '../rpc_client';
 import { DestinationNotFoundError, MemoRequiredError, MissingTrustlineError } from '../errors';
+import { toStroops, tryToStroops } from './amount';
 
 /** Minimum balance of a new account: 2 × the 0.5 XLM base reserve. */
 export const MIN_ACCOUNT_BALANCE_XLM = 1;
@@ -48,7 +49,8 @@ function notFoundMessage({ destination, asset, amount }: DestinationPreflight): 
   if (!asset.isNative()) {
     return `${base}; it must be created and add a trustline for ${asset.getCode()} before it can receive it`;
   }
-  if (amount !== undefined && parseFloat(amount) < MIN_ACCOUNT_BALANCE_XLM) {
+  const stroops = amount !== undefined ? tryToStroops(amount) : null;
+  if (stroops !== null && stroops < toStroops(String(MIN_ACCOUNT_BALANCE_XLM))) {
     return (
       `${base}. Creating it requires a createAccount operation with a starting balance ` +
       `of at least ${MIN_ACCOUNT_BALANCE_XLM} XLM (2 × base reserve); ${amount} XLM is not enough`

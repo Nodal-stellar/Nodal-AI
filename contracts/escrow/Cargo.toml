@@ -2,6 +2,7 @@
 name = "stellar-payfi-escrow"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 [lib]
 # Soroban contracts must build as a cdylib to produce a loadable .wasm

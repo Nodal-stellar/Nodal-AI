@@ -43,25 +43,19 @@
  */
 
 import { createLogger } from '../utils/logger';
+import { config } from '../config';
 
 const log = createLogger('session-store');
 
 // ─── Environment helpers ──────────────────────────────────────────────────────
 
-function envInt(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (!raw) return fallback;
-  const n = parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
-}
-
 export const SESSION_CONFIG = {
   /** Idle TTL in milliseconds before a session is evicted. */
-  ttlMs: envInt('SESSION_TTL_MS', 30 * 60 * 1_000),
+  ttlMs: config.SESSION_TTL_MS,
   /** Maximum number of messages retained per session (ring-buffer). */
-  maxMessages: envInt('SESSION_MAX_MESSAGES', 50),
+  maxMessages: config.SESSION_MAX_MESSAGES,
   /** Maximum number of concurrent sessions in the store. */
-  maxSessions: envInt('SESSION_MAX_SESSIONS', 500),
+  maxSessions: config.SESSION_MAX_SESSIONS,
 } as const;
 
 // ─── Types ────────────────────────────────────────────────────────────────────

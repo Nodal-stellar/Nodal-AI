@@ -83,6 +83,7 @@ const POLL_INTERVAL_MS = 2_000;
 /** One release entry in deployments/<network>.json. */
 interface DeploymentRecord {
   release: string;
+  contract?: string;
   contractId: string;
   wasmHash: string;
   wasmSizeBytes: number;
@@ -306,7 +307,7 @@ async function main(): Promise<void> {
   }
 
   const existing = readDeployments(opts.network);
-  if (existing.deployments.some((d) => d.release === opts.release)) {
+  if (existing.deployments.some((d) => d.release === opts.release && (d.contract ?? 'escrow') === 'escrow')) {
     throw new DeployError(
       `Release ${opts.release} is already recorded in ${deploymentsPath(opts.network)}`
     );

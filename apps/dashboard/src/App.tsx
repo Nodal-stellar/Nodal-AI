@@ -26,8 +26,23 @@ interface TaskResult {
   data?: unknown;
 }
 
+// The admin token can pause the agent and approve payments, so it is never
+// persisted to localStorage (readable by any script on this origin) or put
+// in a URL (#965). It lives in sessionStorage by default — cleared when the
+// tab closes — and only moves to localStorage if the user explicitly opts
+// into "remember this token on this device".
+function loadStoredToken(): string {
+  if (localStorage.getItem('nodal_remember_token') === 'true') {
+    return localStorage.getItem('nodal_api_token') || '';
+  }
+  return sessionStorage.getItem('nodal_api_token') || '';
+}
+
 function App() {
-  const [apiToken, setApiToken] = useState(() => localStorage.getItem('nodal_api_token') || '');
+  const [apiToken, setApiToken] = useState(loadStoredToken);
+  const [rememberToken, setRememberToken] = useState(
+    () => localStorage.getItem('nodal_remember_token') === 'true'
+  );
   const [apiUrl, setApiUrl] = useState(() => localStorage.getItem('nodal_api_url') || 'http://localhost:3000');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [spending, setSpending] = useState<SpendingStatus | null>(null);
@@ -39,11 +54,22 @@ function App() {
   );
   const [error, setError] = useState<string | null>(null);
 
-  // Save settings to localStorage
+  // Persist settings. apiUrl isn't sensitive, so it always goes to
+  // localStorage. apiToken goes to sessionStorage by default, and only to
+  // localStorage (surviving browser restarts) when rememberToken is set —
+  // and is removed from whichever store is no longer the active one, so
+  // toggling "remember" off actually stops persisting it (#965).
   useEffect(() => {
-    localStorage.setItem('nodal_api_token', apiToken);
     localStorage.setItem('nodal_api_url', apiUrl);
-  }, [apiToken, apiUrl]);
+    localStorage.setItem('nodal_remember_token', String(rememberToken));
+    if (rememberToken) {
+      localStorage.setItem('nodal_api_token', apiToken);
+      sessionStorage.removeItem('nodal_api_token');
+    } else {
+      sessionStorage.setItem('nodal_api_token', apiToken);
+      localStorage.removeItem('nodal_api_token');
+    }
+  }, [apiToken, apiUrl, rememberToken]);
 
   // Fetch initial data
   const fetchInitialData = async () => {
@@ -74,52 +100,88 @@ function App() {
     }
   };
 
-  // SSE connection
+  // SSE connection (#965). An EventSource can't set an Authorization header,
+  // so the admin token never goes in the URL: each connection attempt first
+  // exchanges it for a short-lived, single-use ticket via POST /stream/ticket,
+  // then opens the stream with that ticket in the query string instead.
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    // Note: EventSource doesn't support custom headers, so we pass token in URL
-    // The backend should check for it there as a fallback
-    const eventSource = new EventSource(`${apiUrl}/stream?token=${encodeURIComponent(apiToken)}`);
+    let eventSource: EventSource | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
 
-    eventSource.onopen = () => {
-      setConnectionStatus('connected');
-      setError(null);
+    const connect = async () => {
+      if (cancelled) return;
+      setConnectionStatus('connecting');
+      try {
+        const headers = apiToken ? { Authorization: `Bearer ${apiToken}` } : {};
+        const ticketRes = await axios.post(`${apiUrl}/stream/ticket`, {}, { headers });
+        if (cancelled) return;
+
+        const es = new EventSource(
+          `${apiUrl}/stream?ticket=${encodeURIComponent(ticketRes.data.ticket)}`
+        );
+        eventSource = es;
+
+        es.onopen = () => {
+          setConnectionStatus('connected');
+          setError(null);
+        };
+
+        // A ticket is single-use: the browser's own silent retry would reuse
+        // this URL with an already-spent ticket and fail forever. Close it
+        // and get a fresh ticket instead.
+        es.onerror = () => {
+          setConnectionStatus('disconnected');
+          setError('SSE connection lost');
+          es.close();
+          if (!cancelled) reconnectTimer = setTimeout(connect, 3000);
+        };
+
+        es.addEventListener('initial', (e) => {
+          const data = JSON.parse(e.data);
+          setSpending(data.spending);
+          setApprovals(data.approvals || []);
+          setPaused(data.paused);
+        });
+
+        es.addEventListener('spending', (e) => {
+          const data = JSON.parse(e.data);
+          setSpending(data);
+        });
+
+        es.addEventListener('approvals', (e) => {
+          const data = JSON.parse(e.data);
+          setApprovals(data.approvals || []);
+        });
+
+        es.addEventListener('pause', (e) => {
+          const data = JSON.parse(e.data);
+          setPaused(data.paused);
+        });
+
+        es.addEventListener('task_result', (e) => {
+          const data = JSON.parse(e.data);
+          setTasks((prev) => [{ ...data.result, timestamp: data.timestamp }, ...prev].slice(0, 50));
+        });
+
+        es.addEventListener('heartbeat', () => {
+          setConnectionStatus('connected');
+        });
+      } catch {
+        setConnectionStatus('disconnected');
+        setError('Failed to obtain a stream ticket');
+        if (!cancelled) reconnectTimer = setTimeout(connect, 3000);
+      }
     };
 
-    eventSource.onerror = () => {
-      setConnectionStatus('disconnected');
-      setError('SSE connection lost');
-    };
-
-    eventSource.addEventListener('initial', (e) => {
-      const data = JSON.parse(e.data);
-      setSpending(data.spending);
-      setApprovals(data.approvals || []);
-      setPaused(data.paused);
-    });
-
-    eventSource.addEventListener('spending', (e) => {
-      const data = JSON.parse(e.data);
-      setSpending(data);
-    });
-
-    eventSource.addEventListener('approvals', (e) => {
-      const data = JSON.parse(e.data);
-      setApprovals(data.approvals || []);
-    });
-
-    eventSource.addEventListener('pause', (e) => {
-      const data = JSON.parse(e.data);
-      setPaused(data.paused);
-    });
-
-    eventSource.addEventListener('heartbeat', () => {
-      setConnectionStatus('connected');
-    });
+    connect();
 
     return () => {
-      eventSource.close();
+      cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      eventSource?.close();
     };
   }, [isAuthenticated, apiUrl, apiToken]);
 
@@ -184,6 +246,17 @@ function App() {
                 onChange={(e) => setApiToken(e.target.value)}
                 placeholder="Enter your ADMIN_API_TOKEN"
               />
+            </div>
+            <div className="form-group form-group-checkbox">
+              <label htmlFor="rememberToken">
+                <input
+                  id="rememberToken"
+                  type="checkbox"
+                  checked={rememberToken}
+                  onChange={(e) => setRememberToken(e.target.checked)}
+                />
+                Remember this token on this device
+              </label>
             </div>
             {error && <div className="error">{error}</div>}
             <button type="submit" className="btn btn-primary">

@@ -25,6 +25,9 @@ await agent.start();
 npm run mcp
 ```
 
+For MCP clients, use the compiled entrypoint (`npm run build` first) or the
+Docker Compose `mcp` profile — see [MCP Server](./mcp.md).
+
 ## Generate Tool Schemas
 
 ```bash

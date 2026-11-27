@@ -31,27 +31,21 @@
  */
 
 import { createLogger } from '../utils/logger';
+import { config } from '../config';
 
 const log = createLogger('llm-usage');
 
 // ─── Environment-driven limits ────────────────────────────────────────────────
 
-function envInt(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (!raw) return fallback;
-  const n = parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
-}
-
 export const LLM_LIMITS = {
   /** Hard cap on tokens consumed by a single LLM API call. */
-  maxTokensPerRequest: envInt('LLM_MAX_TOKENS_PER_REQUEST', 8_000),
+  maxTokensPerRequest: config.LLM_MAX_TOKENS_PER_REQUEST,
   /** Cap on cumulative tokens consumed within a single plan step (one tool-call iteration). */
-  maxTokensPerStep: envInt('LLM_MAX_TOKENS_PER_STEP', 16_000),
+  maxTokensPerStep: config.LLM_MAX_TOKENS_PER_STEP,
   /** Maximum number of autonomous tool-call iterations the planner may perform per session. */
-  maxToolCallIterations: envInt('LLM_MAX_TOOL_CALL_ITERATIONS', 25),
+  maxToolCallIterations: config.LLM_MAX_TOOL_CALL_ITERATIONS,
   /** Rolling 24-hour token budget shared across all sessions. */
-  maxTokensPerDay: envInt('LLM_MAX_TOKENS_PER_DAY', 1_000_000),
+  maxTokensPerDay: config.LLM_MAX_TOKENS_PER_DAY,
 } as const;
 
 // ─── Token-budget exceeded error ──────────────────────────────────────────────

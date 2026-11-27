@@ -22,7 +22,7 @@ import {
 } from '@stellar/stellar-sdk';
 import { MppChargeClient, parsePaymentChallenges } from '../backend/payments/mpp';
 import { KeypairSigner } from '../backend/signer';
-import { PolicyViolationError, ValidationError } from '../backend/errors';
+import { ValidationError } from '../backend/errors';
 import * as rpcClient from '../backend/rpc_client';
 import { spendingTracker } from '../backend/spending_tracker';
 import { _resetKillSwitch, pauseAgent, resumeAgent } from '../backend/kill_switch';
@@ -39,6 +39,9 @@ vi.mock('../backend/rpc_client', () => ({
 
 vi.mock('../backend/spending_tracker', () => ({
   spendingTracker: { reserve: vi.fn(() => 'res-1'), commit: vi.fn(), release: vi.fn() },
+  // Identity mapping: the paid asset's key is the contract id itself when the
+  // asset is not the configured x402 asset or in X402_ALLOWED_ASSETS.
+  assetKeyForPaymentAsset: vi.fn((asset: string) => asset),
 }));
 
 vi.mock('../backend/config', () => {
@@ -258,8 +261,9 @@ describe('MppChargeClient', () => {
     expect(Address.fromScVal(call.args()[1]!).toString()).toBe(RECIPIENT);
     expect(scValToBigInt(call.args()[2]!)).toBe(1_000_000n);
 
-    // Spending policy: reserved in the rolling window and committed once sent.
-    expect(spendingTracker.reserve).toHaveBeenCalledWith('0.1000000');
+    // Spending policy: reserved in the rolling window under the paid asset's
+    // key and committed once sent.
+    expect(spendingTracker.reserve).toHaveBeenCalledWith('0.1000000', XLM_SAC);
     expect(spendingTracker.commit).toHaveBeenCalledWith('res-1');
     expect(spendingTracker.release).not.toHaveBeenCalled();
   });
@@ -279,9 +283,14 @@ describe('MppChargeClient', () => {
     }
   });
 
-  it('refuses a charge above AGENT_SPENDING_LIMIT before signing', async () => {
+  it('refuses a charge the spending tracker rejects (e.g. above AGENT_SPENDING_LIMIT)', async () => {
     server = await startServer({ ...chargeRequest, amount: '200000000' }); // 20 > limit of 10
-    await expect(client.fetch(server.url)).rejects.toBeInstanceOf(PolicyViolationError);
+    // Limit enforcement lives in SpendingTracker.reserve; the mock stands in
+    // for it throwing on an over-limit amount.
+    vi.mocked(spendingTracker.reserve).mockImplementationOnce(() => {
+      throw new Error('Cumulative spending would reach 20, which exceeds limit 10');
+    });
+    await expect(client.fetch(server.url)).rejects.toThrow(/exceeds limit/);
     expect(rpcClient.prepareSorobanTx).not.toHaveBeenCalled();
     expect(server.state.credentials).toHaveLength(0);
   });

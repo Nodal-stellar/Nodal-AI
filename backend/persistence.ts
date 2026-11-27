@@ -1,147 +1,59 @@
 /**
  * backend/persistence.ts
  *
- * SQLite-backed persistence for PayFiAgent:
- *   1. AgentResult audit trail (agent_results)
- *   2. SpendingTracker's rolling window (spending_records) — reservations are
- *      addressable by id so a rolled-back spend is deleted rather than
- *      reloaded after a process restart (#731).
- *   3. The tamper-evident audit log, agent state, approvals, idempotency keys
- *      and x402 rate records.
- *
- * The DB path is configured via DB_PATH (default: ./agent.db).
- * Pass ":memory:" for in-process testing via _setDb().
+ * Persistence module for Nodal AI (#957).
+ * Database operations delegate to the storage layer and backend/db/sqlite.ts.
+ * Note: No direct database connection exists here; all connection
+ * management resides exclusively in backend/db/.
  */
 
 import { createHash } from 'crypto';
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 import type { AgentResult } from './agent';
-import { config } from './config';
-import { migrateSqlite } from './db/migrate';
+import * as sqlite from './db/sqlite';
+
+// ─── Agent results ────────────────────────────────────────────────────────────
 
 export type PersistedResult = AgentResult & { timestamp: string };
 
-let _db: Database.Database | null = null;
-
-/**
- * Bring the schema up to date by applying the numbered migrations in
- * `backend/db/migrations/` (#821).
- *
- * Applied both to the lazily opened connection and to any DB injected through
- * `_setDb()`, so a test database has the same shape as a real one and the two
- * cannot drift apart.
- */
-function applySchema(db: Database.Database): void {
-  migrateSqlite(db);
-}
-
-/**
- * The shared connection, opened (and migrated) on first use. Exposed so other
- * SQLite-backed stores can reuse it instead of opening a second handle.
- */
-export function getDb(): Database.Database {
-  if (!_db) {
-    // config is a lazy proxy: nothing reads it until this line, so tests can
-    // still inject a database via _setDb() without any Stellar configuration.
-    _db = new Database(config.DB_PATH);
-    applySchema(_db);
-  }
-  return _db;
-}
-
-/**
- * Close the live connection and drop the cached handle (#644).
- *
- * `getDb()` owns the only `better-sqlite3` handle, so releasing it belongs here
- * rather than in DatabaseManager. After this call the next access re-opens a
- * fresh connection via `getDb()`. Safe to call when no connection is open.
- */
 export function closeDb(): void {
-  if (_db) {
-    _db.close();
-    _db = null;
-  }
+  sqlite.closeDb();
 }
 
-/**
- * Execute a trivial query against the live connection (#234).
- *
- * `getDb()` owns the only `better-sqlite3` handle, so the probe belongs here
- * rather than in DatabaseManager — duplicating connection ownership to satisfy
- * a health check would mean the check exercised a handle the app does not use.
- *
- * Throws if the file is missing, corrupt, or the connection is in a bad state,
- * which is exactly what an in-memory boolean cannot detect.
- */
 export function probeDb(): void {
-  getDb().prepare('SELECT 1').get();
+  sqlite.probeDb();
 }
 
 export function saveResult(result: PersistedResult): void {
-  getDb()
-    .prepare(
-      `INSERT INTO agent_results (timestamp, taskType, success, data, error, errorType, correlationId, durationMs)
-       VALUES (@timestamp, @taskType, @success, @data, @error, @errorType, @correlationId, @durationMs)`
-    )
-    .run({
-      timestamp: result.timestamp,
-      taskType: result.taskType,
-      success: result.success ? 1 : 0,
-      data: result.data !== undefined ? JSON.stringify(result.data) : null,
-      error: result.error ?? null,
-      errorType: result.errorType ?? null,
-      correlationId: result.correlationId ?? null,
-      durationMs: result.durationMs ?? null,
-    });
+  sqlite.saveResult(result);
+}
+
+/**
+ * Drop agent_results rows older than `beforeIso` (#963). ISO-8601 timestamps
+ * compare correctly as plain strings, so no numeric conversion is needed.
+ */
+export function pruneResults(beforeIso: string): number {
+  const result = getDb().prepare(`DELETE FROM agent_results WHERE timestamp < ?`).run(beforeIso);
+  return result.changes;
 }
 
 export function getResults(limit = 100, offset = 0): PersistedResult[] {
-  const rows = getDb()
-    .prepare(
-      `SELECT timestamp, taskType, success, data, error, errorType, correlationId, durationMs
-       FROM agent_results ORDER BY id DESC LIMIT ? OFFSET ?`
-    )
-    .all(limit, offset) as Array<{
-    timestamp: string;
-    taskType: string;
-    success: number;
-    data: string | null;
-    error: string | null;
-    errorType: string | null;
-    correlationId: string | null;
-    durationMs: number | null;
-  }>;
-
-  return rows.map((r) => {
-    const result: PersistedResult = {
-      timestamp: r.timestamp,
-      taskType: r.taskType as AgentResult['taskType'],
-      success: r.success === 1,
-      data: r.data !== null ? JSON.parse(r.data) : undefined,
-    };
-    if (r.error !== null) result.error = r.error;
-    if (r.errorType !== null) result.errorType = r.errorType;
-    if (r.correlationId !== null) result.correlationId = r.correlationId;
-    if (r.durationMs !== null) result.durationMs = r.durationMs;
-    return result;
-  });
+  return sqlite.getResults(limit, offset);
 }
 
-// ─── Audit log (#744) ─────────────────────────────────────────────────────────
+// ─── Cryptographic audit log (#243) ───────────────────────────────────────────
 
-/** `prevHash` of the first row in the chain. */
 export const AUDIT_GENESIS_HASH = '0'.repeat(64);
 
-/** Who/what/why of one signed transaction. */
 export interface AuditEntry {
   ts: string;
-  correlationId: string | null;
+  correlationId?: string;
   taskType: string;
-  txHash: string;
-  envelopeHash: string | null;
-  destination: string | null;
-  asset: string | null;
-  amount: string | null;
+  txHash?: string;
+  envelopeHash?: string;
+  destination?: string;
+  asset?: string;
+  amount?: string;
 }
 
 export interface AuditRow extends AuditEntry {
@@ -151,288 +63,157 @@ export interface AuditRow extends AuditEntry {
 }
 
 export interface AuditVerification {
-  ok: boolean;
-  /** Number of rows checked. */
-  checked: number;
-  /** id of the first row that fails verification. */
-  brokenAt?: number;
+  valid: boolean;
+  tamperedAtId?: number;
   reason?: string;
+  rowsChecked: number;
 }
 
-/**
- * `sha256(prevHash || row)`. The row is serialised as a JSON array in a fixed
- * column order so the encoding is unambiguous and independent of key order.
- */
 export function computeAuditHash(prevHash: string, entry: AuditEntry): string {
-  const row = JSON.stringify([
+  const canonical = [
+    prevHash,
     entry.ts,
-    entry.correlationId,
+    entry.correlationId ?? '',
     entry.taskType,
-    entry.txHash,
-    entry.envelopeHash,
-    entry.destination,
-    entry.asset,
-    entry.amount,
-  ]);
-  return createHash('sha256').update(prevHash).update(row).digest('hex');
+    entry.txHash ?? '',
+    entry.envelopeHash ?? '',
+    entry.destination ?? '',
+    entry.asset ?? '',
+    entry.amount ?? '',
+  ].join('|');
+
+  return createHash('sha256').update(canonical).digest('hex');
 }
 
-/**
- * Append one signed transaction to the audit log, chained to the previous row.
- * Reading the last hash and inserting run in one transaction so two appends
- * can never chain off the same predecessor.
- */
 export function appendAuditEntry(entry: AuditEntry): AuditRow {
-  const db = getDb();
-  const append = db.transaction((e: AuditEntry): AuditRow => {
-    const last = db.prepare(`SELECT hash FROM audit_log ORDER BY id DESC LIMIT 1`).get() as
-      { hash: string } | undefined;
-    const prevHash = last?.hash ?? AUDIT_GENESIS_HASH;
-    const hash = computeAuditHash(prevHash, e);
-    const info = db
-      .prepare(
-        `INSERT INTO audit_log
-           (ts, correlationId, taskType, txHash, envelopeHash, destination, asset, amount,
-            prevHash, hash)
-         VALUES
-           (@ts, @correlationId, @taskType, @txHash, @envelopeHash, @destination, @asset,
-            @amount, @prevHash, @hash)`
-      )
-      .run({ ...e, prevHash, hash });
-    return { ...e, id: Number(info.lastInsertRowid), prevHash, hash };
-  });
-  return append(entry);
+  return sqlite.appendAuditEntry(entry);
 }
 
-/** Every audit row, oldest first. */
-export function getAuditLog(db: Database.Database = getDb()): AuditRow[] {
-  return db
-    .prepare(
-      `SELECT id, ts, correlationId, taskType, txHash, envelopeHash, destination, asset, amount,
-              prevHash, hash
-       FROM audit_log ORDER BY id ASC`
-    )
-    .all() as AuditRow[];
+export function getAuditLog(): AuditRow[] {
+  return sqlite.getAuditLog();
 }
 
-/**
- * Walk the chain from the genesis hash and recompute every row's hash.
- * Detects a modified row (its hash no longer matches its contents) and a
- * removed or reordered row (the next row's prevHash no longer links up).
- */
-export function verifyAuditChain(db: Database.Database = getDb()): AuditVerification {
-  const rows = getAuditLog(db);
-  let expectedPrev = AUDIT_GENESIS_HASH;
-  for (const row of rows) {
-    if (row.prevHash !== expectedPrev) {
-      return {
-        ok: false,
-        checked: rows.length,
-        brokenAt: row.id,
-        reason: 'prevHash does not match the previous row — a row was removed or reordered',
-      };
-    }
-    if (computeAuditHash(row.prevHash, row) !== row.hash) {
-      return {
-        ok: false,
-        checked: rows.length,
-        brokenAt: row.id,
-        reason: 'hash does not match row contents — the row was modified',
-      };
-    }
-    expectedPrev = row.hash;
+export function verifyAuditChain(): AuditVerification {
+  const rows = getAuditLog();
+  if (rows.length === 0) {
+    return { valid: true, rowsChecked: 0 };
   }
-  return { ok: true, checked: rows.length };
+
+  let expectedPrevHash = AUDIT_GENESIS_HASH;
+
+  for (const row of rows) {
+    if (row.prevHash !== expectedPrevHash) {
+      return {
+        valid: false,
+        tamperedAtId: row.id,
+        reason: `Broken chain: expected prevHash ${expectedPrevHash}, found ${row.prevHash}`,
+        rowsChecked: rows.indexOf(row),
+      };
+    }
+
+    const recomputedHash = computeAuditHash(row.prevHash, row);
+    if (row.hash !== recomputedHash) {
+      return {
+        valid: false,
+        tamperedAtId: row.id,
+        reason: `Hash mismatch at id ${row.id}: stored ${row.hash}, computed ${recomputedHash}`,
+        rowsChecked: rows.indexOf(row),
+      };
+    }
+
+    expectedPrevHash = row.hash;
+  }
+
+  return { valid: true, rowsChecked: rows.length };
 }
 
-/** One recorded payment inside the rolling spending window (#372). */
+// ─── Cumulative spending window (#244) ────────────────────────────────────────
+
 export interface SpendingRecord {
   amount: number;
   timestamp: number;
 }
 
-/** Append a payment to the persisted spending window. */
 export function saveSpendingRecord(record: SpendingRecord): void {
-  getDb()
-    .prepare(`INSERT INTO spending_records (amount, timestamp) VALUES (@amount, @timestamp)`)
-    .run({ amount: record.amount, timestamp: record.timestamp });
+  sqlite.saveSpendingRecord(record);
 }
 
-/** Records at or after `sinceMs`, oldest first. */
 export function loadSpendingRecords(sinceMs: number): SpendingRecord[] {
-  return getDb()
-    .prepare(
-      `SELECT amount, timestamp FROM spending_records
-       WHERE timestamp >= ? ORDER BY timestamp ASC`
-    )
-    .all(sinceMs) as SpendingRecord[];
+  return sqlite.loadSpendingRecords(sinceMs);
 }
 
-/** Drop records that have fallen out of the window. */
 export function pruneSpendingRecords(cutoffMs: number): void {
-  getDb().prepare(`DELETE FROM spending_records WHERE timestamp < ?`).run(cutoffMs);
+  sqlite.pruneSpendingRecords(cutoffMs);
 }
 
-/** Drop the whole persisted window. */
 export function clearSpendingRecords(): void {
-  getDb().prepare(`DELETE FROM spending_records`).run();
+  sqlite.clearSpendingRecords();
 }
 
-/** A spend held against the persisted window by {@link reserveSpendingRecord}. */
 export interface SpendingReservation {
-  /** Row id; pass to {@link deleteSpendingRecord} to release the hold. */
   id: number;
-  /** Cumulative total in the window, including this reservation. */
   total: number;
+  totalStroops?: bigint;
 }
 
-/**
- * Atomically check the window total and record `amount` against it (#822).
- *
- * The sum and the insert run in one IMMEDIATE transaction, which takes
- * SQLite's write lock up front, so two connections can never both see room
- * under `limit` and both insert.
- *
- * @throws if `amount` would push the total of records at or after `sinceMs`
- *   past `limit`; nothing is written in that case.
- */
 export function reserveSpendingRecord(
   amount: number,
   limit: number,
   sinceMs: number,
   now: number = Date.now()
 ): SpendingReservation {
-  const db = getDb();
-  const reserve = db.transaction((): SpendingReservation => {
-    const row = db
-      .prepare(
-        `SELECT COALESCE(SUM(amount), 0) AS total FROM spending_records
-         WHERE timestamp >= ?`
-      )
-      .get(sinceMs) as { total: number };
-    const total = row.total + amount;
-    if (total > limit) {
-      throw new Error(`Cumulative spending ${total} exceeds limit ${limit}`);
-    }
-    const info = db
-      .prepare(`INSERT INTO spending_records (amount, timestamp) VALUES (?, ?)`)
-      .run(amount, now);
-    return { id: Number(info.lastInsertRowid), total };
-  });
-  return reserve.immediate();
+  return sqlite.reserveSpendingRecord(amount, limit, sinceMs, now);
 }
 
-/** Remove one spending record, e.g. to release a reservation whose submission failed. */
 export function deleteSpendingRecord(id: number): void {
-  getDb().prepare(`DELETE FROM spending_records WHERE id = ?`).run(id);
+  sqlite.deleteSpendingRecord(id);
 }
 
-/**
- * A spend written by SpendingTracker, addressable by its reservation id
- * (#731) and attributed to an asset (#733).
- */
 export interface TrackedSpendingRecord {
-  /**
-   * Reservation id returned by SpendingTracker.reserve(). Rows written before
-   * migration 006 have none and are reported as `legacy-<rowid>`.
-   */
   id: string;
-  /** "XLM" or "CODE:ISSUER"; null for rows written before migration 006. */
   assetKey: string | null;
-  /** Exact amount in stroops (#734). */
   stroops: bigint;
-  /** Epoch milliseconds. */
   timestamp: number;
 }
 
-/**
- * Persist one tracked spend. The legacy REAL `amount` column is filled in too
- * so readers that predate migration 006 (e.g. {@link reserveSpendingRecord})
- * still see it; `stroops` is the authoritative value.
- */
 export function saveTrackedSpendingRecord(
   record: TrackedSpendingRecord & { assetKey: string }
 ): void {
-  getDb()
-    .prepare(
-      `INSERT INTO spending_records (amount, timestamp, reservation_id, asset_key, stroops)
-       VALUES (?, ?, ?, ?, ?)`
-    )
-    .run(
-      Number(record.stroops) / 10_000_000,
-      record.timestamp,
-      record.id,
-      record.assetKey,
-      record.stroops.toString()
-    );
+  sqlite.saveTrackedSpendingRecord(record);
 }
 
-/** Tracked spends at or after `sinceMs`, oldest first — legacy rows included. */
 export function getSpendingRecordsSince(sinceMs: number): TrackedSpendingRecord[] {
-  const rows = getDb()
-    .prepare(
-      `SELECT id, amount, timestamp, reservation_id, asset_key, stroops
-       FROM spending_records WHERE timestamp >= ? ORDER BY timestamp ASC, id ASC`
-    )
-    .all(sinceMs) as Array<{
-    id: number;
-    amount: number;
-    timestamp: number;
-    reservation_id: string | null;
-    asset_key: string | null;
-    stroops: string | null;
-  }>;
-  return rows.map((r) => {
-    let stroops: bigint;
-    if (r.stroops !== null) {
-      stroops = BigInt(r.stroops);
-    } else {
-      // Legacy row: only the REAL column exists. 7 fixed decimals recovers the
-      // stroop value exactly for any amount a double can hold to that precision.
-      const [whole = '0', fraction = ''] = r.amount.toFixed(7).split('.');
-      stroops = BigInt(whole) * 10_000_000n + BigInt(fraction);
-    }
-    return {
-      id: r.reservation_id ?? `legacy-${r.id}`,
-      assetKey: r.asset_key,
-      stroops,
-      timestamp: r.timestamp,
-    };
-  });
+  return sqlite.getSpendingRecordsSince(sinceMs);
 }
 
-/** Remove the row written for a reservation (#731). A missing row is a no-op. */
 export function deleteTrackedSpendingRecord(reservationId: string): void {
-  const legacy = /^legacy-(\d+)$/.exec(reservationId);
-  if (legacy) {
-    deleteSpendingRecord(Number(legacy[1]));
-    return;
-  }
-  getDb().prepare(`DELETE FROM spending_records WHERE reservation_id = ?`).run(reservationId);
+  sqlite.deleteTrackedSpendingRecord(reservationId);
 }
 
-/** Persist a single agent-state value, replacing any previous one. */
+// ─── Key-value agent state ───────────────────────────────────────────────────
+
 export function saveAgentState(key: string, value: string): void {
-  getDb()
-    .prepare(
-      `INSERT INTO agent_state (key, value) VALUES (@key, @value)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-    )
-    .run({ key, value });
+  sqlite.saveAgentState(key, value);
 }
 
-/** Read a persisted agent-state value, or undefined when it was never set. */
 export function loadAgentState(key: string): string | undefined {
-  const row = getDb().prepare(`SELECT value FROM agent_state WHERE key = ?`).get(key) as
-    { value: string } | undefined;
-  return row?.value;
+  return sqlite.loadAgentState(key);
+}
+
+/**
+ * Every agent-state entry whose key starts with `prefix`. Used by the MPP
+ * session sweeper to find channels without knowing their ids up front.
+ */
+export function listAgentStateByPrefix(prefix: string): Array<{ key: string; value: string }> {
+  return getDb()
+    .prepare(`SELECT key, value FROM agent_state WHERE substr(key, 1, ?) = ?`)
+    .all(prefix.length, prefix) as Array<{ key: string; value: string }>;
 }
 
 // ─── Pending approvals (#736) ─────────────────────────────────────────────────
 
 export type ApprovalStatus = 'pending_approval' | 'approved' | 'denied' | 'expired';
 
-/** A value-moving task held until an operator approves or denies it. */
 export interface PendingApproval {
   id: string;
   taskType: string;
@@ -443,6 +224,9 @@ export interface PendingApproval {
   createdAt: number;
   expiresAt: number;
   decidedAt: number | null;
+  /** Name of the approver who made the final decision (#954), or "admin" when
+   * decided with the shared ADMIN_API_TOKEN. Null until decided. */
+  decidedBy: string | null;
 }
 
 export interface ApprovalAuditRow {
@@ -451,249 +235,79 @@ export interface ApprovalAuditRow {
   ts: number;
 }
 
-type ApprovalRow = Omit<PendingApproval, 'payload'> & { payload: string };
-
-function toPendingApproval(row: ApprovalRow): PendingApproval {
-  return { ...row, payload: JSON.parse(row.payload) };
-}
-
-/** Persist a newly held task in the `pending_approval` state. */
 export function savePendingApproval(approval: Omit<PendingApproval, 'status' | 'decidedAt'>): void {
-  getDb()
-    .prepare(
-      `INSERT INTO pending_approvals
-         (id, taskType, payload, amount, correlationId, status, createdAt, expiresAt, decidedAt)
-       VALUES
-         (@id, @taskType, @payload, @amount, @correlationId, 'pending_approval', @createdAt,
-          @expiresAt, NULL)`
-    )
-    .run({ ...approval, payload: JSON.stringify(approval.payload ?? null) });
+  sqlite.savePendingApproval(approval);
 }
 
 export function getPendingApproval(id: string): PendingApproval | undefined {
-  const row = getDb().prepare(`SELECT * FROM pending_approvals WHERE id = ?`).get(id) as
-    ApprovalRow | undefined;
-  return row ? toPendingApproval(row) : undefined;
+  return sqlite.getPendingApproval(id);
 }
 
-/** Approvals still waiting for a decision, oldest first. */
 export function listPendingApprovals(): PendingApproval[] {
-  const rows = getDb()
-    .prepare(
-      `SELECT * FROM pending_approvals WHERE status = 'pending_approval' ORDER BY createdAt ASC`
-    )
-    .all() as ApprovalRow[];
-  return rows.map(toPendingApproval);
+  return sqlite.listPendingApprovals();
 }
 
-/**
- * Move a pending, unexpired approval to `approved` or `denied` and record the
- * decision in the audit log. The status check is part of the UPDATE, so of two
- * concurrent decisions only one can win.
- *
- * @returns true when this call made the decision, false when the approval was
- *   unknown, already decided or expired.
- */
 export function decideApproval(
   id: string,
   decision: 'approved' | 'denied',
-  now: number = Date.now()
+  now: number = Date.now(),
+  decidedBy: string | null = null
 ): boolean {
-  const db = getDb();
-  const decide = db.transaction((): boolean => {
-    const info = db
-      .prepare(
-        `UPDATE pending_approvals SET status = ?, decidedAt = ?
-         WHERE id = ? AND status = 'pending_approval' AND expiresAt > ?`
-      )
-      .run(decision, now, id, now);
-    if (info.changes !== 1) return false;
-    db.prepare(`INSERT INTO approval_audit_log (approvalId, decision, ts) VALUES (?, ?, ?)`).run(
-      id,
-      decision,
-      now
-    );
-    return true;
-  });
-  return decide();
+  return sqlite.decideApproval(id, decision, now);
 }
 
-/**
- * Mark every pending approval past its deadline as `expired`, recording each in
- * the audit log.
- *
- * @returns the ids that expired in this call.
- */
 export function expirePendingApprovals(now: number = Date.now()): string[] {
-  const db = getDb();
-  const expire = db.transaction((): string[] => {
-    const rows = db
-      .prepare(
-        `SELECT id FROM pending_approvals WHERE status = 'pending_approval' AND expiresAt <= ?`
-      )
-      .all(now) as Array<{ id: string }>;
-    const update = db.prepare(
-      `UPDATE pending_approvals SET status = 'expired', decidedAt = ? WHERE id = ?`
-    );
-    const audit = db.prepare(
-      `INSERT INTO approval_audit_log (approvalId, decision, ts) VALUES (?, 'expired', ?)`
-    );
-    for (const { id } of rows) {
-      update.run(now, id);
-      audit.run(id, now);
-    }
-    return rows.map((r) => r.id);
-  });
-  return expire();
+  return sqlite.expirePendingApprovals(now);
 }
 
-/** Every approval decision, oldest first. */
 export function getApprovalAuditLog(): ApprovalAuditRow[] {
-  return getDb()
-    .prepare(`SELECT approvalId, decision, ts FROM approval_audit_log ORDER BY id ASC`)
-    .all() as ApprovalAuditRow[];
+  return sqlite.getApprovalAuditLog();
 }
 
-/**
- * Compute SHA-256 hash of the payload for idempotency comparison.
- */
-function computePayloadHash(payload: unknown): string {
-  return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
-}
+// ─── Payment idempotency keys ─────────────────────────────────────────────────
 
-/**
- * Result status for idempotency tracking.
- */
-type IdempotencyStatus = 'pending' | 'success' | 'failure';
-
-/**
- * Stored idempotency record.
- */
-interface IdempotencyRecord {
-  key: string;
-  payloadHash: string;
-  taskType: string;
-  status: IdempotencyStatus;
-  result: AgentResult;
-  createdAt: number;
-  expiresAt: number;
-}
-
-/**
- * Check if an idempotency key exists and is valid (not expired).
- * Returns the stored result if the key exists with the same payload hash.
- * Returns { conflict: true } if the key exists but payload differs.
- * Returns null if the key doesn't exist or has expired.
- */
 export function getIdempotencyResult(
   key: string,
   payload: unknown
 ): AgentResult | { conflict: true } | null {
-  const db = getDb();
-  const row = db
-    .prepare(
-      `SELECT payloadHash, taskType, status, result, expiresAt
-       FROM idempotency_keys WHERE key = ?`
-    )
-    .get(key) as
-    | {
-        payloadHash: string;
-        taskType: string;
-        status: IdempotencyStatus;
-        result: string;
-        expiresAt: number;
-      }
-    | undefined;
-
-  if (!row) return null;
-
-  // Check if expired
-  if (Date.now() > row.expiresAt) {
-    // Clean up expired key
-    db.prepare(`DELETE FROM idempotency_keys WHERE key = ?`).run(key);
-    return null;
-  }
-
-  // Check payload hash match
-  const payloadHash = computePayloadHash(payload);
-  if (row.payloadHash !== payloadHash) {
-    return { conflict: true };
-  }
-
-  // Return stored result
-  return JSON.parse(row.result) as AgentResult;
+  return sqlite.getIdempotencyResult(key, payload);
 }
 
-/**
- * Store an idempotency key with the result.
- * Keys expire after 24 hours.
- */
 export function saveIdempotencyResult(
   key: string,
   taskType: string,
   payload: unknown,
   result: AgentResult
 ): void {
-  const db = getDb();
-  const now = Date.now();
-  const expiresAt = now + 24 * 60 * 60 * 1000; // 24 hours
-
-  db.prepare(
-    `INSERT OR REPLACE INTO idempotency_keys
-       (key, payloadHash, taskType, status, result, createdAt, expiresAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    key,
-    computePayloadHash(payload),
-    taskType,
-    result.success ? 'success' : 'failure',
-    JSON.stringify(result),
-    now,
-    expiresAt
-  );
+  sqlite.saveIdempotencyResult(key, taskType, payload, result);
 }
 
-/**
- * Prune expired idempotency keys. Called periodically to clean up old entries.
- */
 export function pruneIdempotencyKeys(): number {
-  const db = getDb();
-  const now = Date.now();
-  const result = db.prepare(`DELETE FROM idempotency_keys WHERE expiresAt < ?`).run(now);
-  return result.changes;
+  return sqlite.pruneIdempotencyKeys();
 }
 
 // ─── X402 rate limiter records ───────────────────────────────────────────────
 
-/** Save a timestamp record for an x402 payment. */
 export function saveX402RateRecord(timestamp: number): void {
-  getDb().prepare(`INSERT INTO x402_rate_records (timestamp) VALUES (?)`).run(timestamp);
+  sqlite.saveX402RateRecord(timestamp);
 }
 
-/** Load timestamp records at or after `sinceMs`, oldest first. */
 export function loadX402RateRecords(sinceMs: number): number[] {
-  const rows = getDb()
-    .prepare(`SELECT timestamp FROM x402_rate_records WHERE timestamp >= ? ORDER BY timestamp ASC`)
-    .all(sinceMs) as Array<{ timestamp: number }>;
-  return rows.map((r) => r.timestamp);
+  return sqlite.loadX402RateRecords(sinceMs);
 }
 
-/** Drop x402 rate records older than the cutoff. */
 export function pruneX402RateRecords(cutoffMs: number): void {
-  getDb().prepare(`DELETE FROM x402_rate_records WHERE timestamp < ?`).run(cutoffMs);
+  sqlite.pruneX402RateRecords(cutoffMs);
 }
 
-/** Drop all x402 rate records. */
 export function clearX402RateRecords(): void {
-  getDb().prepare(`DELETE FROM x402_rate_records`).run();
+  sqlite.clearX402RateRecords();
 }
 
-/** Replace the underlying DB instance — used in tests to inject an in-memory DB. */
+// ─── Test hook ────────────────────────────────────────────────────────────────
+
 export function _setDb(db: Database.Database | null): void {
-  _db = db;
-  if (_db) {
-    applySchema(_db);
-  }
+  sqlite._setDb(db);
 }
 
 // ─── Plan persistence (issue #908) ───────────────────────────────────────────

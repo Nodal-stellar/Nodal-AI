@@ -12,6 +12,7 @@ exact code it runs are always traceable.
   "deployments": [
     {
       "release": "v1.2.0",
+      "contract": "escrow",
       "contractId": "C...",
       "wasmHash": "<sha256 of the release WASM>",
       "wasmSizeBytes": 12345,
@@ -46,3 +47,12 @@ The script aborts — without writing the deployments file — if the hash of th
 reproducible build, the code the network stored on upload, or the code read back from the
 deployed contract differs from the pinned release hash. Use `--dry-run` to check that a
 local build reproduces a release without touching the network.
+
+## Agent policy deployments
+
+The agent policy custom-account WASM is built with `scripts/build_policy_wasm.sh`,
+which produces `stellar_agent_policy.wasm` and its `.sha256` hash. Deploy a pinned
+release with `npm run deploy:policy -- --network testnet --release vX.Y.Z
+--artifact ./stellar_agent_policy.wasm.sha256`. The resulting record includes `contract: "agent_policy"` and uses the same
+fields as an escrow deployment and identifies the policy contract ID and exact
+WASM hash. Configure that contract ID as `AGENT_POLICY_ACCOUNT` in the backend.

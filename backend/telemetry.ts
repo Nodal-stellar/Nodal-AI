@@ -43,7 +43,7 @@ export const SPAN_ATTR = {
  * must not leak into publicly visible traces.
  */
 export function isTxHashRedacted(): boolean {
-  return process.env.OTEL_REDACT_TX_HASH === 'true';
+  return config.OTEL_REDACT_TX_HASH;
 }
 
 /**
@@ -76,8 +76,7 @@ export function setTxHashAttribute(span: Span, data: unknown): void {
  * are no-ops.
  */
 export function initTelemetry(): void {
-  const otlpEndpoint: string | undefined = (config as unknown as Record<string, unknown>)
-    .OTLP_ENDPOINT as string | undefined;
+  const otlpEndpoint = config.OTLP_ENDPOINT;
   if (!otlpEndpoint) {
     log.info('OTLP_ENDPOINT not configured, skipping OpenTelemetry initialisation');
     return;

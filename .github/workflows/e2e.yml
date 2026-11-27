@@ -1,3 +1,122 @@
+name: Nightly x402 E2E — Testnet Interop
+
+# ─── Triggers ─────────────────────────────────────────────────────────────────
+# Primary: nightly at 02:00 UTC so it runs before European business hours.
+# Manual: workflow_dispatch for on-demand runs (e.g. after a hotfix).
+on:
+  schedule:
+    - cron: "0 2 * * *"   # 02:00 UTC every day
+  workflow_dispatch:        # manual trigger from GitHub Actions UI
+
+permissions:
+  contents: write           # create/update the failure issue
+  issues:   write           # open/update failure tracking issue
+
+jobs:
+  x402-roundtrip:
+    name: x402 v2 round-trip against testnet facilitator
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      STELLAR_NETWORK:      testnet
+      HORIZON_URL:          https://horizon-testnet.stellar.org
+      SOROBAN_RPC_URL:      https://soroban-testnet.stellar.org
+      # Funded testnet accounts are provisioned by Friendbot inside the test;
+      # a placeholder secret is supplied so config validation passes before
+      # the test overwrites it with the Friendbot-funded keypair.
+      AGENT_SECRET_KEY:     ${{ secrets.E2E_AGENT_SECRET_KEY }}
+      X402_ASSET_CODE:      USDC
+      X402_ASSET_ISSUER:    ${{ secrets.E2E_USDC_ISSUER }}
+      AGENT_SPENDING_LIMIT: "100"
+      MAX_X402_PAYMENTS_PER_MINUTE: "60"
+      DB_PATH:              ":memory:"
+      LOG_LEVEL:            info
+      # Public testnet USDC Circle issuer (testnet anchor)
+      E2E_USDC_ISSUER:      ${{ secrets.E2E_USDC_ISSUER }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # TypeScript type-check and lint before spending testnet funds
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      # Run only the x402 round-trip e2e test suite (excludes other e2e tests)
+      - name: Run x402 round-trip e2e tests
+        id: e2e
+        run: npx vitest run tests/e2e/x402_roundtrip.test.ts
+        continue-on-error: true  # collect result before deciding to open issue
+
+      # ── Failure tracking: open/update a GitHub issue on failure ─────────────
+      - name: Create or update failure issue on test failure
+        if: steps.e2e.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '🔴 Nightly x402 E2E failing — ' + new Date().toISOString().slice(0, 10);
+            const body = [
+              '## Nightly x402 E2E test failed',
+              '',
+              `**Run:** [${context.runId}](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              `**Branch:** \`${context.ref}\``,
+              `**Date:** ${new Date().toISOString()}`,
+              '',
+              'The nightly x402 interop test against the Stellar testnet failed.',
+              'Please investigate and resolve before the next nightly run.',
+              '',
+              '### Common causes',
+              '- Testnet facilitator downtime',
+              '- Testnet USDC issuer changed',
+              '- x402 protocol version mismatch',
+              '- Friendbot rate limiting',
+            ].join('\n');
+
+            // Search for an existing open failure issue to update rather than
+            // creating duplicates for every nightly failure.
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              state: 'open',
+              labels: 'nightly-e2e-failure',
+            });
+
+            if (issues.length > 0) {
+              // Update the most recent open failure issue with a new comment
+              await github.rest.issues.createComment({
+                owner:    context.repo.owner,
+                repo:     context.repo.repo,
+                issue_number: issues[0].number,
+                body: `Still failing — run [${context.runId}](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) on ${new Date().toISOString().slice(0, 10)}`,
+              });
+            } else {
+              // Open a fresh issue
+              await github.rest.issues.create({
+                owner:  context.repo.owner,
+                repo:   context.repo.repo,
+                title,
+                body,
+                labels: ['nightly-e2e-failure', 'bug'],
+              });
+            }
+
+      # Fail the job after the issue-creation step so CI status is red
+      - name: Propagate test failure
+        if: steps.e2e.outcome == 'failure'
+        run: exit 1
 name: E2E
 
 # End-to-end tests against a local stellar/quickstart network (#825).
@@ -33,6 +152,9 @@ concurrency:
   group: e2e-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   e2e:
     name: e2e (stellar/quickstart)
@@ -53,14 +175,14 @@ jobs:
       X402_ASSET_ISSUER: unused-by-e2e
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # Pull/boot quickstart first: it is the slowest step, so it warms up
       # while the WASM and node_modules are prepared below.
       - name: Start stellar/quickstart (test-only profile)
         run: docker compose --profile test-only up -d stellar-quickstart
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -73,7 +195,7 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry

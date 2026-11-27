@@ -104,13 +104,25 @@ export interface AgentStateEvent {
   timestamp: string;
 }
 
+/** MPP channel lifecycle event delivered through the same webhook as task results. */
+export interface ChannelExpiredEvent {
+  event: 'mpp.channel_expired';
+  channelId: string;
+  participant: string;
+  asset: string;
+  totalAmount: string;
+  openedAt: string;
+  timeoutAt: string;
+  timestamp: string;
+}
+
 export interface WebhookDispatchOptions {
   maxAttempts?: number;
   initialDelayMs?: number;
 }
 
 export async function dispatchWebhook(
-  result: AgentResult | AgentStateEvent,
+  result: AgentResult | AgentStateEvent | ChannelExpiredEvent,
   options?: WebhookDispatchOptions
 ): Promise<void> {
   if (!config.WEBHOOK_URL) return;

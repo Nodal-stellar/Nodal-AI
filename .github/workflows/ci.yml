@@ -10,6 +10,13 @@ on:
   schedule:
     - cron: '0 3 * * 1'
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Required status check (#704): branch protection on `main` should list the
   # `build` check as required, so a PR that does not compile cannot merge.
@@ -20,10 +27,10 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: npm
@@ -44,9 +51,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: npm
@@ -59,9 +66,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: npm
@@ -76,11 +83,48 @@ jobs:
       - run: npm ci
       - run: npm run test:all
 
+  # Exercises the Postgres Storage backend (#822) against a real database, so
+  # a SQL dialect bug (e.g. a migration that only works on SQLite) fails CI
+  # instead of surfacing in production. tests/storage.test.ts parameterises
+  # its suite over Postgres whenever TEST_DATABASE_URL is set; without it,
+  # that job only ever ran the SQLite half.
+  test-postgres:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: nodal
+          POSTGRES_PASSWORD: nodal
+          POSTGRES_DB: nodal
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nodal -d nodal"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      TEST_DATABASE_URL: postgres://nodal:nodal@localhost:5432/nodal
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npx vitest run tests/storage.test.ts tests/db_migrations.test.ts tests/persistence.test.ts
+
   test-rust:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # dtolnay/rust-toolchain has no "file" toolchain mode (that value was
       # passed straight through to `rustup toolchain install file`, which
@@ -104,7 +148,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # See test-rust's "Install Rust" step for why this isn't the action.
       - name: Install Rust
@@ -119,7 +163,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # See test-rust's "Install Rust" step: dtolnay/rust-toolchain has no
       # "file" mode. rustfmt/clippy come from rust-toolchain.toml's
@@ -137,7 +181,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # See test-rust's "Install Rust" step for why this isn't the action.
       - name: Install Rust
@@ -158,7 +202,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # See test-rust's "Install Rust" step for why this isn't the action.
       - name: Install Rust
@@ -188,7 +232,7 @@ jobs:
       STELLAR_CLI_VERSION: 22.8.1
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # See test-rust's "Install Rust" step for why this isn't the action.
       - name: Install Rust
@@ -212,7 +256,7 @@ jobs:
         run: bash scripts/generate_escrow_bindings.sh
 
       - name: Upload escrow bindings
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: escrow-ts-bindings
           path: contracts/escrow/bindings
@@ -224,7 +268,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Build production image
         run: docker build --target production -t nodal-ai:smoke .
@@ -232,16 +276,28 @@ jobs:
       - name: Boot check — better-sqlite3 native binding loads
         run: docker run --rm nodal-ai:smoke node -e "new (require('better-sqlite3'))(':memory:')"
 
+      - name: Build dashboard image
+        run: docker build --target dashboard -t nodal-dashboard:smoke .
+
+      - name: Dashboard serves the production build (#970)
+        run: |
+          docker run -d --name dash -p 8080:80 nodal-dashboard:smoke
+          for i in $(seq 1 10); do curl -fs http://127.0.0.1:8080/ >/dev/null && break; sleep 1; done
+          curl -fs http://127.0.0.1:8080/ | grep -q '<div id="root">'
+          ! curl -fs http://127.0.0.1:8080/ | grep -q '/@vite/client'
+          curl -fs http://127.0.0.1:8080/approvals | grep -q '<div id="root">'
+          docker rm -f dash
+
   secret-scan:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
       - name: Secret scanning with trufflehog
-        uses: trufflesecurity/trufflehog@v3.97.9
+        uses: trufflesecurity/trufflehog@4dd8831c5f12599465d4d45c3c447b4018a34c85 # v3.97.9
         with:
           extra_args: >-
             --config .trufflehog.yml
@@ -269,9 +325,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: npm
@@ -281,7 +337,7 @@ jobs:
       - name: Check whether the mutated files changed
         id: changed
         if: github.event_name != 'schedule'
-        uses: dorny/paths-filter@v4
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         with:
           filters: |
             mutated:
@@ -301,7 +357,7 @@ jobs:
       # mutants, which is the only actionable output when the threshold trips.
       - name: Upload mutation report
         if: always() && (steps.changed.outputs.mutated == 'true' || github.event_name == 'schedule')
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: mutation-report
           path: reports/mutation
@@ -312,9 +368,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: npm
@@ -323,13 +379,55 @@ jobs:
       - name: Audit npm dependencies
         run: npm audit --audit-level=high
 
-  docs-link-check:
+  # Rust-side counterpart to audit-npm (#991): npm dependencies were already
+  # audited in CI, but advisories in soroban-sdk's dependency tree, or a
+  # yanked crate, went unnoticed on the Rust side. Runs against both
+  # contracts' own Cargo.lock. License policy is documented in deny.toml;
+  # known, currently-unfixable transitive advisories (pinned by
+  # rust-toolchain.toml, see that file's comment) are ignored there and in
+  # .cargo/audit.toml — anything not already listed still fails the job.
+  audit-rust:
     runs-on: ubuntu-latest
+    env:
+      CARGO_AUDIT_VERSION: 0.22.2
+      CARGO_DENY_VERSION: 0.20.2
 
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v7
+      # Prebuilt release binaries: compiling cargo-audit/cargo-deny from
+      # source on every run is minutes of CI for a tool this job just
+      # invokes, and (see test-rust's "Install Rust" step) this repo's
+      # pinned 1.78 toolchain is older than some of their dependencies need.
+      - name: Install cargo-audit
+        run: |
+          curl -sSfL "https://github.com/rustsec/rustsec/releases/download/cargo-audit/v${CARGO_AUDIT_VERSION}/cargo-audit-x86_64-unknown-linux-musl-v${CARGO_AUDIT_VERSION}.tgz" \
+            | tar -xz -C /usr/local/bin --strip-components=1 "cargo-audit-x86_64-unknown-linux-musl-v${CARGO_AUDIT_VERSION}/cargo-audit"
+
+      - name: Install cargo-deny
+        run: |
+          curl -sSfL "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz -C /usr/local/bin --strip-components=1 "cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl/cargo-deny"
+
+      - name: cargo audit — escrow
+        run: cargo audit --file contracts/escrow/Cargo.lock
+
+      - name: cargo audit — agent_policy
+        run: cargo audit --file contracts/agent_policy/Cargo.lock
+
+      - name: cargo deny — escrow
+        run: cargo deny --manifest-path contracts/escrow/Cargo.toml --config deny.toml check advisories bans licenses
+
+      - name: cargo deny — agent_policy
+        run: cargo deny --manifest-path contracts/agent_policy/Cargo.toml --config deny.toml check advisories bans licenses
+
+  docs-link-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: npm
@@ -340,3 +438,20 @@ jobs:
       - name: Check for broken links in docs
         run: |
           markdown-link-check docs/index.md docs/guide/*.md docs/design/*.md
+
+  ai:
+    name: AI offline checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run eval:offline
+      - run: npm run test:ai-safety
+      - run: npm run tools:schema:check

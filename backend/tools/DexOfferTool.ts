@@ -20,6 +20,7 @@ import {
 import { withBackoffGuard } from '../network';
 import { SOROBAN_TX_TIMEOUT } from './SorobanInvokeTool';
 import { SubmitResultSchema } from './StellarPaymentTool';
+import { tryToStroops } from '../utils/amount';
 
 /**
  * Extract offer ID from the transaction result XDR.
@@ -82,7 +83,10 @@ export const DexOfferInputSchema = z
     amount: z
       .string()
       .regex(/^(?!0(\.0+)?$)\d+(\.\d{1,7})?$/, 'Amount must be a valid Stellar decimal')
-      .refine((v) => parseFloat(v) > 0, 'Amount must be greater than zero'),
+      .refine((v) => {
+        const s = tryToStroops(v);
+        return s !== null && s > 0n;
+      }, 'Amount must be greater than zero'),
     price: z.string().regex(/^\d+(\.\d+)?$/, 'Price must be a positive decimal'),
     offerId: z.union([z.string(), z.number()]).optional(),
   })

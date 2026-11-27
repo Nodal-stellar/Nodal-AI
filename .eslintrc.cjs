@@ -35,6 +35,12 @@ module.exports = {
             message:
               "pino expects logger.<level>({ ...fields }, 'message'). Put the fields object first and the message string second.",
           },
+          {
+            selector:
+              "CallExpression[callee.name='parseFloat'], CallExpression[callee.object.name='Number'][callee.property.name='parseFloat']",
+            message:
+              "Do not use parseFloat in backend/. Use BigInt stroop helpers from 'backend/utils/amount.ts' instead (fixes #734, #956).",
+          },
         ],
         // Block imports from the deprecated ./logger shim. Use ./utils/logger instead.
         "no-restricted-imports": [
@@ -51,10 +57,8 @@ module.exports = {
       },
     },
     {
-      files: [
-        "backend/agent.ts",
-        "backend/tools/**/*.ts",
-      ],
+      files: ["backend/**/*.ts"],
+      excludedFiles: ["backend/config.ts"],
 
       // Environment variables must be accessed through backend/config.ts
       // so they pass Zod validation and secret-redaction logic.
@@ -76,6 +80,13 @@ module.exports = {
       files: ["tests/**/*.ts"],
       rules: {
         "@typescript-eslint/no-var-requires": "off",
+      },
+    },
+    {
+      // Allow-listed display helper: backend/utils/amount.ts is permitted to use parseFloat (#956).
+      files: ["backend/utils/amount.ts"],
+      rules: {
+        "no-restricted-syntax": "off",
       },
     },
   ],

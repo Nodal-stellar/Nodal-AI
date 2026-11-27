@@ -25,3 +25,6 @@ Thumbs.db
 .stryker-tmp/
 .coverage
 coverage/
+
+# Local session notes (not committed)
+SESSION_CHANGES.md

@@ -64,7 +64,8 @@ const postgresBackend: Backend = {
   async reset() {
     // TRUNCATE does not fire the audit_log row triggers.
     await pgPool!.query(
-      `TRUNCATE agent_results, spending_records, agent_state, x402_used_nonces, audit_log
+      `TRUNCATE agent_results, spending_records, agent_state, x402_used_nonces, audit_log,
+       pending_approvals, approval_audit_log, triggers, trigger_events, idempotency_keys
        RESTART IDENTITY`
     );
   },
@@ -255,6 +256,178 @@ describe.each(backends)('Storage ($name)', (backend) => {
       const records = await storage.loadSpendingRecords(0);
       expect(records.reduce((sum, r) => sum + r.amount, 0)).toBe(50);
     });
+
+    describe('per-asset atomic reservations (#959)', () => {
+      it('enforces limits per asset and isolates different assets', async () => {
+        const usdc1 = await storage.reserveSpending({
+          assetKey: 'USDC',
+          amountStroops: 40_000_000n,
+          limitStroops: 100_000_000n,
+          sinceMs: 0,
+          now: 1_000,
+        });
+        expect(usdc1.totalStroops).toBe(40_000_000n);
+
+        // Different asset has its own limit and succeeds
+        const xlm1 = await storage.reserveSpending({
+          assetKey: 'XLM',
+          amountStroops: 80_000_000n,
+          limitStroops: 100_000_000n,
+          sinceMs: 0,
+          now: 1_000,
+        });
+        expect(xlm1.totalStroops).toBe(80_000_000n);
+
+        // Second USDC spend would breach USDC limit (40 + 70 = 110 > 100)
+        await expect(
+          storage.reserveSpending({
+            assetKey: 'USDC',
+            amountStroops: 70_000_000n,
+            limitStroops: 100_000_000n,
+            sinceMs: 0,
+            now: 2_000,
+          })
+        ).rejects.toThrow(/exceeds limit/);
+      });
+
+      it('never lets concurrent per-asset reservations exceed the limit', async () => {
+        const outcomes = await Promise.allSettled(
+          Array.from({ length: 8 }, () =>
+            storage.reserveSpending({
+              assetKey: 'USDC',
+              amountStroops: 20_000_000n,
+              limitStroops: 60_000_000n,
+              sinceMs: 0,
+              now: 1_000,
+            })
+          )
+        );
+
+        const fulfilled = outcomes.filter((o) => o.status === 'fulfilled');
+        expect(fulfilled).toHaveLength(3); // 20 * 3 = 60
+      });
+    });
+
+    describe('tracked spending records', () => {
+      it('saves, queries since, and deletes tracked records', async () => {
+        await storage.saveTrackedSpendingRecord({
+          id: 'res-1',
+          assetKey: 'USDC',
+          stroops: 50_000_000n,
+          timestamp: 1_000,
+        });
+        await storage.saveTrackedSpendingRecord({
+          id: 'res-2',
+          assetKey: 'XLM',
+          stroops: 10_000_000n,
+          timestamp: 2_000,
+        });
+
+        const records = await storage.getSpendingRecordsSince(500);
+        expect(records).toHaveLength(2);
+        expect(records[0]?.id).toBe('res-1');
+        expect(records[1]?.id).toBe('res-2');
+
+        await storage.deleteTrackedSpendingRecord('res-1');
+        const afterDelete = await storage.getSpendingRecordsSince(500);
+        expect(afterDelete).toHaveLength(1);
+        expect(afterDelete[0]?.id).toBe('res-2');
+      });
+    });
+  });
+
+  describe('approvals', () => {
+    it('saves, retrieves, lists, decides and audits approvals', async () => {
+      const now = Date.now();
+      await storage.savePendingApproval({
+        id: 'app-1',
+        taskType: 'stellar_payment',
+        payload: { amount: '10' },
+        amount: '10',
+        correlationId: 'corr-app',
+        createdAt: now,
+        expiresAt: now + 60_000,
+      });
+
+      const retrieved = await storage.getPendingApproval('app-1');
+      expect(retrieved).toBeDefined();
+      expect(retrieved?.id).toBe('app-1');
+      expect(retrieved?.status).toBe('pending_approval');
+
+      const list = await storage.listPendingApprovals();
+      expect(list.some((a) => a.id === 'app-1')).toBe(true);
+
+      const decided = await storage.decideApproval('app-1', 'approved', now + 1_000);
+      expect(decided).toBe(true);
+
+      // Second decision cannot change state
+      const reDecided = await storage.decideApproval('app-1', 'denied', now + 2_000);
+      expect(reDecided).toBe(false);
+
+      const audit = await storage.getApprovalAuditLog();
+      expect(audit.some((row) => row.approvalId === 'app-1' && row.decision === 'approved')).toBe(
+        true
+      );
+    });
+
+    it('expires overdue approvals and audits expiration', async () => {
+      const now = 10_000;
+      await storage.savePendingApproval({
+        id: 'app-expired',
+        taskType: 'stellar_payment',
+        payload: { amount: '5' },
+        amount: '5',
+        correlationId: null,
+        createdAt: now,
+        expiresAt: now + 1_000,
+      });
+
+      const expired = await storage.expirePendingApprovals(now + 2_000);
+      expect(expired).toContain('app-expired');
+
+      const app = await storage.getPendingApproval('app-expired');
+      expect(app?.status).toBe('expired');
+    });
+  });
+
+  describe('idempotency', () => {
+    it('returns stored result on matching payload and conflict on mismatched payload', async () => {
+      const result: any = { success: true, taskType: 'stellar_payment', data: { tx: 'tx1' } };
+      await storage.saveIdempotencyResult('idem-key-1', 'stellar_payment', { amount: '10' }, result);
+
+      const match = await storage.getIdempotencyResult('idem-key-1', { amount: '10' });
+      expect(match).toEqual(result);
+
+      const conflict = await storage.getIdempotencyResult('idem-key-1', { amount: '20' });
+      expect(conflict).toEqual({ conflict: true });
+    });
+  });
+
+  describe('triggers', () => {
+    it('saves, loads, dedupes and deletes triggers', async () => {
+      const trigger: any = {
+        id: 'trig-1',
+        source: 'payment',
+        filter: { assetCode: 'USDC' },
+        task: { type: 'stellar_payment', payload: { amount: '1' } },
+        enabled: true,
+        createdAt: new Date().toISOString(),
+      };
+
+      await storage.saveTrigger(trigger);
+      const loaded = await storage.loadTriggers();
+      expect(loaded.some((t) => t.id === 'trig-1')).toBe(true);
+
+      const firstFire = await storage.recordTriggerFired('trig-1', 'event-1');
+      expect(firstFire).toBe(true);
+      const duplicateFire = await storage.recordTriggerFired('trig-1', 'event-1');
+      expect(duplicateFire).toBe(false);
+
+      await storage.deleteTrigger('trig-1');
+      const afterDelete = await storage.loadTriggers();
+      expect(afterDelete.some((t) => t.id === 'trig-1')).toBe(false);
+    });
+  });
   });
 
   describe('nonce store', () => {
@@ -267,5 +440,148 @@ describe.each(backends)('Storage ($name)', (backend) => {
       expect(await nonces.has('nonce-1')).toBe(true);
       expect(await nonces.has('nonce-2')).toBe(false);
     });
+  });
+
+  describe('approvals (#958)', () => {
+    it('saves, retrieves, lists, decides and audits approvals', async () => {
+      const now = Date.now();
+      await storage.savePendingApproval({
+        id: 'app-1',
+        taskType: 'stellar_payment',
+        payload: { amount: '10' },
+        amount: '10',
+        correlationId: 'corr-app',
+        createdAt: now,
+        expiresAt: now + 60_000,
+      });
+
+      const retrieved = await storage.getPendingApproval('app-1');
+      expect(retrieved).toBeDefined();
+      expect(retrieved?.id).toBe('app-1');
+      expect(retrieved?.status).toBe('pending_approval');
+
+      const list = await storage.listPendingApprovals();
+      expect(list.some((a) => a.id === 'app-1')).toBe(true);
+
+      const decided = await storage.decideApproval('app-1', 'approved', now + 1_000);
+      expect(decided).toBe(true);
+
+      const reDecided = await storage.decideApproval('app-1', 'denied', now + 2_000);
+      expect(reDecided).toBe(false);
+
+      const audit = await storage.getApprovalAuditLog();
+      expect(audit.some((row) => row.approvalId === 'app-1' && row.decision === 'approved')).toBe(
+        true
+      );
+    });
+
+    it('expires overdue approvals and audits expiration', async () => {
+      const now = 10_000;
+      await storage.savePendingApproval({
+        id: 'app-expired',
+        taskType: 'stellar_payment',
+        payload: { amount: '5' },
+        amount: '5',
+        correlationId: null,
+        createdAt: now,
+        expiresAt: now + 1_000,
+      });
+
+      const expired = await storage.expirePendingApprovals(now + 2_000);
+      expect(expired).toContain('app-expired');
+
+      const app = await storage.getPendingApproval('app-expired');
+      expect(app?.status).toBe('expired');
+    });
+  });
+
+  describe('idempotency (#958)', () => {
+    it('returns stored result on matching payload and conflict on mismatched payload', async () => {
+      const result: any = { success: true, taskType: 'stellar_payment', data: { tx: 'tx1' } };
+      await storage.saveIdempotencyResult('idem-key-1', 'stellar_payment', { amount: '10' }, result);
+
+      const match = await storage.getIdempotencyResult('idem-key-1', { amount: '10' });
+      expect(match).toEqual(result);
+
+      const conflict = await storage.getIdempotencyResult('idem-key-1', { amount: '20' });
+      expect(conflict).toEqual({ conflict: true });
+    });
+  });
+
+  describe('triggers (#958)', () => {
+    it('saves, loads, dedupes and deletes triggers', async () => {
+      const trigger: any = {
+        id: 'trig-1',
+        source: 'payment',
+        filter: { assetCode: 'USDC' },
+        task: { type: 'stellar_payment', payload: { amount: '1' } },
+        enabled: true,
+        createdAt: new Date().toISOString(),
+      };
+
+      await storage.saveTrigger(trigger);
+      const loaded = await storage.loadTriggers();
+      expect(loaded.some((t) => t.id === 'trig-1')).toBe(true);
+
+      const firstFire = await storage.recordTriggerFired('trig-1', 'event-1');
+      expect(firstFire).toBe(true);
+      const duplicateFire = await storage.recordTriggerFired('trig-1', 'event-1');
+      expect(duplicateFire).toBe(false);
+
+      await storage.deleteTrigger('trig-1');
+      const afterDelete = await storage.loadTriggers();
+      expect(afterDelete.some((t) => t.id === 'trig-1')).toBe(false);
+    });
+  });
+
+  describe('kill-switch state (#958)', () => {
+    it('persists paused state and reports correctly', async () => {
+      expect(await storage.isPaused()).toBe(false);
+      await storage.setPaused(true);
+      expect(await storage.isPaused()).toBe(true);
+      await storage.setPaused(false);
+      expect(await storage.isPaused()).toBe(false);
+    });
+  });
+});
+
+describe('Multi-instance Postgres sharing integration test (#957)', () => {
+  it('two instances sharing one database share the spending window and limit', async () => {
+    let s1: Storage;
+    let s2: Storage;
+    if (TEST_DATABASE_URL && pgPool) {
+      s1 = new PostgresStorage(pgPool);
+      s2 = new PostgresStorage(pgPool);
+    } else {
+      s1 = new SqliteStorage();
+      s2 = new SqliteStorage();
+    }
+
+    await s1.clearSpendingRecords();
+
+    const res1 = await s1.reserveSpending({
+      assetKey: 'USDC',
+      amountStroops: 60_000_000n,
+      limitStroops: 100_000_000n,
+      sinceMs: 0,
+    });
+    expect(res1.totalStroops).toBe(60_000_000n);
+
+    await expect(
+      s2.reserveSpending({
+        assetKey: 'USDC',
+        amountStroops: 50_000_000n,
+        limitStroops: 100_000_000n,
+        sinceMs: 0,
+      })
+    ).rejects.toThrow(/exceeds limit/);
+
+    const res2 = await s2.reserveSpending({
+      assetKey: 'USDC',
+      amountStroops: 30_000_000n,
+      limitStroops: 100_000_000n,
+      sinceMs: 0,
+    });
+    expect(res2.totalStroops).toBe(90_000_000n);
   });
 });

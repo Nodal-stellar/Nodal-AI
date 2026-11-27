@@ -39,14 +39,15 @@ import {
   xdr,
 } from '@stellar/stellar-sdk';
 import { z } from 'zod';
-import { config, MAINNET_SPENDING_CAP } from '../config';
-import { AgentPausedError, PolicyViolationError, ValidationError } from '../errors';
+import { config } from '../config';
+import { AgentPausedError, ValidationError } from '../errors';
 import { isPaused } from '../kill_switch';
 import { loadAccount, prepareSorobanTx, resolveNetworkPassphrase } from '../rpc_client';
 import { createAgentSigner, Signer } from '../signer';
-import { spendingTracker } from '../spending_tracker';
+import { assetKeyForPaymentAsset, spendingTracker } from '../spending_tracker';
 import { SOROBAN_TX_TIMEOUT } from '../tools/SorobanInvokeTool';
 import { createLogger } from '../utils/logger';
+import { toStroops } from '../utils/amount';
 import { caip2Network } from '../x402/middleware';
 
 const log = createLogger('mpp-charge');
@@ -228,27 +229,18 @@ function assertAuthorizesOnlyTransfer(
 
 /**
  * The agent's spending policy, as applied to every value-moving task: the kill
- * switch, the single-payment AGENT_SPENDING_LIMIT, the mainnet safety cap, and
- * a reservation against the cumulative rolling window.
+ * switch, then a reservation against the rolling window via
+ * {@link SpendingTracker.reserve} — which enforces AGENT_SPENDING_LIMIT (or
+ * the per-asset SPENDING_LIMITS entry), the mainnet cap and the window total
+ * with BigInt stroop arithmetic.
  *
  * @returns The reservation id to commit or release.
  */
-function reserveSpend(amount: string): string {
+function reserveSpend(amount: string, currency: string): string {
   if (isPaused()) {
     throw new AgentPausedError('Agent is paused; MPP charge payments are halted');
   }
-  const parsed = parseFloat(amount);
-  if (parsed > parseFloat(config.AGENT_SPENDING_LIMIT)) {
-    throw new PolicyViolationError(
-      `MPP charge of ${amount} exceeds AGENT_SPENDING_LIMIT of ${config.AGENT_SPENDING_LIMIT}`
-    );
-  }
-  if (config.STELLAR_NETWORK === 'mainnet' && parsed > MAINNET_SPENDING_CAP) {
-    throw new PolicyViolationError(
-      `MPP charge of ${amount} exceeds mainnet spending cap of ${MAINNET_SPENDING_CAP}`
-    );
-  }
-  return spendingTracker.reserve(amount);
+  return spendingTracker.reserve(amount, assetKeyForPaymentAsset(currency));
 }
 
 // ─── Client ──────────────────────────────────────────────────────────────────
@@ -294,7 +286,7 @@ export class MppChargeClient {
    * @throws ValidationError if the challenge is malformed, expired, for another
    *   network, server-sponsored, or its simulation authorizes anything but the
    *   requested transfer.
-   * @throws PolicyViolationError | AgentPausedError if the spending policy refuses the charge.
+   * @throws Error | AgentPausedError if the spending policy refuses the charge.
    */
   async fetch(url: string | URL, init: RequestInit = {}): Promise<MppChargeResult> {
     const first = await fetch(url, init);
@@ -325,7 +317,7 @@ export class MppChargeClient {
 
     const amount = fromBaseUnits(request.amount);
     const payer = this.signer.publicKey();
-    const reservationId = reserveSpend(amount);
+    const reservationId = reserveSpend(amount, request.currency);
 
     let transaction: string;
     try {

@@ -92,7 +92,7 @@ export interface INonceStore {
  * wrapped in Promise.resolve() to satisfy the async INonceStore interface
  * and keep call-sites uniform regardless of backend.
  *
- * IMPORTANT: The connection should be the shared one from persistence.getDb()
+ * IMPORTANT: The connection should be the shared one from backend/db/sqlite.ts
  * to avoid opening multiple connections per process. See X402PaymentTool constructor.
  */
 export class SqliteNonceStore implements INonceStore {

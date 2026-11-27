@@ -205,6 +205,7 @@ Every `TaskType` value accepted by `PayFiAgent.run()` is listed below, together 
 | `network_status` | `NetworkStatusTool` | Check health and latency of the configured Horizon and Soroban RPC endpoints. Read-only. |
 | `offer_book` | `OfferBookTool` | Query the Stellar DEX order book for an asset pair and return bids, asks, and the top-of-book spread. Read-only. |
 | `soroban_storage` | `SorobanStorageTool` | Read a Soroban contract's storage entry (`persistent`, `temporary`, or `instance`) and return the decoded value. Read-only. |
+| `claimable_balance` | `ClaimableBalanceTool` | Create a Stellar claimable balance for one or more claimants, or claim one the agent is entitled to. Spending limit enforced on create. |
 
 ### Lifecycle Hooks
 

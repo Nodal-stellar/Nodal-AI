@@ -158,6 +158,85 @@ describe('config.ts startup validation', () => {
       expect.stringContaining('AGENT_SECRET_KEY is not a valid Stellar secret key')
     );
   });
+
+  it('rejects invalid alert, LLM budget, and session settings with field-specific errors', async () => {
+    delete process.env.AGENT_SECRET_KEY;
+    delete process.env.AGENT_SECRET_KEY_ARN;
+    const { EnvSchema } = await import('../backend/config');
+    const validEnv = {
+      STELLAR_NETWORK: 'testnet',
+      HORIZON_URL: 'https://horizon-testnet.stellar.org',
+      SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org',
+      X402_ASSET_ISSUER: VALID_ISSUER,
+      AGENT_SECRET_KEY: VALID_SECRET,
+    };
+
+    const result = EnvSchema.safeParse({
+      ...validEnv,
+      ALERT_SPENDING_THRESHOLDS: '0.8,not-a-number',
+      LLM_MAX_TOKENS_PER_REQUEST: 'not-an-integer',
+      SESSION_TTL_MS: '0',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((issue) => issue.path[0])).toEqual(
+        expect.arrayContaining([
+          'ALERT_SPENDING_THRESHOLDS',
+          'LLM_MAX_TOKENS_PER_REQUEST',
+          'SESSION_TTL_MS',
+        ])
+      );
+    }
+
+    expect(EnvSchema.parse(validEnv)).toMatchObject({
+      ALERT_SPENDING_THRESHOLDS: [0.8, 1],
+      ALERT_FAILURE_THRESHOLD: 5,
+      ALERT_FAILURE_WINDOW_MS: 300_000,
+      LLM_MAX_TOKENS_PER_REQUEST: 8_000,
+      SESSION_TTL_MS: 1_800_000,
+      NANO_ALLOW_SKIP_PRECHECK: false,
+    });
+  });
+
+  it('fails startup with a field-specific message for invalid configured limits', async () => {
+    process.env.HORIZON_URL = 'https://horizon-testnet.stellar.org';
+    process.env.SOROBAN_RPC_URL = 'https://soroban-testnet.stellar.org';
+    process.env.X402_ASSET_ISSUER = VALID_ISSUER;
+    process.env.AGENT_SECRET_KEY = VALID_SECRET;
+    process.env.LLM_MAX_TOKENS_PER_REQUEST = 'not-an-integer';
+
+    await expect(async () => {
+      const { configPromise } = await import('../backend/config');
+      await configPromise;
+    }).rejects.toThrow('process.exit: 1');
+
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('LLM_MAX_TOKENS_PER_REQUEST'));
+  });
+
+  it('keeps Vault, OpenZeppelin, and LLM API keys off the public config object', async () => {
+    process.env.HORIZON_URL = 'https://horizon-testnet.stellar.org';
+    process.env.SOROBAN_RPC_URL = 'https://soroban-testnet.stellar.org';
+    process.env.X402_ASSET_ISSUER = VALID_ISSUER;
+    process.env.AGENT_SECRET_KEY = VALID_SECRET;
+    delete process.env.AGENT_SECRET_KEY_ARN;
+    delete process.env.NANO_SEED_ARN;
+    process.env.NANO_ENABLED = 'false';
+    process.env.VAULT_TOKEN = 'vault-test-token';
+    process.env.OZ_API_KEY = 'oz-test-key';
+    process.env.LLM_API_KEY = 'llm-test-key';
+
+    const { configPromise, getLLMApiKey, getOZApiKey, getVaultToken } =
+      await import('../backend/config');
+    const config = await configPromise;
+
+    expect(config).not.toHaveProperty('VAULT_TOKEN');
+    expect(config).not.toHaveProperty('OZ_API_KEY');
+    expect(config).not.toHaveProperty('LLM_API_KEY');
+    expect(getVaultToken()).toBe('vault-test-token');
+    expect(getOZApiKey()).toBe('oz-test-key');
+    expect(getLLMApiKey()).toBe('llm-test-key');
+  });
 });
 
 // ─── formatValidationErrors (pure-function tests) ────────────────────────────
@@ -357,6 +436,7 @@ describe('config.ts — comprehensive env-var validation (issue #444)', () => {
     process.env.STELLAR_NETWORK = 'mainnet';
     process.env.HORIZON_URL = 'https://horizon.stellar.org';
     process.env.SOROBAN_RPC_URL = 'https://soroban-rpc.mainnet.stellar.org';
+    process.env.NANO_RPC_URL = 'https://nano-rpc.mainnet.example';
     process.env.AGENT_SPENDING_LIMIT = '10001';
 
     await expect(async () => {
@@ -389,6 +469,7 @@ describe('config.ts — comprehensive env-var validation (issue #444)', () => {
     // Intentionally HTTP — should be rejected by the mainnet HTTPS guard
     process.env.HORIZON_URL = 'http://horizon.stellar.org';
     process.env.SOROBAN_RPC_URL = 'https://soroban-rpc.mainnet.stellar.org';
+    process.env.NANO_RPC_URL = 'https://nano-rpc.mainnet.example';
     process.env.AGENT_SPENDING_LIMIT = '100';
 
     await expect(async () => {
@@ -406,6 +487,7 @@ describe('config.ts — comprehensive env-var validation (issue #444)', () => {
     process.env.HORIZON_URL = 'https://horizon.stellar.org';
     // Intentionally HTTP — should be rejected by the mainnet HTTPS guard
     process.env.SOROBAN_RPC_URL = 'http://soroban-rpc.mainnet.stellar.org';
+    process.env.NANO_RPC_URL = 'https://nano-rpc.mainnet.example';
     process.env.AGENT_SPENDING_LIMIT = '100';
 
     await expect(async () => {
@@ -417,12 +499,30 @@ describe('config.ts — comprehensive env-var validation (issue #444)', () => {
     expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('Mainnet requires HTTPS'));
   });
 
+  it('fails when NANO_RPC_URL uses HTTP on mainnet', async () => {
+    setMinimalValidEnv();
+    process.env.STELLAR_NETWORK = 'mainnet';
+    process.env.HORIZON_URL = 'https://horizon.stellar.org';
+    process.env.SOROBAN_RPC_URL = 'https://soroban-rpc.mainnet.stellar.org';
+    process.env.NANO_RPC_URL = 'http://nano-rpc.mainnet.example';
+    process.env.AGENT_SPENDING_LIMIT = '100';
+
+    await expect(async () => {
+      const { configPromise } = await import('../backend/config');
+      await configPromise;
+    }).rejects.toThrow(/process\.exit: 1/);
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('NANO_RPC_URL: must use HTTPS'));
+  });
+
   // ── Bonus: valid mainnet config (both HTTPS URLs, spending limit ≤ 10,000) passes ──
   it('accepts a valid mainnet configuration with HTTPS URLs and spending limit ≤ 10,000', async () => {
     setMinimalValidEnv();
     process.env.STELLAR_NETWORK = 'mainnet';
     process.env.HORIZON_URL = 'https://horizon.stellar.org';
     process.env.SOROBAN_RPC_URL = 'https://soroban-rpc.mainnet.stellar.org';
+    process.env.NANO_RPC_URL = 'https://nano-rpc.mainnet.example';
     process.env.AGENT_SPENDING_LIMIT = '9999';
     process.env.WEBHOOK_SECRET = 'mainnet-api-token';
 
@@ -619,5 +719,104 @@ describe('X402_ASSET_CONTRACT (#776)', () => {
     expect(stderrSpy).toHaveBeenCalledWith(
       expect.stringContaining('X402_ASSET_CONTRACT is not the Stellar Asset Contract')
     );
+  });
+});
+
+describe('APPROVAL_THRESHOLDS, APPROVER_TOKENS, multi-approver (#953, #954)', () => {
+  let originalEnv: NodeJS.ProcessEnv;
+  let stderrSpy: any;
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.doMock('@aws-sdk/client-secrets-manager', () => ({
+      SecretsManagerClient: vi.fn().mockImplementation(function () {
+        return { send: mockSend };
+      }),
+      GetSecretValueCommand: vi.fn().mockImplementation(function (args: any) {
+        return args;
+      }),
+    }));
+    originalEnv = { ...process.env };
+    vi.spyOn(process, 'exit').mockImplementation((code?: string | number | null | undefined) => {
+      throw new Error(`process.exit: ${code}`);
+    });
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    process.env.STELLAR_NETWORK = 'testnet';
+    process.env.HORIZON_URL = 'https://horizon-testnet.stellar.org';
+    process.env.SOROBAN_RPC_URL = 'https://soroban-testnet.stellar.org';
+    process.env.X402_ASSET_CODE = 'USDC';
+    process.env.X402_ASSET_ISSUER = VALID_ISSUER;
+    process.env.AGENT_SECRET_KEY = VALID_SECRET;
+    delete process.env.AGENT_SECRET_KEY_ARN;
+    delete process.env.APPROVAL_THRESHOLDS;
+    delete process.env.APPROVER_TOKENS;
+    delete process.env.APPROVAL_MULTI_APPROVER_THRESHOLD;
+    delete process.env.APPROVAL_MIN_APPROVERS;
+    delete process.env.KILL_SWITCH_SYNC_INTERVAL_MS;
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+    vi.restoreAllMocks();
+  });
+
+  async function load() {
+    const { configPromise } = await import('../backend/config');
+    return configPromise;
+  }
+
+  it('parses APPROVAL_THRESHOLDS into per-asset entries', async () => {
+    process.env.APPROVAL_THRESHOLDS = `XLM:5000,USDC:${VALID_ISSUER}:500`;
+    const config = await load();
+    expect(config.APPROVAL_THRESHOLDS_MAP.get('XLM')).toBe('5000');
+    expect(config.APPROVAL_THRESHOLDS_MAP.get(`USDC:${VALID_ISSUER}`)).toBe('500');
+  });
+
+  it('defaults to an empty APPROVAL_THRESHOLDS_MAP when unset', async () => {
+    const config = await load();
+    expect(config.APPROVAL_THRESHOLDS_MAP.size).toBe(0);
+  });
+
+  it('rejects a malformed APPROVAL_THRESHOLDS entry', async () => {
+    process.env.APPROVAL_THRESHOLDS = 'XLM:not-a-number';
+    await expect(load()).rejects.toThrow('process.exit: 1');
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('APPROVAL_THRESHOLDS'));
+  });
+
+  it('parses APPROVER_TOKENS into name → hash entries', async () => {
+    const hash = 'a'.repeat(64);
+    process.env.APPROVER_TOKENS = `alice:${hash}`;
+    const config = await load();
+    expect(config.APPROVER_TOKENS_MAP.get('alice')).toBe(hash);
+  });
+
+  it('lowercases an uppercase APPROVER_TOKENS hash for case-insensitive matching', async () => {
+    const hash = 'ABCDEF' + '0'.repeat(58);
+    process.env.APPROVER_TOKENS = `alice:${hash}`;
+    const config = await load();
+    expect(config.APPROVER_TOKENS_MAP.get('alice')).toBe(hash.toLowerCase());
+  });
+
+  it('rejects an APPROVER_TOKENS entry whose hash is not 64 hex characters', async () => {
+    process.env.APPROVER_TOKENS = 'alice:too-short';
+    await expect(load()).rejects.toThrow('process.exit: 1');
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('APPROVER_TOKENS'));
+  });
+
+  it('defaults APPROVAL_MIN_APPROVERS to 2', async () => {
+    const config = await load();
+    expect(config.APPROVAL_MIN_APPROVERS).toBe(2);
+  });
+
+  it('rejects an APPROVAL_MIN_APPROVERS below 2', async () => {
+    process.env.APPROVAL_MIN_APPROVERS = '1';
+    await expect(load()).rejects.toThrow('process.exit: 1');
+  });
+
+  it('defaults KILL_SWITCH_SYNC_INTERVAL_MS to 2000', async () => {
+    const config = await load();
+    expect(config.KILL_SWITCH_SYNC_INTERVAL_MS).toBe(2_000);
   });
 });

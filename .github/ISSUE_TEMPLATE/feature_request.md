@@ -63,6 +63,7 @@ Which task type(s) does this feature touch, or does it introduce a new one?
 - [ ] `soroban_event_query`
 - [ ] `stellar_identity_auth`
 - [ ] `friendbot`
+- [ ] `claimable_balance`
 - [ ] New task type (specify below)
 - [ ] Not task-specific (infrastructure, DX, docs, etc.)
 

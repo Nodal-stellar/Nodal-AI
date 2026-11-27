@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { executePlan, createPlan, PlanResult } from '../backend/executor';
 import type { AgentTask } from '../backend/agent';
+import { expectLoggedError } from './helpers/expectLoggedError';
 
 // ─── Fake timer infrastructure ────────────────────────────────────────────────
 
@@ -20,9 +21,11 @@ function makeAgent(opts: { runSequenceResult?: unknown[]; runSequenceThrows?: bo
     run: vi.fn().mockResolvedValue({ success: true, taskType: 'account_info', data: {} }),
     runSequence: opts.runSequenceThrows
       ? vi.fn().mockRejectedValue(new Error('simulated failure'))
-      : vi.fn().mockResolvedValue(
-          opts.runSequenceResult ?? [{ success: true, taskType: 'stellar_payment', data: {} }]
-        ),
+      : vi
+          .fn()
+          .mockResolvedValue(
+            opts.runSequenceResult ?? [{ success: true, taskType: 'stellar_payment', data: {} }]
+          ),
   } as any;
 }
 
@@ -101,6 +104,7 @@ describe('executePlan — issue #909', () => {
     });
 
     it('returns status:"failed" when runSequence throws', async () => {
+      expectLoggedError(/Plan execution failed/);
       const plan = createPlan([READONLY_TASK]);
       const agent = makeAgent({ runSequenceThrows: true });
 

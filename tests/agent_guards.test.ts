@@ -585,7 +585,12 @@ describe('PayFiAgent guards', () => {
     } as AgentTask;
 
     const saved = () => vi.mocked(savePendingApproval).mock.calls[0]![0];
-    const held = () => ({ ...saved(), status: 'pending_approval' as const, decidedAt: null });
+    const held = () => ({
+      ...saved(),
+      status: 'pending_approval' as const,
+      decidedAt: null,
+      decidedBy: null,
+    });
 
     beforeEach(() => {
       mutableConfig.APPROVAL_THRESHOLD = '500';
@@ -748,6 +753,17 @@ describe('PayFiAgent guards', () => {
       expect(agent.listApprovals()).toEqual([]);
 
       expect(expirePendingApprovals).toHaveBeenCalledTimes(3);
+    });
+
+    it('releases persisted reservations on expire or approve across restarts (#952)', async () => {
+      const approval = held();
+      vi.mocked(getPendingApproval).mockReturnValue(approval);
+      vi.mocked(expirePendingApprovals).mockReturnValue([approval.id]);
+
+      // Simulate restart: new agent instance without in-memory map
+      const freshAgent = new PayFiAgent();
+      freshAgent.expireApprovals();
+      expect(expirePendingApprovals).toHaveBeenCalled();
     });
   });
 

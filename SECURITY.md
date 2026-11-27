@@ -77,6 +77,10 @@ Before any x402 payment is triggered, the incoming challenge is validated for:
 - Validation runs before any keypair access or transaction construction.
 - Challenges failing any check are dropped without triggering a payment.
 
+### 4. AI-Initiated Payments
+
+An LLM, MCP client, or event trigger can only propose a task; spending limits, the destination policy, approvals, and the kill switch are enforced in the agent, not in a prompt. [AI Payment Safety](./docs/guide/ai-safety.md) maps the entry points to their controls, recommends production settings, and lists known limitations. Review it before enabling `MCP_ALLOW_PAYMENTS` or `TRIGGER_ALLOW_PAYMENTS`.
+
 ---
 
 ## Secret Management: The `agentKeypair()` Closure

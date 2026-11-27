@@ -2,16 +2,37 @@
   "name": "nodal-ai",
   "version": "1.0.0",
   "description": "Modular, secure Stellar Agent Kit with PayFi / x402 support",
-  "private": true,
   "engines": {
     "node": ">=22.0.0"
   },
+  "main": "./dist/cjs/sdk.js",
+  "module": "./dist/esm/sdk.js",
+  "types": "./dist/types/sdk.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/esm/sdk.js",
+      "require": "./dist/cjs/sdk.js",
+      "types": "./dist/types/sdk.d.ts"
+    }
+  },
+  "files": [
+    "dist/cjs",
+    "dist/esm",
+    "dist/types",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "mcp": "npx ts-node backend/mcp/index.ts",
+    "mcp:start": "node dist/backend/mcp/index.js",
     "setup": "npx ts-node scripts/setup.ts",
     "doctor": "npx ts-node scripts/doctor.ts",
     "audit:verify": "npx ts-node scripts/audit_verify.ts",
+    "db:prune": "npx ts-node scripts/db_prune.ts",
     "build": "tsc && node -e \"require('fs').cpSync('backend/db/migrations', 'dist/backend/db/migrations', { recursive: true })\"",
+    "build:lib": "tsc --project tsconfig.lib.json",
+    "build:lib:esm": "tsc --project tsconfig.lib.esm.json",
+    "build:pkg": "npm run build:lib && npm run build:lib:esm",
     "pretest": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test:fuzz": "vitest run tests/fuzz/**",
@@ -23,9 +44,13 @@
     "test:rust:coverage": "cargo tarpaulin --locked --manifest-path contracts/escrow/Cargo.toml --out Html --output-dir coverage/rust",
     "check:wasm-size": "bash scripts/check_wasm_size.sh",
     "bindings:escrow": "bash scripts/generate_escrow_bindings.sh",
+    "build:policy-wasm": "bash scripts/build_policy_wasm.sh",
+    "deploy:policy": "ts-node scripts/deploy_policy.ts",
     "test:e2e": "vitest run tests/e2e/**",
     "test:e2e:escrow": "vitest run tests/e2e/escrow_flow.test.ts",
     "test:all": "npm run test:rust && npm run test:ts",
+    "load-test": "ts-node --esm tests/load/run_load_tests.ts",
+    "lint": "eslint backend/**/*.ts tests/**/*.ts",
     "test:mutation": "stryker run stryker.config.mjs",
     "test:ai-safety": "vitest run tests/ai-safety/**",
     "lint": "eslint \"backend/**/*.ts\" \"tests/**/*.ts\"",
@@ -73,6 +98,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@types/autocannon": "7.12.5",
     "@stryker-mutator/core": "9.6.1",
     "@stryker-mutator/vitest-runner": "9.6.1",
     "@types/better-sqlite3": "7.6.13",
@@ -82,6 +108,7 @@
     "@types/pg": "8.23.1",
     "@typescript-eslint/eslint-plugin": "7.18.0",
     "@typescript-eslint/parser": "7.18.0",
+    "autocannon": "7.15.0",
     "conventional-changelog-cli": "5.0.0",
     "eslint": "8.57.1",
     "fast-check": "3.23.2",

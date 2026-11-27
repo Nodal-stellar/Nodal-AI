@@ -37,6 +37,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { z } from 'zod';
+import { Asset, Networks } from '@stellar/stellar-sdk';
 import { paymentMiddlewareFromConfig, type SchemeRegistration } from '@x402/express';
 import { HTTPFacilitatorClient } from '@x402/core/server';
 import { ExactStellarScheme } from '@x402/stellar/exact/server';
@@ -65,7 +66,7 @@ const log = createLogger('x402-middleware');
  *   price: '0.01',
  *   payTo: 'G...',
  *   facilitatorUrl: 'https://facilitator.openzeppelin.com',
- *   facilitatorApiKey: process.env.OZ_API_KEY,
+ *   facilitatorApiKey: getOZApiKey(),
  * })
  * ```
  */
@@ -117,6 +118,38 @@ const PaywallOptionsSchema = z.object({
 });
 
 /**
+ * Resolve the paywall `asset` code to the Stellar Asset Contract (C…) the
+ * payment requirements must name. The configured x402 asset maps to
+ * `X402_ASSET_CONTRACT`; `XLM` and codes listed in `X402_ALLOWED_ASSETS`
+ * (`CODE:ISSUER`) are derived for the configured network.
+ *
+ * @throws {Error} if the code is not one the agent is configured for.
+ */
+function resolvePaywallAssetContract(code: string | undefined): string {
+  if (!code || code === config.X402_ASSET_CODE) return config.X402_ASSET_CONTRACT;
+
+  const networkPassphrase = {
+    testnet: Networks.TESTNET,
+    mainnet: Networks.PUBLIC,
+    futurenet: Networks.FUTURENET,
+  }[config.STELLAR_NETWORK];
+
+  if (code === 'XLM') return Asset.native().contractId(networkPassphrase);
+
+  for (const entry of (config.X402_ALLOWED_ASSETS ?? '').split(',').map((s) => s.trim())) {
+    const [entryCode, issuer] = entry.split(':');
+    if (entryCode === code && issuer) {
+      return new Asset(entryCode, issuer).contractId(networkPassphrase);
+    }
+  }
+
+  throw new Error(
+    `nodalPaywall: unknown asset "${code}". Use ${config.X402_ASSET_CODE}, XLM, ` +
+      'or a CODE:ISSUER entry listed in X402_ALLOWED_ASSETS.'
+  );
+}
+
+/**
  * Create Express payment-gating middleware for a single route.
  *
  * Mount it before your route handler.  Every request without a valid
@@ -148,6 +181,7 @@ export function nodalPaywall(
   const apiKey = opts.facilitatorApiKey ?? config.X402_FACILITATOR_API_KEY;
   const network = toCaip2(config.STELLAR_NETWORK);
   const payTo = opts.payTo ?? config.AGENT_PUBLIC_KEY;
+  const assetContract = resolvePaywallAssetContract(opts.asset);
 
   // Build the facilitator client.  When an API key is configured we pass a
   // createAuthHeaders factory, which returns headers keyed by facilitator
@@ -179,7 +213,9 @@ export function nodalPaywall(
         scheme: 'exact' as const,
         network,
         payTo,
-        price: opts.price,
+        // Explicit asset so the configured asset (not the library default,
+        // USDC) is charged. AssetAmount amounts are in base units (stroops).
+        price: { amount: toStroops(opts.price), asset: assetContract },
         ...(opts.description ? {} : {}), // description goes in RouteConfig, not PaymentOption
       },
       ...(opts.description ? { description: opts.description } : {}),
@@ -192,6 +228,7 @@ export function nodalPaywall(
       payTo,
       price: opts.price,
       asset: opts.asset ?? config.X402_ASSET_CODE,
+      assetContract,
       facilitatorUrl,
     },
     'nodalPaywall middleware created'

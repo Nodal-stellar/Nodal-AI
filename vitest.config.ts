@@ -60,7 +60,7 @@ export default defineConfig({
     // Global setup file: enforces vi.useRealTimers() + vi.restoreAllMocks() after every
     // test to prevent fake timer and spy state from leaking across test files.
     // See tests/helpers/globalSetup.ts for the full rationale.
-    setupFiles: ["./tests/helpers/globalSetup.ts"],
+    setupFiles: ["./tests/helpers/globalSetup.ts", "./tests/helpers/expectLoggedError.ts"],
     // restoreMocks: true automatically calls vi.restoreAllMocks() after every test to restore original implementations
     restoreMocks: true,
     // clearMocks: true automatically resets mock.calls, mock.instances, etc. between tests so call history doesn't bleed

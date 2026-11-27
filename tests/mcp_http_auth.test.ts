@@ -46,15 +46,23 @@ function sendRequest(
       };
       if (bodyBuf) reqHeaders['Content-Length'] = String(bodyBuf.length);
 
-      const req = http.request({ host: '127.0.0.1', port, method, path, headers: reqHeaders }, (res) => {
-        let data = '';
-        res.on('data', (chunk) => { data += chunk; });
-        res.on('end', () => {
-          server.close();
-          resolve({ status: res.statusCode ?? 0, body: data });
-        });
+      const req = http.request(
+        { host: '127.0.0.1', port, method, path, headers: reqHeaders },
+        (res) => {
+          let data = '';
+          res.on('data', (chunk) => {
+            data += chunk;
+          });
+          res.on('end', () => {
+            server.close();
+            resolve({ status: res.statusCode ?? 0, body: data });
+          });
+        }
+      );
+      req.on('error', (err) => {
+        server.close();
+        reject(err);
       });
-      req.on('error', (err) => { server.close(); reject(err); });
       if (bodyBuf) req.write(bodyBuf);
       req.end();
     });
@@ -64,7 +72,7 @@ function sendRequest(
 // ─── Build a test Express app mirroring startMCPHTTPServer middleware ─────────
 
 function buildTestApp(opts: {
-  apiToken?: string;
+  apiToken?: string | undefined;
   maxBodyBytes?: number;
   allowPayments?: boolean;
 }) {
@@ -72,9 +80,7 @@ function buildTestApp(opts: {
 
   // Mirror the guard in startMCPHTTPServer (issue #911).
   if (allowPayments && !apiToken) {
-    throw new Error(
-      'MCP_API_TOKEN must be set when MCP_ALLOW_PAYMENTS=true.'
-    );
+    throw new Error('MCP_API_TOKEN must be set when MCP_ALLOW_PAYMENTS=true.');
   }
 
   const app = express();
@@ -84,7 +90,7 @@ function buildTestApp(opts: {
   if (apiToken) {
     const { timingSafeEqual } = require('crypto') as typeof import('crypto');
 
-    function safeEqual(a: string, b: string): boolean {
+    const safeEqual = (a: string, b: string): boolean => {
       const aBuf = Buffer.from(a, 'utf8');
       const bBuf = Buffer.from(b, 'utf8');
       if (aBuf.length !== bBuf.length) {
@@ -92,13 +98,11 @@ function buildTestApp(opts: {
         return false;
       }
       return timingSafeEqual(aBuf, bBuf);
-    }
+    };
 
     app.use((req, res, next) => {
       const authHeader = req.headers['authorization'] ?? '';
-      const supplied = authHeader.startsWith('Bearer ')
-        ? authHeader.slice('Bearer '.length)
-        : '';
+      const supplied = authHeader.startsWith('Bearer ') ? authHeader.slice('Bearer '.length) : '';
       if (!safeEqual(supplied, apiToken)) {
         res.status(401).json({ error: 'Unauthorized' });
         return;
@@ -163,21 +167,17 @@ describe('MCP HTTP authentication — issue #911', () => {
 
   describe('payments + no token → startup error', () => {
     it('throws synchronously when MCP_ALLOW_PAYMENTS=true and no token is set', () => {
-      expect(() =>
-        buildTestApp({ allowPayments: true, apiToken: undefined })
-      ).toThrow('MCP_API_TOKEN must be set when MCP_ALLOW_PAYMENTS=true');
+      expect(() => buildTestApp({ allowPayments: true, apiToken: undefined })).toThrow(
+        'MCP_API_TOKEN must be set when MCP_ALLOW_PAYMENTS=true'
+      );
     });
 
     it('does NOT throw when MCP_ALLOW_PAYMENTS=true AND a token is provided', () => {
-      expect(() =>
-        buildTestApp({ allowPayments: true, apiToken: 'my-token' })
-      ).not.toThrow();
+      expect(() => buildTestApp({ allowPayments: true, apiToken: 'my-token' })).not.toThrow();
     });
 
     it('does NOT throw when MCP_ALLOW_PAYMENTS=false and no token', () => {
-      expect(() =>
-        buildTestApp({ allowPayments: false })
-      ).not.toThrow();
+      expect(() => buildTestApp({ allowPayments: false })).not.toThrow();
     });
   });
 

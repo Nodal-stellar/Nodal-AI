@@ -18,6 +18,7 @@ import { baseAccountId } from '../utils/stellarSchemas';
 import { assertDestinationReady } from '../utils/destinationPreflight';
 import { paymentDestinationSchema, resolveDestination } from '../utils/destination';
 import { ValidationError } from '../errors';
+import { tryToStroops } from '../utils/amount';
 import { estimateFee, isInsufficientFeeError, submitFeeBumped } from '../fees';
 
 const log = createLogger('stellar-payment');
@@ -51,8 +52,11 @@ export const PaymentInputSchema = z
       .string()
       // Negative-lookahead rejects "0" and all zero-value decimals ("0.0", "0.0000000")
       .regex(/^(?!0(\.0+)?$)\d+(\.\d{1,7})?$/, 'Amount must be a valid Stellar decimal')
-      // Belt-and-suspenders guard: parseFloat catches any edge cases the regex misses
-      .refine((v) => parseFloat(v) > 0, 'Amount must be greater than zero'),
+      // Belt-and-suspenders guard: tryToStroops catches any edge cases the regex misses
+      .refine((v) => {
+        const s = tryToStroops(v);
+        return s !== null && s > 0n;
+      }, 'Amount must be greater than zero'),
     assetCode: z.string().default('XLM'),
     assetIssuer: z.string().optional(),
     memoType: z.enum(['text', 'id', 'hash', 'return']).optional().default('text'),

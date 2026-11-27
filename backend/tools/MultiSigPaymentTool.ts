@@ -17,6 +17,7 @@ import { ValidationError } from '../errors';
 import { SubmitResultSchema } from './StellarPaymentTool';
 import { SOROBAN_TX_TIMEOUT } from './SorobanInvokeTool';
 import { stellarPublicKeySchema } from '../utils/stellarSchemas';
+import { tryToStroops } from '../utils/amount';
 
 export const MultiSigInputSchema = z
   .object({
@@ -24,7 +25,10 @@ export const MultiSigInputSchema = z
     amount: z
       .string()
       .regex(/^(?!0(\.0+)?$)\d+(\.\d{1,7})?$/, 'Amount must be a valid Stellar decimal')
-      .refine((v) => parseFloat(v) > 0, 'Amount must be greater than zero'),
+      .refine((v) => {
+        const s = tryToStroops(v);
+        return s !== null && s > 0n;
+      }, 'Amount must be greater than zero'),
     assetCode: z.string().default('XLM'),
     assetIssuer: z.string().optional(),
     memo: z

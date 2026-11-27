@@ -9,7 +9,7 @@ import { createHash, randomUUID } from 'crypto';
 import { z } from 'zod';
 import { PayFiAgent, AgentTask, TaskType, VALUE_MOVING_TASK_TYPES, Plan } from './agent';
 import { createLogger } from './utils/logger';
-import { LLM_LIMITS } from './ai/llm';
+import { config, getLLMApiKey } from './config';
 
 const log = createLogger('planner');
 
@@ -214,8 +214,8 @@ export class Planner {
 
   constructor(agent: PayFiAgent, options: { llmEndpoint?: string; llmApiKey?: string } = {}) {
     this.agent = agent;
-    this.llmEndpoint = options.llmEndpoint ?? process.env.LLM_ENDPOINT;
-    this.llmApiKey = options.llmApiKey ?? process.env.LLM_API_KEY;
+    this.llmEndpoint = options.llmEndpoint ?? config.LLM_ENDPOINT;
+    this.llmApiKey = options.llmApiKey ?? getLLMApiKey();
   }
 
   /**
@@ -396,7 +396,7 @@ export class Planner {
         ...(this.llmApiKey ? { Authorization: `Bearer ${this.llmApiKey}` } : {}),
       },
       body: JSON.stringify({
-        model: process.env.LLM_MODEL ?? 'gpt-4',
+        model: config.LLM_MODEL ?? 'gpt-4',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.1,
       }),

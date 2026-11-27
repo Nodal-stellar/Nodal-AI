@@ -1,5 +1,7 @@
 # Stellar PayFi Escrow Contract
 
+**Note:** This repository uses a Cargo workspace defined in `contracts/Cargo.toml` that includes both `escrow` and `agent_policy` crates. Ensure the workspace file exists for CI to build and test all contracts.
+
 A production-grade, secure, and gas-efficient Soroban (Stellar) escrow smart contract designed for PayFi operations. The contract enforces state transitions, multi-party authorization, and time-locked balances.
 
 ---

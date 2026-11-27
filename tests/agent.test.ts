@@ -6,6 +6,8 @@
  */
 
 import { describe, it, test, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   PayFiAgent,
   _resetSpendingTrackerForTests,
@@ -35,6 +37,7 @@ import { LedgerInfoTool } from '../backend/tools/LedgerInfoTool';
 import { NetworkStatusTool } from '../backend/tools/NetworkStatusTool';
 import { OfferBookTool } from '../backend/tools/OfferBookTool';
 import { SorobanStorageTool } from '../backend/tools/SorobanStorageTool';
+import { ClaimableBalanceTool } from '../backend/tools/ClaimableBalanceTool';
 import { ValidationError, UnauthorizedError, ErrorType } from '../backend/errors';
 import { isPaused } from '../backend/kill_switch';
 import { config } from '../backend/config';
@@ -43,6 +46,9 @@ import {
   getPendingApproval,
   decideApproval,
   expirePendingApprovals,
+  recordApprovalVote,
+  getApprovalVotes,
+  listPendingApprovals,
 } from '../backend/persistence';
 
 // Tool modules are mocked, so their input schemas are too: the registry just
@@ -242,6 +248,15 @@ vi.mock('../backend/tools/OfferBookTool', () => ({
   }),
 }));
 
+vi.mock('../backend/tools/ClaimableBalanceTool', () => ({
+  ClaimableBalanceInputSchema: passthroughSchema,
+  ClaimableBalanceTool: vi.fn().mockImplementation(function () {
+    return {
+      execute: vi.fn().mockResolvedValue({ txHash: 'claimable_balance_mock_hash', ledger: 1 }),
+    };
+  }),
+}));
+
 vi.mock('../backend/tools/SorobanStorageTool', () => ({
   SorobanStorageInputSchema: passthroughSchema,
   SorobanStorageTool: vi.fn().mockImplementation(function () {
@@ -272,6 +287,8 @@ vi.mock('../backend/persistence', () => ({
   listPendingApprovals: vi.fn(() => []),
   decideApproval: vi.fn(() => true),
   expirePendingApprovals: vi.fn(() => []),
+  recordApprovalVote: vi.fn(() => 1),
+  getApprovalVotes: vi.fn(() => []),
 }));
 
 vi.mock('../backend/kill_switch', () => ({
@@ -320,6 +337,8 @@ vi.mock('../backend/config', () => ({
     // Set above MAINNET_SPENDING_CAP to exercise the secondary runtime guard
     AGENT_SPENDING_LIMIT: '15000',
     SPENDING_LIMITS_MAP: new Map<string, string>(),
+    APPROVAL_THRESHOLDS_MAP: new Map<string, string>(),
+    APPROVAL_MIN_APPROVERS: 2,
     SPENDING_LIMITS_ALLOW_UNKNOWN: true,
     SPENDING_WINDOW_MS: 86_400_000,
     MAX_CONCURRENT_TASKS: 10,
@@ -330,6 +349,7 @@ vi.mock('../backend/config', () => ({
     }),
   },
   MAINNET_SPENDING_CAP: 10_000,
+  getNanoSeed: vi.fn(() => undefined),
 }));
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -798,6 +818,11 @@ describe('PayFiAgent — new task types', () => {
         execute: vi.fn().mockResolvedValue({ txHash: 'dex_mock_hash', ledger: 1, offerId: '0' }),
       } as any;
     });
+    vi.mocked(ClaimableBalanceTool).mockImplementation(function () {
+      return {
+        execute: vi.fn().mockResolvedValue({ txHash: 'claimable_balance_mock_hash', ledger: 1 }),
+      } as any;
+    });
     agent = new PayFiAgent();
   });
 
@@ -847,6 +872,43 @@ describe('PayFiAgent — new task types', () => {
     });
     expect(result.success).toBe(true);
     expect(result.taskType).toBe('dex_offer');
+  });
+
+  it('dispatches claimable_balance (create) and returns success', async () => {
+    const result = await agent.run({
+      type: 'claimable_balance',
+      payload: {
+        action: 'create',
+        assetCode: 'XLM',
+        amount: '10',
+        claimants: [{ destination: DEST }],
+      },
+    });
+    expect(result.success).toBe(true);
+    expect(result.taskType).toBe('claimable_balance');
+  });
+
+  it('dispatches claimable_balance (claim) and returns success', async () => {
+    const result = await agent.run({
+      type: 'claimable_balance',
+      payload: { action: 'claim', balanceId: '000000001234' },
+    });
+    expect(result.success).toBe(true);
+    expect(result.taskType).toBe('claimable_balance');
+  });
+
+  it('applies the spending limit when creating a claimable balance', async () => {
+    const result = await agent.run({
+      type: 'claimable_balance',
+      payload: {
+        action: 'create',
+        assetCode: 'XLM',
+        amount: String(Number(config.AGENT_SPENDING_LIMIT) + 1),
+        claimants: [{ destination: DEST }],
+      },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/exceeds/i);
   });
 
   it('startContractListener starts the listener and stopContractListener stops it', () => {
@@ -1706,7 +1768,7 @@ describe('PayFiAgent — approval threshold (#736)', () => {
 
   function heldApproval() {
     const [saved] = vi.mocked(savePendingApproval).mock.calls[0]!;
-    return { ...saved, status: 'pending_approval' as const, decidedAt: null };
+    return { ...saved, status: 'pending_approval' as const, decidedAt: null, decidedBy: null };
   }
 
   it('holds a task above the threshold as pending_approval without executing it', async () => {
@@ -1754,7 +1816,7 @@ describe('PayFiAgent — approval threshold (#736)', () => {
 
     agent.deny(approval.id);
 
-    expect(decideApproval).toHaveBeenCalledWith(approval.id, 'denied');
+    expect(decideApproval).toHaveBeenCalledWith(approval.id, 'denied', expect.any(Number), 'admin');
     expect(spendingTracker.totalWithReserved()).toBe(0);
   });
 
@@ -1768,11 +1830,261 @@ describe('PayFiAgent — approval threshold (#736)', () => {
     expect(spendingTracker.totalWithReserved()).toBe(0);
   });
 
+  it('holds a requireApproval task below the threshold without executing it (#917)', async () => {
+    const result = await agent.run({
+      ...bigPayment,
+      payload: { ...bigPayment.payload, amount: '10' },
+      requireApproval: true,
+    });
+
+    expect(result.errorType).toBe(ErrorType.PendingApproval);
+    expect(savePendingApproval).toHaveBeenCalledTimes(1);
+    const paymentTool = vi.mocked(StellarPaymentTool).mock.results[0]!.value;
+    expect(paymentTool.execute).not.toHaveBeenCalled();
+  });
+
+  it('executes an approved requireApproval task once (#917)', async () => {
+    await agent.run({
+      ...bigPayment,
+      payload: { ...bigPayment.payload, amount: '10' },
+      requireApproval: true,
+    });
+    const approval = heldApproval();
+    vi.mocked(getPendingApproval).mockReturnValue(approval);
+
+    const outcome = await agent.approve(approval.id);
+
+    expect(outcome?.result?.success).toBe(true);
+    const paymentTool = vi.mocked(StellarPaymentTool).mock.results[0]!.value;
+    expect(paymentTool.execute).toHaveBeenCalledTimes(1);
+  });
+
   it('returns null for an unknown approval id', async () => {
     vi.mocked(getPendingApproval).mockReturnValue(undefined);
 
     expect(await agent.approve('missing')).toBeNull();
     expect(agent.deny('missing')).toBeNull();
+  });
+});
+
+describe('PayFiAgent — per-asset approval thresholds (#953)', () => {
+  let agent: PayFiAgent;
+  const usdcPayment = (amount: string) => ({
+    type: 'stellar_payment' as const,
+    payload: { destination: DEST, amount, assetCode: 'USDC', assetIssuer: ISSUER },
+  });
+  const xlmPayment = (amount: string) => ({
+    type: 'stellar_payment' as const,
+    payload: { destination: DEST, amount, assetCode: 'XLM' },
+  });
+
+  beforeEach(() => {
+    spendingTracker.clear();
+    vi.clearAllMocks();
+    vi.mocked(isPaused).mockReturnValue(false);
+    vi.mocked(StellarPaymentTool).mockImplementation(function () {
+      return {
+        execute: vi.fn().mockResolvedValue({ txHash: 'mock_hash', ledger: 1 }),
+      } as any;
+    });
+    (config as any).APPROVAL_THRESHOLD = '500';
+    (config as any).APPROVAL_THRESHOLDS_MAP = new Map([
+      ['XLM', '5000'],
+      [`USDC:${ISSUER}`, '100'],
+    ]);
+    (config as any).APPROVAL_TTL_MS = 60_000;
+    agent = new PayFiAgent();
+  });
+
+  afterEach(() => {
+    delete (config as any).APPROVAL_THRESHOLD;
+    (config as any).APPROVAL_THRESHOLDS_MAP = new Map<string, string>();
+    delete (config as any).APPROVAL_TTL_MS;
+  });
+
+  it('holds a payment above its own per-asset threshold even though it is below the global one', async () => {
+    // 150 USDC is below the global threshold (500) but above USDC's own (100).
+    const result = await agent.run(usdcPayment('150'));
+
+    expect(result.errorType).toBe(ErrorType.PendingApproval);
+    expect(savePendingApproval).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs a payment immediately when it is below its own per-asset threshold, even above the global one', async () => {
+    // 1000 XLM is above the global threshold (500) but below XLM's own (5000).
+    const result = await agent.run(xlmPayment('1000'));
+
+    expect(result.success).toBe(true);
+    expect(savePendingApproval).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the global threshold for an asset with no per-asset entry', async () => {
+    const held = await agent.run({
+      type: 'stellar_payment',
+      payload: { destination: DEST, amount: '600', assetCode: 'EURC', assetIssuer: ISSUER },
+    });
+    const allowed = await agent.run({
+      type: 'stellar_payment',
+      payload: { destination: DEST, amount: '400', assetCode: 'EURC', assetIssuer: ISSUER },
+    });
+
+    expect(held.errorType).toBe(ErrorType.PendingApproval);
+    expect(allowed.success).toBe(true);
+  });
+
+  it('treats a boundary amount equal to the per-asset threshold as not exceeding it', async () => {
+    const result = await agent.run(usdcPayment('100'));
+
+    expect(result.success).toBe(true);
+    expect(savePendingApproval).not.toHaveBeenCalled();
+  });
+
+  it('does not use parseFloat anywhere in the approval-threshold decision logic', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'backend', 'agent.ts'), 'utf8');
+
+    const thresholdHelpersStart = src.indexOf('function approvalThresholdFor');
+    const thresholdHelpersEnd = src.indexOf('// ─── Task types');
+    expect(thresholdHelpersStart).toBeGreaterThan(-1);
+    expect(thresholdHelpersEnd).toBeGreaterThan(thresholdHelpersStart);
+    expect(src.slice(thresholdHelpersStart, thresholdHelpersEnd)).not.toContain('parseFloat');
+
+    const holdForApprovalStart = src.indexOf('private holdForApproval(');
+    const holdForApprovalEnd = src.indexOf('private releaseApprovalReservation');
+    expect(holdForApprovalStart).toBeGreaterThan(-1);
+    expect(holdForApprovalEnd).toBeGreaterThan(holdForApprovalStart);
+    expect(src.slice(holdForApprovalStart, holdForApprovalEnd)).not.toContain('parseFloat');
+  });
+});
+
+describe('PayFiAgent — named approvers & 2-of-N consensus (#954)', () => {
+  let agent: PayFiAgent;
+  const bigPayment = {
+    type: 'stellar_payment' as const,
+    payload: { destination: DEST, amount: '600', assetCode: 'USDC', assetIssuer: ISSUER },
+  };
+
+  beforeEach(() => {
+    spendingTracker.clear();
+    vi.clearAllMocks();
+    vi.mocked(isPaused).mockReturnValue(false);
+    vi.mocked(decideApproval).mockReturnValue(true);
+    vi.mocked(expirePendingApprovals).mockReturnValue([]);
+    vi.mocked(recordApprovalVote).mockReturnValue(1);
+    vi.mocked(getApprovalVotes).mockReturnValue([]);
+    vi.mocked(StellarPaymentTool).mockImplementation(function () {
+      return { execute: vi.fn().mockResolvedValue({ txHash: 'mock_hash', ledger: 1 }) } as any;
+    });
+    (config as any).APPROVAL_THRESHOLD = '500';
+    (config as any).APPROVAL_TTL_MS = 60_000;
+    agent = new PayFiAgent();
+  });
+
+  afterEach(() => {
+    delete (config as any).APPROVAL_THRESHOLD;
+    delete (config as any).APPROVAL_TTL_MS;
+    delete (config as any).APPROVAL_MULTI_APPROVER_THRESHOLD;
+  });
+
+  function heldApproval() {
+    const [saved] = vi.mocked(savePendingApproval).mock.calls[0]!;
+    return { ...saved, status: 'pending_approval' as const, decidedAt: null, decidedBy: null };
+  }
+
+  it('attributes a single-approver decision to the named approver', async () => {
+    await agent.run(bigPayment);
+    const approval = heldApproval();
+    vi.mocked(getPendingApproval).mockReturnValue(approval);
+
+    await agent.approve(approval.id, 'alice');
+
+    expect(decideApproval).toHaveBeenCalledWith(
+      approval.id,
+      'approved',
+      expect.any(Number),
+      'alice'
+    );
+  });
+
+  it('attributes a decision to "admin" when no approver is given', async () => {
+    await agent.run(bigPayment);
+    const approval = heldApproval();
+    vi.mocked(getPendingApproval).mockReturnValue(approval);
+
+    await agent.approve(approval.id);
+
+    expect(decideApproval).toHaveBeenCalledWith(
+      approval.id,
+      'approved',
+      expect.any(Number),
+      'admin'
+    );
+  });
+
+  it('records a vote instead of deciding while below APPROVAL_MIN_APPROVERS', async () => {
+    (config as any).APPROVAL_MULTI_APPROVER_THRESHOLD = '500'; // bigPayment (600) exceeds it
+    await agent.run(bigPayment);
+    const approval = heldApproval();
+    vi.mocked(getPendingApproval).mockReturnValue(approval);
+    vi.mocked(recordApprovalVote).mockReturnValue(1); // only alice so far
+    vi.mocked(getApprovalVotes).mockReturnValue(['alice']);
+
+    const outcome = await agent.approve(approval.id, 'alice');
+
+    expect(recordApprovalVote).toHaveBeenCalledWith(approval.id, 'alice');
+    expect(decideApproval).not.toHaveBeenCalled();
+    expect(outcome?.result).toBeUndefined();
+    expect(outcome?.approval.votes).toEqual(['alice']);
+    const paymentTool = vi.mocked(StellarPaymentTool).mock.results[0]!.value;
+    expect(paymentTool.execute).not.toHaveBeenCalled();
+  });
+
+  it('decides and executes once APPROVAL_MIN_APPROVERS distinct approvers have voted', async () => {
+    (config as any).APPROVAL_MULTI_APPROVER_THRESHOLD = '500';
+    await agent.run(bigPayment);
+    const approval = heldApproval();
+    vi.mocked(getPendingApproval).mockReturnValue(approval);
+    vi.mocked(recordApprovalVote).mockReturnValue(2); // alice, then bob reaches the default minimum of 2
+
+    const outcome = await agent.approve(approval.id, 'bob');
+
+    expect(decideApproval).toHaveBeenCalledWith(approval.id, 'approved', expect.any(Number), 'bob');
+    expect(outcome?.result?.success).toBe(true);
+    const paymentTool = vi.mocked(StellarPaymentTool).mock.results[0]!.value;
+    expect(paymentTool.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not require consensus for a denial', async () => {
+    (config as any).APPROVAL_MULTI_APPROVER_THRESHOLD = '500';
+    await agent.run(bigPayment);
+    const approval = heldApproval();
+    vi.mocked(getPendingApproval).mockReturnValue(approval);
+
+    agent.deny(approval.id, 'alice');
+
+    expect(decideApproval).toHaveBeenCalledWith(approval.id, 'denied', expect.any(Number), 'alice');
+    expect(recordApprovalVote).not.toHaveBeenCalled();
+  });
+
+  it('does not require multiple approvers below APPROVAL_MULTI_APPROVER_THRESHOLD', async () => {
+    (config as any).APPROVAL_MULTI_APPROVER_THRESHOLD = '10000'; // bigPayment (600) is well under it
+    await agent.run(bigPayment);
+    const approval = heldApproval();
+    vi.mocked(getPendingApproval).mockReturnValue(approval);
+
+    const outcome = await agent.approve(approval.id, 'alice');
+
+    expect(recordApprovalVote).not.toHaveBeenCalled();
+    expect(outcome?.result?.success).toBe(true);
+  });
+
+  it("shows each pending approval's votes via listApprovals", async () => {
+    vi.mocked(getApprovalVotes).mockReturnValue(['alice']);
+    const [approval] = [{ id: 'a1' }];
+    vi.mocked(listPendingApprovals).mockReturnValue([approval] as any);
+
+    const approvals = agent.listApprovals();
+
+    expect(approvals).toEqual([{ id: 'a1', votes: ['alice'] }]);
   });
 });
 

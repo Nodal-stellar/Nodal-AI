@@ -30,7 +30,10 @@ const { mockConfig } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('../backend/config', () => ({ config: mockConfig }));
+vi.mock('../backend/config', () => ({
+  config: mockConfig,
+  getVaultToken: () => process.env.VAULT_TOKEN,
+}));
 
 const VAULT_ADDR = 'https://vault.example.com:8200';
 const VAULT_TOKEN = 'hvs.test-token';

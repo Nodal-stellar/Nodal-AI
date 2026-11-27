@@ -1,8 +1,26 @@
 # MPP Session: Streaming Micropayments via Channel Backed Off-Chain Commits
 
-**Status:** Design / Spike  
+**Status:** Design / Spike — **PROTOTYPE ONLY, NOT PRODUCTION-READY**  
 **Issue:** N/A (Roadmap Sprint 2)  
 **Related:** MPP Charge (Issue #777), On-chain Policy (Issue #813)
+
+> **⚠ Implementation status**
+>
+> The TypeScript implementation in `backend/payments/mpp_session.ts` is a **simulation**.
+> It persists channel state to a local database but does **not** deploy an escrow contract
+> or submit any Soroban transactions to the Stellar network:
+>
+> - `openChannel()` — DB write only; no contract is deployed and no funds are locked.
+>   Calling this on `mainnet` throws `SimulatedChannelError`.
+> - `commitPayment()` — off-chain balance bookkeeping and signature only; nothing reaches the ledger.
+> - `closeChannel()` — marks the channel `Closed` in the DB, then throws `SimulatedChannelError`.
+>   **No funds are distributed.**
+> - `disputeChannel()` — marks the channel `Disputed` in the DB, then throws `SimulatedChannelError`.
+>   **No funds are returned.**
+>
+> The on-chain escrow contract described in this document does not yet exist.
+> Do not use MPP Session in a production environment or treat a "closed" or "disputed"
+> channel as financially settled until a real implementation is in place.
 
 ## Problem Statement
 
@@ -47,6 +65,11 @@ This design follows the classic bidirectional payment channel pattern, adapted f
                   [Disputed]
 ```
 
+A periodic sweeper (`sweepExpiredChannels`, run at startup and every
+`MPP_SESSION_SWEEP_INTERVAL_MS`) moves `Active`/`Pending` channels past
+`timeoutAt` to `Expired`, releases their spending reservation and emits an
+operator alert.
+
 ### States
 
 | State | Description | Transitions |
@@ -55,6 +78,7 @@ This design follows the classic bidirectional payment channel pattern, adapted f
 | `Active` | Channel funded, accepting commits | `commit()` → `Active`, `close()` → `Closed` |
 | `Closed` | Channel settled on-chain, funds distributed | Terminal |
 | `Disputed` | Channel closed via dispute mechanism | Terminal |
+| `Expired` | `timeoutAt` elapsed; swept from `Active`/`Pending`, spending reservation released, operator alerted | Terminal |
 
 ### Core Operations
 
@@ -273,7 +297,7 @@ interface ChannelState {
   agentBalance: string;  // Current off-chain balance
   participantBalance: string;
   nonce: number;  // Commitment counter
-  status: 'Pending' | 'Active' | 'Closed' | 'Disputed';
+  status: 'Pending' | 'Active' | 'Closed' | 'Disputed' | 'Expired';
   openedAt: string;  // ISO timestamp
   timeoutAt: string;  // ISO timestamp
   closedAt?: string;
@@ -357,36 +381,30 @@ CREATE INDEX IF NOT EXISTS idx_mpp_sessions_timeout ON mpp_sessions(timeout_at);
 - [x] Document security invariants
 - [x] Plan integration points
 
-### Phase 2: Spike / Prototype
+### Phase 2: Spike / Prototype — **PARTIAL (simulation only)**
 
-**Backend Implementation:**
-1. Create `backend/payments/mpp_session.ts`:
+**Backend Implementation (complete, but simulated):**
+1. ✅ Created `backend/payments/mpp_session.ts`:
    - `MppSessionClient` class
    - `openChannel()`, `commitPayment()`, `closeChannel()`, `disputeChannel()`
-   - Challenge parsing (extended from MPP Charge)
    - Commitment signing and validation
-2. Create database migration `003_mpp_session.sql`
-3. Add storage methods to `backend/db/storage.ts`:
-   - `saveChannelState()`, `loadChannelState()`, `updateChannelState()`
-   - `getActiveChannels()`, `getChannelsByTimeout()`
-4. Integrate with spending tracker:
-   - Reserve on open
-   - Release on close
-5. Integrate with signer:
-   - Sign commitments with agent key
+2. ✅ Database migration `003_mpp_session.sql` and storage methods
+3. ✅ Spending policy integration (reserve on open)
+4. ✅ Signer integration (sign commitments with agent key)
 
-**Smart Contract (Prototype):**
+**Not yet implemented:**
+- ❌ `openChannel()` does not deploy an escrow contract — DB write only
+- ❌ `closeChannel()` does not submit a Soroban settlement transaction — throws `SimulatedChannelError`
+- ❌ `disputeChannel()` does not submit a Soroban dispute transaction — throws `SimulatedChannelError`
+- ❌ Spending reservation is not released on close (reservation ID not stored on channel state)
+- ❌ Smart contract (`contracts/mpp_session/`) does not exist
+
+**Smart Contract (not started):**
 1. Create `contracts/mpp_session/` (Rust):
    - Simple escrow contract with open/close/dispute
    - Signature validation
    - Balance invariant checks
 2. Unit tests for contract logic
-
-**Tests:**
-1. Unit tests for protocol logic (mocked RPC)
-2. Integration test: 100 commits in one session on testnet
-3. Dispute scenario test
-4. Timeout test
 
 ### Phase 3: Production Refinement
 

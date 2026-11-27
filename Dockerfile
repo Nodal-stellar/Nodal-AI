@@ -6,6 +6,9 @@
 #   2. node-builder   — installs deps + compiles TypeScript → dist/
 #   3. prod-deps      — installs production-only node_modules on Alpine/musl
 #   4. production     — node:22-alpine runtime with compiled artefacts only
+#
+# The dashboard has its own stages (dashboard-builder → dashboard, nginx) and
+# is only built with `--target dashboard`; production stays the last stage.
 # =============================================================================
 
 # ─── Stage 1: Soroban / Rust contract build ───────────────────────────────────
@@ -25,9 +28,10 @@ WORKDIR /build
 # ── Cache layer: copy manifests first so cargo fetch is only re-run on
 #    Cargo.toml / Cargo.lock changes, not on every source edit ──────────────────
 COPY contracts/escrow/Cargo.toml contracts/escrow/Cargo.lock ./contracts/escrow/
+COPY contracts/agent_policy/Cargo.toml ./contracts/agent_policy/
 
 # Create a stub lib.rs so `cargo build` can resolve the crate without full source
-RUN mkdir -p contracts/escrow/src && \
+RUN mkdir -p contracts/escrow/src contracts/agent_policy/src && \
     echo '#![no_std] soroban_sdk::contractimpl!(struct S;);' > contracts/escrow/src/lib.rs || \
     printf '#![no_std]\n' > contracts/escrow/src/lib.rs
 
@@ -38,6 +42,8 @@ RUN cargo fetch --locked --manifest-path contracts/escrow/Cargo.toml
 
 # ── Full source copy + release build ──────────────────────────────────────────
 COPY contracts/escrow/src ./contracts/escrow/src
+COPY contracts/agent_policy/src ./contracts/agent_policy/src
+RUN cargo build --manifest-path contracts/agent_policy/Cargo.toml --target wasm32-unknown-unknown --release
 
 RUN cargo build \
         --locked \
@@ -72,19 +78,38 @@ RUN npm ci --ignore-scripts
 # ── Full source copy + compile ────────────────────────────────────────────────
 COPY tsconfig.json ./
 COPY backend/ ./backend/
-COPY apps/dashboard/package.json ./apps/dashboard/package.json
-
-# Install dashboard dependencies (npm install instead of ci since lockfile may not exist)
-RUN cd apps/dashboard && npm install --ignore-scripts
-
-COPY apps/dashboard/src ./apps/dashboard/src
-COPY apps/dashboard/vite.config.ts ./apps/dashboard/vite.config.ts
-COPY apps/dashboard/index.html ./apps/dashboard/index.html
-COPY apps/dashboard/tsconfig.json ./apps/dashboard/tsconfig.json
-COPY apps/dashboard/tsconfig.app.json ./apps/dashboard/tsconfig.app.json
-COPY apps/dashboard/tsconfig.node.json ./apps/dashboard/tsconfig.node.json
 
 RUN npm run build
+
+# ─── Stage 2b: Dashboard build (#970) ─────────────────────────────────────────
+# Built in its own stage so the agent image never installs dashboard deps.
+FROM node:22-slim AS dashboard-builder
+
+WORKDIR /build/apps/dashboard
+
+COPY apps/dashboard/package.json apps/dashboard/package-lock.json ./
+RUN npm ci --ignore-scripts
+
+COPY apps/dashboard/index.html apps/dashboard/vite.config.ts \
+     apps/dashboard/tsconfig.json apps/dashboard/tsconfig.app.json \
+     apps/dashboard/tsconfig.node.json ./
+COPY apps/dashboard/public ./public
+COPY apps/dashboard/src ./src
+
+RUN npm run build
+
+# ─── Stage 2c: Dashboard runtime (#970) ───────────────────────────────────────
+# Static production build served by nginx; used by the compose `dashboard`
+# profile (`docker build --target dashboard`). Not part of the agent image.
+FROM nginx:1.27-alpine AS dashboard
+
+COPY apps/dashboard/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=dashboard-builder /build/apps/dashboard/dist /usr/share/nginx/html
+
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1/ || exit 1
 
 # ─── Stage 3: Production dependencies (Alpine / musl) ─────────────────────────
 # Installed on the same musl base as the final image so native modules
@@ -125,6 +150,9 @@ COPY --from=node-builder /build/dist ./dist
 COPY --from=rust-builder \
     /build/contracts/escrow/target/wasm32-unknown-unknown/release/stellar_payfi_escrow.wasm \
     ./contracts/escrow/stellar_payfi_escrow.wasm
+COPY --from=rust-builder \
+    /build/contracts/agent_policy/target/wasm32-unknown-unknown/release/stellar_agent_policy.wasm \
+    ./contracts/agent_policy/stellar_agent_policy.wasm
 
 # Ensure compiled output is readable by the non-root user
 RUN chown -R agent:agent /app

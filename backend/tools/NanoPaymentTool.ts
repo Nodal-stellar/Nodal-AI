@@ -15,9 +15,9 @@
 import axios from 'axios';
 import { z } from 'zod';
 import * as crypto from 'crypto';
-import { ValidationError } from '../errors';
+import { ConfigError, ValidationError } from '../errors';
 import { createLogger } from '../utils/logger';
-import { config } from '../config';
+import { config, getNanoSeed } from '../config';
 
 const log = createLogger('nano-payment-tool');
 
@@ -37,13 +37,9 @@ export const NanoPaymentInputSchema = z.object({
     .refine((v) => !/^\d+$/.test(v) || BigInt(v) > 0n, 'amountRaw must be greater than zero'),
   /** Optional sender account (nano_ address) */
   senderAccount: z.string().regex(NANO_ADDRESS_REGEX).optional(),
-  /** Optional externalized seed / private key (hex string) */
-  senderSeed: z.string().optional(),
-  /** Optional Nano node RPC URL */
-  rpcUrl: z.string().url().optional(),
-  /** Optional flag to bypass pre-check gate */
+  /** May bypass the pre-check only when the operator enables it in config. */
   skipPrecheck: z.boolean().optional().default(false),
-});
+}).strict();
 
 export type NanoPaymentInput = z.infer<typeof NanoPaymentInputSchema>;
 
@@ -68,23 +64,28 @@ export interface NanoAccountInfoResponse {
   error?: string;
 }
 
-export class NanoPaymentTool {
-  private defaultRpcUrl: string;
-  private defaultSeed?: string | undefined;
+export type RecipientPrecheckResult =
+  | { passed: true; accountStatus: 'open' | 'unopened' }
+  | { passed: false; reason: 'network_error' | 'node_error' | 'invalid_response' };
 
-  constructor(defaultSeed?: string, defaultRpcUrl?: string) {
-    this.defaultSeed = defaultSeed;
-    this.defaultRpcUrl = defaultRpcUrl || config.NANO_RPC_URL;
+export class NanoPaymentTool {
+  private readonly defaultRpcUrl: string;
+  private seed?: string | undefined;
+
+  /** The seed comes from NANO_SEED / NANO_SEED_ARN unless injected (tests). */
+  constructor(seed?: string) {
+    this.seed = seed ?? getNanoSeed();
+    this.defaultRpcUrl = config.NANO_RPC_URL;
   }
 
   /**
    * Lightweight pre-check analog to Stellar simulation gate:
    * Confirms recipient chain state / readiness before broadcast.
    */
-  async precheckRecipient(recipient: string, rpcUrl: string): Promise<boolean> {
+  async precheckRecipient(recipient: string): Promise<RecipientPrecheckResult> {
     try {
-      const response = await axios.post<{ error?: string }>(
-        rpcUrl,
+      const response = await axios.post<NanoAccountInfoResponse>(
+        this.defaultRpcUrl,
         {
           action: 'account_info',
           account: recipient,
@@ -93,23 +94,30 @@ export class NanoPaymentTool {
       );
 
       // Account is either open (valid account_info) or unopened/not found yet (which is acceptable for receiving a new open block)
-      if (response.data && response.data.error) {
+      if (response.data?.error) {
         if (response.data.error.toLowerCase().includes('account not found')) {
           log.info(
             { recipient },
             'Recipient account is unopened; valid destination for open block'
           );
-          return true;
+          return { passed: true, accountStatus: 'unopened' };
         }
-        log.warn({ recipient, error: response.data.error }, 'Recipient precheck returned notice');
+        log.warn({ recipient, error: response.data.error }, 'Recipient precheck returned an error');
+        return { passed: false, reason: 'node_error' };
       }
-      return true;
+
+      if (response.data?.frontier || response.data?.open_block) {
+        return { passed: true, accountStatus: 'open' };
+      }
+
+      log.warn({ recipient }, 'Recipient precheck returned an invalid account_info response');
+      return { passed: false, reason: 'invalid_response' };
     } catch (err) {
       log.warn(
         { recipient, err },
-        'Precheck network query failed, proceeding with format-validated address'
+        'Precheck network query failed; payment is blocked'
       );
-      return true;
+      return { passed: false, reason: 'network_error' };
     }
   }
 
@@ -128,13 +136,21 @@ export class NanoPaymentTool {
    * Execute a feeless Nano payment.
    */
   async execute(rawInput: unknown): Promise<NanoPaymentResult> {
+    // Secrets must not travel through planners, MCP, webhooks or persistence.
+    if (rawInput && typeof rawInput === 'object' && 'senderSeed' in rawInput) {
+      throw new ValidationError(
+        'senderSeed is not accepted in the task payload; configure NANO_SEED or NANO_SEED_ARN'
+      );
+    }
+    if (!this.seed) {
+      throw new ConfigError('Nano payments require NANO_SEED or NANO_SEED_ARN to be configured');
+    }
     const parsed = NanoPaymentInputSchema.safeParse(rawInput);
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
       throw new ValidationError(issue ? issue.message : parsed.error.message, parsed.error);
     }
     const input = parsed.data;
-    const rpcUrl = input.rpcUrl || this.defaultRpcUrl;
 
     log.info(
       { recipient: input.recipient, amountRaw: input.amountRaw },
@@ -143,9 +159,20 @@ export class NanoPaymentTool {
 
     // Simulation gate pre-check
     let precheckPassed = false;
-    if (!input.skipPrecheck) {
-      precheckPassed = await this.precheckRecipient(input.recipient, rpcUrl);
+    if (input.skipPrecheck) {
+      if (!config.NANO_ALLOW_SKIP_PRECHECK) {
+        throw new ValidationError(
+          'Skipping the Nano recipient precheck is disabled by operator configuration'
+        );
+      }
+      precheckPassed = true;
     } else {
+      const precheck = await this.precheckRecipient(input.recipient);
+      if (!precheck.passed) {
+        throw new ValidationError(
+          `Nano recipient precheck failed (${precheck.reason}); payment was not sent`
+        );
+      }
       precheckPassed = true;
     }
 
@@ -153,13 +180,13 @@ export class NanoPaymentTool {
     const blockHash = this.generateBlockHash(
       input.recipient,
       input.amountRaw,
-      input.senderSeed || this.defaultSeed || 'default-seed'
+      this.seed
     );
 
     // Broadcast send block to Nano node RPC if available
     try {
       await axios.post(
-        rpcUrl,
+        this.defaultRpcUrl,
         {
           action: 'process',
           json_block: 'true',

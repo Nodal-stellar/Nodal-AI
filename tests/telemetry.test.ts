@@ -21,13 +21,16 @@ import {
 // module under test would kill the run before a single assertion. withSpan()
 // only reads config.OTLP_ENDPOINT (and only inside initTelemetry(), which
 // these tests never call), so an otherwise-empty mock is enough.
-vi.mock('../backend/config', () => ({
-  config: {
+const { mockConfig } = vi.hoisted(() => ({
+  mockConfig: {
     HORIZON_URL: 'https://horizon-testnet.stellar.org',
     SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org',
     STELLAR_NETWORK: 'testnet',
+    OTEL_REDACT_TX_HASH: false,
   },
 }));
+
+vi.mock('../backend/config', () => ({ config: mockConfig }));
 
 import {
   withSpan,
@@ -140,6 +143,7 @@ describe('withSpan', () => {
 describe('task and tool spans', () => {
   afterEach(() => {
     delete process.env.OTEL_REDACT_TX_HASH;
+    mockConfig.OTEL_REDACT_TX_HASH = false;
   });
 
   const runTask = () =>
@@ -187,7 +191,7 @@ describe('task and tool spans', () => {
   });
 
   it('omits the tx hash when OTEL_REDACT_TX_HASH=true', async () => {
-    process.env.OTEL_REDACT_TX_HASH = 'true';
+    mockConfig.OTEL_REDACT_TX_HASH = true;
     await runTask();
 
     for (const span of exporter.getFinishedSpans()) {

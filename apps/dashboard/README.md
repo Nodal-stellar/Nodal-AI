@@ -79,16 +79,22 @@ docker compose --profile dashboard up --build
 
 This will:
 - Start the agent service (if not already running)
-- Start the dashboard on port 5173
-- Configure the dashboard to connect to the agent automatically
+- Build the dashboard for production and serve it with nginx at `http://localhost:5173`
+- Leave the API URL and token to the login form, as in development
 
 ### Docker Configuration
 
 The dashboard service in `docker-compose.yml`:
 - Depends on the `agent` service
-- Exposes port 5173
-- Uses the `node-builder` Dockerfile stage
-- Runs Vite in development mode for hot reloading
+- Exposes port 5173 (nginx listens on 80 inside the container)
+- Uses the `dashboard` Dockerfile stage: `dashboard-builder` runs `npm ci` and
+  `npm run build`, then `dist/` is copied into `nginx:1.27-alpine` with
+  `apps/dashboard/nginx.conf` (SPA fallback, immutable caching for `/assets`,
+  `no-cache` for `index.html`)
+- The agent image (`--target production`) no longer installs or builds the
+  dashboard
+
+For hot reloading, run `npm run dev` in `apps/dashboard` instead.
 
 ## API Endpoints Used
 
@@ -144,9 +150,8 @@ If you encounter CORS errors in development:
 ### Docker Build Issues
 
 If the dashboard fails to build in Docker:
-- Ensure `apps/dashboard/package.json` exists
-- Check that node_modules are properly installed
-- Verify the Dockerfile copies the dashboard source files
+- Build the stage on its own: `docker build --target dashboard .`
+- Keep `apps/dashboard/package-lock.json` in sync with `package.json` (`npm ci` fails otherwise)
 
 ## Architecture
 

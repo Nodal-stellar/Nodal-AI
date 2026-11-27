@@ -1,0 +1,22 @@
+{
+  /**
+   * tsconfig.lib.esm.json
+   *
+   * ESM pass for the publishable npm package.
+   * Outputs ES modules into dist/esm/ so bundlers (Vite, Rollup, webpack)
+   * and Node --experimental-vm-modules consumers get native ESM.
+   *
+   * Declaration files are already emitted by the CJS pass (tsconfig.lib.json)
+   * and shared across both formats via the "types" / "exports" map in
+   * package.json. We suppress them here to avoid a redundant second copy.
+   */
+  "extends": "./tsconfig.lib.json",
+  "compilerOptions": {
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "outDir": "./dist/esm",
+    "declarationDir": "./dist/types",
+    "declaration": false,
+    "declarationMap": false
+  }
+}

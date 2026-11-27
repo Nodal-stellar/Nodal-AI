@@ -32,6 +32,8 @@ export enum ErrorType {
   PolicyViolation = 'POLICY_VIOLATION',
   /** An idempotency key was reused with a different payload. */
   IdempotencyConflict = 'IDEMPOTENCY_CONFLICT',
+  /** Another request holding the same idempotency key is still executing (HTTP 409). */
+  IdempotencyInProgress = 'IDEMPOTENCY_IN_PROGRESS',
   /** The agent is draining for shutdown; the task was never executed. */
   AgentShuttingDown = 'AGENT_SHUTTING_DOWN',
   UnknownError = 'UNKNOWN_ERROR',
@@ -61,6 +63,18 @@ export class NetworkTimeoutError extends StructuredError {
   constructor(message: string, cause?: unknown) {
     super(message, ErrorType.NetworkTimeout, cause);
     Object.setPrototypeOf(this, NetworkTimeoutError.prototype);
+  }
+}
+
+/**
+ * Soroban RPC could not be reached, so an operation that needs live ledger
+ * data was not attempted (e.g. an x402 auth entry was not signed, #923).
+ * Retryable: release any reservation and try again.
+ */
+export class RpcUnavailableError extends NetworkTimeoutError {
+  constructor(message: string, cause?: unknown) {
+    super(message, cause);
+    Object.setPrototypeOf(this, RpcUnavailableError.prototype);
   }
 }
 
@@ -119,6 +133,25 @@ export class SimulationBudgetError extends StructuredError {
   constructor(message: string, cause?: unknown) {
     super(message, ErrorType.SimulationBudgetExceeded, cause);
     Object.setPrototypeOf(this, SimulationBudgetError.prototype);
+  }
+}
+
+/**
+ * Thrown by MPP Session's `closeChannel()` and `disputeChannel()` because the
+ * on-chain escrow contract is not yet deployed.
+ *
+ * The channel protocol is a **prototype / simulation** — commitments are
+ * persisted off-chain but no Soroban settlement transaction is ever submitted.
+ * Callers must not treat the channel as settled until a real on-chain
+ * implementation is in place.
+ *
+ * This error is also thrown by `openChannel()` when `STELLAR_NETWORK` is
+ * `'mainnet'`, since simulated channels must never be used in production.
+ */
+export class SimulatedChannelError extends StructuredError {
+  constructor(message: string, cause?: unknown) {
+    super(message, ErrorType.ValidationError, cause);
+    Object.setPrototypeOf(this, SimulatedChannelError.prototype);
   }
 }
 

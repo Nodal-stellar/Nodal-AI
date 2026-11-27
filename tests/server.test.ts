@@ -16,7 +16,7 @@
  *     the response shapes.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ── Mock modules before importing the module under test ──────────────────────
 
@@ -42,7 +42,10 @@ vi.mock('../backend/config', () => ({
     // time; without these the URI constructor throws and the suite cannot load.
     HORIZON_URL: 'https://horizon-testnet.stellar.org',
     SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org',
+    APPROVER_TOKENS_MAP: new Map<string, string>(),
+    APPROVAL_MIN_APPROVERS: 2,
   },
+  getAdminApiToken: () => process.env.ADMIN_API_TOKEN || process.env.WEBHOOK_SECRET || undefined,
 }));
 
 // Mock persistence module — getResults returns controlled data, or throws
@@ -97,6 +100,8 @@ vi.mock('../backend/kill_switch', () => ({
 
 import type * as http from 'http';
 import { Readable } from 'stream';
+import { createHash } from 'crypto';
+import { config } from '../backend/config';
 import { createHealthServer } from '../backend/server';
 import { pauseAgent, resumeAgent } from '../backend/kill_switch';
 import {
@@ -107,6 +112,7 @@ import {
   ValidationError,
 } from '../backend/errors';
 import { getResults } from '../backend/persistence';
+import { expectLoggedError } from './helpers/expectLoggedError';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -115,7 +121,18 @@ function makeReq(
   url: string,
   headers: Record<string, string> = {}
 ): http.IncomingMessage {
-  return { method, url, headers } as http.IncomingMessage;
+  const closeHandlers: (() => void)[] = [];
+  return {
+    method,
+    url,
+    headers,
+    on: vi.fn((event: string, fn: () => void) => {
+      if (event === 'close') closeHandlers.push(fn);
+    }),
+    // Not part of http.IncomingMessage — a test hook to simulate the client
+    // disconnecting (fires every handler registered via `on('close', ...)`).
+    _simulateClose: () => closeHandlers.forEach((fn) => fn()),
+  } as unknown as http.IncomingMessage;
 }
 
 function makeBodyReq(
@@ -138,17 +155,29 @@ function makeRes(): http.ServerResponse & {
   _statusCode: number;
   _body: string;
   _headers: Record<string, any>;
+  _writes: string[];
 } {
   const res: any = {
     _statusCode: 0,
     _body: '',
     _headers: {},
+    _writes: [],
     writeHead: vi.fn(function (this: any, statusCode: number, headers?: Record<string, any>) {
       this._statusCode = statusCode;
       if (headers) Object.assign(this._headers, headers);
     }),
+    setHeader: vi.fn(function (this: any, name: string, value: unknown) {
+      this._headers[name] = value;
+    }),
+    getHeader: vi.fn(function (this: any, name: string) {
+      return this._headers[name];
+    }),
+    write: vi.fn(function (this: any, chunk: string) {
+      this._writes.push(chunk);
+      this._body += chunk;
+    }),
     end: vi.fn(function (this: any, body?: string) {
-      this._body = body ?? '';
+      this._body += body ?? '';
     }),
   };
   return res;
@@ -166,6 +195,7 @@ describe('backend/server.ts — health check HTTP server', () => {
     databaseOk = true;
     delete process.env.WEBHOOK_SECRET;
     delete process.env.ADMIN_API_TOKEN;
+    delete (config as unknown as Record<string, unknown>).CORS_ALLOWED_ORIGINS;
     vi.clearAllMocks();
   });
 
@@ -341,6 +371,7 @@ describe('backend/server.ts — health check HTTP server', () => {
     });
 
     it('returns 500 when persistence throws an error', () => {
+      expectLoggedError(/Failed to read persisted results/);
       vi.mocked(getResults).mockImplementationOnce(() => {
         throw new Error('db down');
       });
@@ -515,7 +546,7 @@ describe('backend/server.ts — health check HTTP server', () => {
       await flush();
 
       expect(res._statusCode).toBe(200);
-      expect(agent.approve).toHaveBeenCalledWith('appr-1');
+      expect(agent.approve).toHaveBeenCalledWith('appr-1', null);
       expect(JSON.parse(res._body).approval.status).toBe('approved');
     });
 
@@ -538,7 +569,7 @@ describe('backend/server.ts — health check HTTP server', () => {
       await flush();
 
       expect(res._statusCode).toBe(200);
-      expect(agent.deny).toHaveBeenCalledWith('appr-1');
+      expect(agent.deny).toHaveBeenCalledWith('appr-1', null);
       expect(JSON.parse(res._body).approval.status).toBe('denied');
     });
 
@@ -556,6 +587,107 @@ describe('backend/server.ts — health check HTTP server', () => {
 
       expect(bad._statusCode).toBe(400);
       expect(missing._statusCode).toBe(404);
+    });
+  });
+
+  describe('approvals — named approver tokens (#954)', () => {
+    const approval = { id: 'appr-1', status: 'pending_approval' };
+    let agent: any;
+    const ALICE_TOKEN = 'alice-secret-token';
+    const aliceHash = createHash('sha256').update(ALICE_TOKEN).digest('hex');
+
+    beforeEach(() => {
+      agent = {
+        approve: vi.fn(async () => ({
+          approval: { ...approval, status: 'approved', decidedBy: 'alice' },
+        })),
+        deny: vi.fn(() => ({ ...approval, status: 'denied', decidedBy: 'alice' })),
+      };
+      process.env.WEBHOOK_SECRET = 'admin-secret';
+      (config as any).APPROVER_TOKENS_MAP = new Map([['alice', aliceHash]]);
+    });
+
+    afterEach(() => {
+      (config as any).APPROVER_TOKENS_MAP = new Map();
+      delete process.env.WEBHOOK_SECRET;
+    });
+
+    it('identifies a named approver by their own token and passes it through', async () => {
+      createHealthServer(agent);
+      const res = makeRes();
+
+      capturedHandler!(
+        makeBodyReq(
+          'POST',
+          '/approvals/appr-1',
+          { decision: 'approve' },
+          { authorization: `Bearer ${ALICE_TOKEN}` }
+        ),
+        res
+      );
+      await flush();
+
+      expect(res._statusCode).toBe(200);
+      expect(agent.approve).toHaveBeenCalledWith('appr-1', 'alice');
+      expect(JSON.parse(res._body).approval.decidedBy).toBe('alice');
+    });
+
+    it('a named approver token works without the shared admin token', async () => {
+      // No "Bearer admin-secret" anywhere — alice's own credential is enough.
+      createHealthServer(agent);
+      const res = makeRes();
+
+      capturedHandler!(
+        makeBodyReq(
+          'POST',
+          '/approvals/appr-1',
+          { decision: 'deny' },
+          { authorization: `Bearer ${ALICE_TOKEN}` }
+        ),
+        res
+      );
+      await flush();
+
+      expect(res._statusCode).toBe(200);
+      expect(agent.deny).toHaveBeenCalledWith('appr-1', 'alice');
+    });
+
+    it('falls back to null (recorded as "admin") for the shared admin token', async () => {
+      createHealthServer(agent);
+      const res = makeRes();
+
+      capturedHandler!(
+        makeBodyReq(
+          'POST',
+          '/approvals/appr-1',
+          { decision: 'approve' },
+          { authorization: 'Bearer admin-secret' }
+        ),
+        res
+      );
+      await flush();
+
+      expect(res._statusCode).toBe(200);
+      expect(agent.approve).toHaveBeenCalledWith('appr-1', null);
+    });
+
+    it('rejects a token that matches no approver and is not the admin token', async () => {
+      createHealthServer(agent);
+      const res = makeRes();
+
+      capturedHandler!(
+        makeBodyReq(
+          'POST',
+          '/approvals/appr-1',
+          { decision: 'approve' },
+          { authorization: 'Bearer someone-elses-token' }
+        ),
+        res
+      );
+      await flush();
+
+      expect(res._statusCode).toBe(401);
+      expect(agent.approve).not.toHaveBeenCalled();
     });
   });
 
@@ -606,6 +738,220 @@ describe('backend/server.ts — health check HTTP server', () => {
       capturedHandler!(makeReq('GET', '/status', { authorization: 'Bearer webhook-secret' }), res);
 
       expect(res._statusCode).toBe(401);
+    });
+  });
+
+  describe('CORS (#966)', () => {
+    it('answers an OPTIONS preflight from an allowed origin with the matching headers', () => {
+      (config as unknown as Record<string, unknown>).CORS_ALLOWED_ORIGINS = 'http://localhost:5173';
+      createHealthServer();
+      const res = makeRes();
+
+      capturedHandler!(makeReq('OPTIONS', '/status', { origin: 'http://localhost:5173' }), res);
+
+      expect(res._statusCode).toBe(204);
+      expect(res._headers['Access-Control-Allow-Origin']).toBe('http://localhost:5173');
+      expect(res._headers['Access-Control-Allow-Methods']).toContain('GET');
+    });
+
+    it('sets no CORS headers for an origin not on the allowlist', () => {
+      (config as unknown as Record<string, unknown>).CORS_ALLOWED_ORIGINS = 'http://localhost:5173';
+      createHealthServer();
+      const res = makeRes();
+
+      capturedHandler!(makeReq('OPTIONS', '/status', { origin: 'https://evil.example.com' }), res);
+
+      expect(res._statusCode).toBe(204);
+      expect(res._headers['Access-Control-Allow-Origin']).toBeUndefined();
+    });
+
+    it('sets no CORS headers for any origin when CORS_ALLOWED_ORIGINS is unset', () => {
+      createHealthServer();
+      const res = makeRes();
+
+      capturedHandler!(makeReq('GET', '/health', { origin: 'http://localhost:5173' }), res);
+
+      expect(res._headers['Access-Control-Allow-Origin']).toBeUndefined();
+    });
+
+    it('never answers with "*" for an allowed origin (credentials are in play)', () => {
+      (config as unknown as Record<string, unknown>).CORS_ALLOWED_ORIGINS = 'http://localhost:5173';
+      createHealthServer();
+      const res = makeRes();
+
+      capturedHandler!(makeReq('GET', '/health', { origin: 'http://localhost:5173' }), res);
+
+      expect(res._headers['Access-Control-Allow-Origin']).toBe('http://localhost:5173');
+    });
+  });
+
+  describe('POST /stream/ticket and GET /stream auth (#965)', () => {
+    it('refuses a ticket request without a valid Bearer token', () => {
+      process.env.ADMIN_API_TOKEN = 'admin-token';
+      createHealthServer();
+      const res = makeRes();
+
+      capturedHandler!(makeReq('POST', '/stream/ticket'), res);
+
+      expect(res._statusCode).toBe(401);
+    });
+
+    it('issues a ticket that GET /stream accepts exactly once', () => {
+      process.env.ADMIN_API_TOKEN = 'admin-token';
+      createHealthServer();
+
+      const ticketRes = makeRes();
+      capturedHandler!(
+        makeReq('POST', '/stream/ticket', { authorization: 'Bearer admin-token' }),
+        ticketRes
+      );
+      expect(ticketRes._statusCode).toBe(200);
+      const { ticket, expiresInMs } = JSON.parse(ticketRes._body);
+      expect(typeof ticket).toBe('string');
+      expect(expiresInMs).toBe(60_000);
+      // The ticket never carries the real admin token anywhere in the URL.
+      expect(ticket).not.toContain('admin-token');
+
+      const firstStream = makeRes();
+      const firstStreamReq = makeReq('GET', `/stream?ticket=${ticket}`);
+      capturedHandler!(firstStreamReq, firstStream);
+      expect(firstStream._statusCode).toBe(200);
+
+      // Reusing the same ticket a second time is refused (single-use).
+      const secondStream = makeRes();
+      capturedHandler!(makeReq('GET', `/stream?ticket=${ticket}`), secondStream);
+      expect(secondStream._statusCode).toBe(401);
+
+      (firstStreamReq as unknown as { _simulateClose: () => void })._simulateClose();
+    });
+
+    it('refuses GET /stream with an unknown or already-consumed ticket', () => {
+      process.env.ADMIN_API_TOKEN = 'admin-token';
+      createHealthServer();
+      const res = makeRes();
+
+      capturedHandler!(makeReq('GET', '/stream?ticket=not-a-real-ticket'), res);
+
+      expect(res._statusCode).toBe(401);
+    });
+
+    it('still accepts a plain Bearer header on GET /stream (non-browser clients)', () => {
+      process.env.ADMIN_API_TOKEN = 'admin-token';
+      createHealthServer();
+      const res = makeRes();
+      const req = makeReq('GET', '/stream', { authorization: 'Bearer admin-token' });
+
+      capturedHandler!(req, res);
+
+      expect(res._statusCode).toBe(200);
+      (req as unknown as { _simulateClose: () => void })._simulateClose();
+    });
+  });
+
+  describe('GET /stream — shared broadcast hub (#967)', () => {
+    function makeAgentStub(approvals: { id: string }[]) {
+      const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
+      return {
+        listApprovals: vi.fn(() => approvals),
+        on: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
+          (listeners[event] ??= []).push(fn);
+        }),
+        off: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
+          listeners[event] = (listeners[event] ?? []).filter((l) => l !== fn);
+        }),
+        emit(event: string, ...args: unknown[]) {
+          for (const fn of listeners[event] ?? []) fn(...args);
+        },
+      };
+    }
+
+    it('serves two concurrent clients from a single shared listApprovals() poll', async () => {
+      vi.useFakeTimers();
+      try {
+        const agent = makeAgentStub([{ id: 'a1' }]);
+        createHealthServer(agent as unknown as import('../backend/agent').PayFiAgent);
+
+        const resA = makeRes();
+        const resB = makeRes();
+        const reqA = makeReq('GET', '/stream', { authorization: 'Bearer' });
+        const reqB = makeReq('GET', '/stream', { authorization: 'Bearer' });
+        capturedHandler!(reqA, resA);
+        capturedHandler!(reqB, resB);
+
+        // The initial snapshot sent to each client on connect doesn't call
+        // listApprovals() again — it reuses the hub's cached last-known list.
+        const callsAfterConnect = agent.listApprovals.mock.calls.length;
+
+        await vi.advanceTimersByTimeAsync(2_000);
+
+        // Exactly one more call for the shared tick, regardless of 2 clients.
+        expect(agent.listApprovals.mock.calls.length).toBe(callsAfterConnect + 1);
+
+        // Both clients received the heartbeat from that one shared tick.
+        expect(resA._body).toContain('event: heartbeat');
+        expect(resB._body).toContain('event: heartbeat');
+
+        (reqA as unknown as { _simulateClose: () => void })._simulateClose();
+        (reqB as unknown as { _simulateClose: () => void })._simulateClose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('emits an approvals event when one is approved and another arrives in the same tick', async () => {
+      vi.useFakeTimers();
+      try {
+        const approvals = [{ id: 'a1' }];
+        const agent = makeAgentStub(approvals);
+        createHealthServer(agent as unknown as import('../backend/agent').PayFiAgent);
+
+        const res = makeRes();
+        const req = makeReq('GET', '/stream', { authorization: 'Bearer' });
+        capturedHandler!(req, res);
+        res._body = ''; // discard the initial snapshot
+
+        // Same count (1), but a1 was approved and a2 is new — must still fire.
+        agent.listApprovals.mockReturnValue([{ id: 'a2' }]);
+        await vi.advanceTimersByTimeAsync(2_000);
+
+        expect(res._body).toContain('event: approvals');
+        expect(res._body).toContain('a2');
+
+        (req as unknown as { _simulateClose: () => void })._simulateClose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('forwards a task:complete event from the agent as a task_result SSE event', () => {
+      const agent = makeAgentStub([]);
+      createHealthServer(agent as unknown as import('../backend/agent').PayFiAgent);
+
+      const res = makeRes();
+      const req = makeReq('GET', '/stream', { authorization: 'Bearer' });
+      capturedHandler!(req, res);
+      res._body = '';
+
+      agent.emit('task:complete', { success: true, taskType: 'balance_check' });
+
+      expect(res._body).toContain('event: task_result');
+      expect(res._body).toContain('balance_check');
+
+      (req as unknown as { _simulateClose: () => void })._simulateClose();
+    });
+
+    it('includes id: and retry: fields on every SSE frame', () => {
+      const agent = makeAgentStub([]);
+      createHealthServer(agent as unknown as import('../backend/agent').PayFiAgent);
+
+      const res = makeRes();
+      const req = makeReq('GET', '/stream', { authorization: 'Bearer' });
+      capturedHandler!(req, res);
+
+      expect(res._body).toMatch(/^id: \d+\n/m);
+      expect(res._body).toContain('retry: 3000');
+
+      (req as unknown as { _simulateClose: () => void })._simulateClose();
     });
   });
 });

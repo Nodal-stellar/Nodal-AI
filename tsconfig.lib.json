@@ -1,0 +1,28 @@
+{
+  /**
+   * tsconfig.lib.json
+   *
+   * TypeScript compilation config for the publishable npm package.
+   * Produces CommonJS output in dist/cjs/ and declaration files in dist/types/.
+   *
+   * ESM output is handled by a second pass (see build:esm in package.json) using
+   * tsconfig.lib.esm.json. The two passes share the same compiler strictness by
+   * extending the root tsconfig so type checking is consistent.
+   *
+   * We exclude tests/, scripts/, apps/, and contracts/ so none of those files
+   * end up in the published tarball.
+   */
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "outDir": "./dist/cjs",
+    "rootDir": "./backend",
+    "declaration": true,
+    "declarationDir": "./dist/types",
+    "declarationMap": true,
+    "sourceMap": true,
+    "stripInternal": true
+  },
+  "include": ["backend/**/*"],
+  "exclude": ["node_modules", "dist", "tests", "scripts", "apps", "contracts"]
+}

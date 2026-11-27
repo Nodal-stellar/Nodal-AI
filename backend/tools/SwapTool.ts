@@ -11,6 +11,7 @@ import { horizonServer, withRetry } from '../rpc_client';
 import { withBackoffGuard } from '../network';
 import { Signer } from '../signer';
 import { PathPaymentTool } from './PathPaymentTool';
+import { toStroops, tryToStroops, stroopsToString } from '../utils/amount';
 
 const AssetSchema = z.object({
   code: z.string(),
@@ -23,7 +24,10 @@ export const SwapInputSchema = z.object({
   sellAmount: z
     .string()
     .regex(/^(?!0(\.0+)?$)\d+(\.\d{1,7})?$/, 'sellAmount must be a valid Stellar decimal')
-    .refine((v) => parseFloat(v) > 0, 'sellAmount must be greater than zero'),
+    .refine((v) => {
+      const s = tryToStroops(v);
+      return s !== null && s > 0n;
+    }, 'sellAmount must be greater than zero'),
   maxSlippagePct: z
     .number()
     .min(0, 'maxSlippagePct must be at least 0')
@@ -84,15 +88,19 @@ export class SwapTool {
       throw new ValidationError('No swap path found for the requested assets');
     }
 
-    const amounts = response.records.map((record) => parseFloat(record.destination_amount));
-    const bestAmount = Math.max(...amounts);
-    const worstAmount = Math.min(...amounts);
+    const stroopAmounts = response.records.map((record) => toStroops(record.destination_amount));
+    let bestStroops = stroopAmounts[0]!;
+    let worstStroops = stroopAmounts[0]!;
+    for (const amt of stroopAmounts) {
+      if (amt > bestStroops) bestStroops = amt;
+      if (amt < worstStroops) worstStroops = amt;
+    }
 
-    if (bestAmount <= 0) {
+    if (bestStroops <= 0n) {
       throw new ValidationError('Swap path returned zero destination amount');
     }
 
-    const deviationPct = ((bestAmount - worstAmount) / bestAmount) * 100;
+    const deviationPct = Number(((bestStroops - worstStroops) * 10000n) / bestStroops) / 100;
     if (deviationPct > input.maxSlippagePct) {
       throw new ValidationError(
         `Slippage deviation ${deviationPct.toFixed(2)}% exceeds tolerance ${input.maxSlippagePct}%`
@@ -100,12 +108,13 @@ export class SwapTool {
     }
 
     const bestPath = response.records.reduce((currentBest, candidate) =>
-      parseFloat(candidate.destination_amount) > parseFloat(currentBest.destination_amount)
+      toStroops(candidate.destination_amount) > toStroops(currentBest.destination_amount)
         ? candidate
         : currentBest
     );
 
-    const destMinAmount = (bestAmount * (1 - input.maxSlippagePct / 100)).toFixed(7);
+    const minStroops = (bestStroops * BigInt(Math.round((100 - input.maxSlippagePct) * 10_000))) / 1_000_000n;
+    const destMinAmount = stroopsToString(minStroops);
 
     return this.pathPaymentTool.execute({
       destination: this.publicKey,

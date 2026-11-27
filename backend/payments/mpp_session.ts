@@ -2,33 +2,47 @@
  * backend/payments/mpp_session.ts
  * MPP Session: streaming micropayments via channel-backed off-chain commits.
  *
- * MPP Session extends MPP Charge with a payment channel abstraction, enabling
- * many small value transfers to be committed off-chain and settled on-chain
- * in a single batch. This reduces transaction costs and latency for high-frequency
- * interactions (e.g., AI token metering, per-API-call billing).
+ * **⚠ PROTOTYPE / SIMULATION — NOT FOR PRODUCTION USE**
  *
- * Protocol:
+ * This module implements the off-chain bookkeeping for a payment channel but
+ * does NOT deploy or interact with any on-chain escrow contract:
+ *
+ *   - `openChannel()` persists channel state to the database only.
+ *     No escrow contract is deployed; no funds are locked on Stellar.
+ *     Calling `openChannel()` on mainnet throws `SimulatedChannelError`.
+ *
+ *   - `commitPayment()` updates off-chain balances and signs a commitment.
+ *     No Soroban transaction is submitted.
+ *
+ *   - `closeChannel()` / `disputeChannel()` update the local DB status and
+ *     then throw `SimulatedChannelError`. No settlement transaction is ever
+ *     broadcast; funds are NOT distributed on-chain.
+ *
+ * The intended production protocol (escrow contract open/close/dispute via
+ * Soroban) is documented in docs/design/mpp-session.md.
+ *
+ * Protocol (intended):
  *   1. Open: Agent locks funds in an escrow contract, establishing a channel
  *   2. Commit: Each payment updates an off-chain signed commitment (no on-chain tx)
  *   3. Close: Either party submits the latest commitment to finalize the channel
  *   4. Dispute: Timeout mechanism to force-close if the other party is unresponsive
- *
- * Design doc: docs/design/mpp-session.md
  */
 
 import { randomUUID } from 'crypto';
-import { Address, BASE_FEE, Keypair, StrKey, TransactionBuilder, xdr } from '@stellar/stellar-sdk';
+import { Keypair } from '@stellar/stellar-sdk';
 import { z } from 'zod';
-import { config, MAINNET_SPENDING_CAP } from '../config';
-import { AgentPausedError, PolicyViolationError, ValidationError } from '../errors';
+import { config } from '../config';
+import { AgentPausedError, ValidationError } from '../errors';
 import { isPaused } from '../kill_switch';
-import { loadAccount, prepareSorobanTx, resolveNetworkPassphrase } from '../rpc_client';
+import { resolveNetworkPassphrase } from '../rpc_client';
 import { createAgentSigner, Signer } from '../signer';
-import { spendingTracker } from '../spending_tracker';
+import { assetKeyForPaymentAsset, spendingTracker } from '../spending_tracker';
 import { getStorage } from '../db/storage';
 import { createLogger } from '../utils/logger';
 import { toStroops } from '../utils/amount';
 import { caip2Network } from '../x402/middleware';
+import { emitAlert } from '../alerts';
+import { dispatchWebhook } from '../webhook';
 
 const log = createLogger('mpp-session');
 
@@ -42,7 +56,7 @@ const DECIMALS = 7;
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
-export type ChannelStatus = 'Pending' | 'Active' | 'Closed' | 'Disputed';
+export type ChannelStatus = 'Pending' | 'Active' | 'Closed' | 'Disputed' | 'Expired';
 
 /**
  * Off-chain commitment representing the current state of a payment channel.
@@ -74,7 +88,14 @@ export interface ChannelState {
   openedAt: string; // ISO timestamp
   timeoutAt: string; // ISO timestamp
   closedAt?: string | undefined;
+  /** SpendingTracker reservation holding `totalAmount` against the limit. */
+  reservationId?: string | undefined;
   latestCommitment?: ChannelCommitment | undefined; // JSON-serialized
+  /**
+   * Spending tracker reservation ID for the total channel amount.
+   * Used to release or commit the reservation when the channel closes.
+   */
+  reservationId?: string | undefined;
 }
 
 /**
@@ -138,10 +159,11 @@ const ChannelStateSchema = z.object({
   agentBalance: z.string(),
   participantBalance: z.string(),
   nonce: z.number().int().nonnegative(),
-  status: z.enum(['Pending', 'Active', 'Closed', 'Disputed']),
+  status: z.enum(['Pending', 'Active', 'Closed', 'Disputed', 'Expired']),
   openedAt: z.string(),
   timeoutAt: z.string(),
   closedAt: z.string().optional(),
+  reservationId: z.string().optional(),
   latestCommitment: z.any().optional(),
 });
 
@@ -172,23 +194,15 @@ function toBaseUnits(amount: string): string {
 /**
  * The agent's spending policy, as applied to channel operations.
  * Reserves the total amount in the rolling window (committed on close).
+ * Limit enforcement — AGENT_SPENDING_LIMIT, per-asset SPENDING_LIMITS, the
+ * mainnet cap and the window total — lives in {@link SpendingTracker.reserve},
+ * which compares in BigInt stroops rather than floating-point math.
  */
-function reserveChannelSpend(amount: string): string {
+function reserveChannelSpend(amount: string, asset: string): string {
   if (isPaused()) {
     throw new AgentPausedError('Agent is paused; MPP session operations are halted');
   }
-  const parsed = parseFloat(amount);
-  if (parsed > parseFloat(config.AGENT_SPENDING_LIMIT)) {
-    throw new PolicyViolationError(
-      `MPP session total of ${amount} exceeds AGENT_SPENDING_LIMIT of ${config.AGENT_SPENDING_LIMIT}`
-    );
-  }
-  if (config.STELLAR_NETWORK === 'mainnet' && parsed > MAINNET_SPENDING_CAP) {
-    throw new PolicyViolationError(
-      `MPP session total of ${amount} exceeds mainnet spending cap of ${MAINNET_SPENDING_CAP}`
-    );
-  }
-  return spendingTracker.reserve(amount);
+  return spendingTracker.reserve(amount, assetKeyForPaymentAsset(asset));
 }
 
 /**
@@ -316,9 +330,18 @@ export class MppSessionClient {
     totalAmount: string,
     timeoutSeconds: number = 86400
   ): Promise<ChannelState> {
+    if (config.STELLAR_NETWORK === 'mainnet') {
+      throw new SimulatedChannelError(
+        'MPP Session channels are not supported on mainnet. ' +
+          'The channel protocol is a prototype: no escrow contract is deployed ' +
+          'and close/dispute operations do not submit on-chain transactions. ' +
+          'Set STELLAR_NETWORK=testnet or wait for the production implementation.'
+      );
+    }
+
     const agent = this.signer.publicKey();
     const totalDecimal = fromBaseUnits(totalAmount);
-    const reservationId = reserveChannelSpend(totalDecimal);
+    const reservationId = reserveChannelSpend(totalDecimal, asset);
 
     const channelId = randomUUID();
     const now = new Date();
@@ -337,6 +360,7 @@ export class MppSessionClient {
       status: 'Active',
       openedAt,
       timeoutAt,
+      reservationId,
     };
 
     // Create initial commitment
@@ -355,11 +379,11 @@ export class MppSessionClient {
 
     log.info(
       { channelId, participant, asset, totalAmount: totalDecimal, timeoutSeconds },
-      'MPP session opened'
+      'MPP session opened (prototype: no on-chain escrow deployed)'
     );
 
-    // Note: In production, this would deploy/fund the escrow contract on-chain.
-    // For the prototype, we skip the on-chain deployment and only persist state.
+    // TODO(production): deploy/fund the escrow contract on-chain before returning.
+    // See docs/design/mpp-session.md § "Open Channel" for the intended flow.
 
     return state;
   }
@@ -432,11 +456,15 @@ export class MppSessionClient {
   /**
    * Close a channel by submitting the latest commitment on-chain.
    *
-   * @param channelId - Channel identifier
-   * @param finalCommitment - Latest signed commitment
-   * @returns Transaction hash (in production)
+   * **⚠ Prototype / simulation only.**
+   * This method is not yet implemented. It updates the local channel status to
+   * `Closed` but does **not** submit any Soroban transaction to the escrow
+   * contract. No funds move on-chain. See `docs/design/mpp-session.md` for the
+   * intended production flow.
+   *
+   * @throws {SimulatedChannelError} always — the on-chain settlement step is not implemented.
    */
-  async closeChannel(channelId: string, finalCommitment?: ChannelCommitment): Promise<string> {
+  async closeChannel(channelId: string, finalCommitment?: ChannelCommitment): Promise<never> {
     const state = await loadChannelState(channelId);
     if (!state) {
       throw new ValidationError(`Channel ${channelId} not found`);
@@ -462,28 +490,55 @@ export class MppSessionClient {
       );
     }
 
-    // In production, this would build and submit a Soroban transaction to the escrow contract.
-    // For the prototype, we just update the status.
-
+    // Update local state so the channel is not reused.
     await updateChannelStatus(channelId, 'Closed', new Date().toISOString());
 
-    // Release the spending reservation (funds were locked on open)
-    // Note: In a real implementation, we'd track the reservation ID from openChannel
-    // For now, we skip this in the prototype
+    // Commit exactly the participant's final balance (the amount they actually received)
+    // and release the remainder back to the spending window.
+    const participantBalanceStr = fromBaseUnits(commitment.participantBalance);
+    log.info(
+      {
+        channelId,
+        totalAmount: commitment.agentBalance,
+        participantBalance: commitment.participantBalance,
+      },
+      'MPP session close: committing participant balance, releasing remainder'
+    );
 
-    log.info({ channelId, finalAgentBalance: commitment.agentBalance }, 'MPP session closed');
+    spendingTracker.commit(reservationId);
+    // Commit only what the participant actually received
+    spendingTracker.record(participantBalanceStr);
+    // Release the rest (agent's balance) back to the window
+    spendingTracker.release(reservationId);
 
-    // Return a mock transaction hash for the prototype
-    return 'a'.repeat(64);
+    log.warn(
+      { channelId },
+      'MPP session close attempted but on-chain settlement is not implemented (prototype)'
+    );
+
+    // TODO(production): build and submit a Soroban transaction calling
+    //   escrow.close(channelId, finalAgentBalance, finalParticipantBalance, agentSig)
+    // then return the real tx hash.
+    // See docs/design/mpp-session.md § "Close Channel".
+    throw new SimulatedChannelError(
+      `Channel ${channelId} state set to Closed locally, but no on-chain settlement transaction ` +
+        'was submitted. The MPP Session channel protocol is a prototype and does not deploy or ' +
+        'interact with an escrow contract. Treat this channel as unsettled.'
+    );
   }
 
   /**
    * Dispute a channel (force-close after timeout).
    *
-   * @param channelId - Channel identifier
-   * @returns Transaction hash (in production)
+   * **⚠ Prototype / simulation only.**
+   * This method is not yet implemented. It updates the local channel status to
+   * `Disputed` but does **not** submit any Soroban transaction to the escrow
+   * contract. No funds are returned on-chain. See `docs/design/mpp-session.md`
+   * for the intended production flow.
+   *
+   * @throws {SimulatedChannelError} always — the on-chain dispute step is not implemented.
    */
-  async disputeChannel(channelId: string): Promise<string> {
+  async disputeChannel(channelId: string): Promise<never> {
     const state = await loadChannelState(channelId);
     if (!state) {
       throw new ValidationError(`Channel ${channelId} not found`);
@@ -501,15 +556,29 @@ export class MppSessionClient {
       throw new ValidationError(`No commitment available for channel ${channelId}`);
     }
 
-    // In production, this would build and submit a dispute transaction to the escrow contract.
-    // For the prototype, we just update the status.
-
+    // Update local state so the channel is not reused.
     await updateChannelStatus(channelId, 'Disputed', new Date().toISOString());
 
-    log.info({ channelId }, 'MPP session disputed');
+    log.warn(
+      { channelId },
+      'MPP session dispute: releasing full reservation (no on-chain settlement occurred)'
+    );
 
-    // Return a mock transaction hash for the prototype
-    return 'b'.repeat(64);
+    // Release the full reservation since no actual settlement happened.
+    // The spending was never committed on-chain.
+    if (state.reservationId) {
+      spendingTracker.release(state.reservationId);
+    }
+
+    // TODO(production): build and submit a Soroban transaction calling
+    //   escrow.dispute(channelId, lastAgentBalance, lastParticipantBalance, agentSig)
+    // after verifying the timeout has elapsed on-chain, then return the real tx hash.
+    // See docs/design/mpp-session.md § "Dispute / Timeout".
+    throw new SimulatedChannelError(
+      `Channel ${channelId} state set to Disputed locally, but no on-chain dispute transaction ` +
+        'was submitted. The MPP Session channel protocol is a prototype and does not deploy or ' +
+        'interact with an escrow contract. Treat this channel as unsettled.'
+    );
   }
 
   /**
@@ -526,4 +595,117 @@ export class MppSessionClient {
     const state = await loadChannelState(channelId);
     return state?.latestCommitment;
   }
+}
+
+// ─── Expiry sweeper ─────────────────────────────────────────────────────────
+
+/** States the sweeper may expire; terminal states are left alone. */
+const EXPIRABLE_STATUSES: ReadonlySet<ChannelStatus> = new Set(['Pending', 'Active']);
+
+/** Default sweep cadence: once a minute. */
+export const DEFAULT_MPP_SESSION_SWEEP_INTERVAL_MS = 60_000;
+
+/**
+ * Mark every channel whose `timeoutAt` has passed as `Expired`, release the
+ * spending reservation held at open, and raise an event plus an operator
+ * alert. Returns the channels this call expired.
+ *
+ * `commitPayment` already refuses payments on timed-out channels; without the
+ * sweeper those channels would sit in `Active` forever, pinning their
+ * reservation against the spending limit.
+ */
+export async function sweepExpiredChannels(now: Date = new Date()): Promise<ChannelState[]> {
+  const records = await getStorage().listMppSessions();
+  const expired: ChannelState[] = [];
+
+  for (const record of records) {
+    let state: ChannelState;
+    try {
+      state = ChannelStateSchema.parse(JSON.parse(record.state));
+    } catch (err) {
+      log.warn(
+        { channelId: record.channelId, error: String(err) },
+        'Skipping malformed MPP session record'
+      );
+      continue;
+    }
+    if (!EXPIRABLE_STATUSES.has(state.status)) continue;
+    if (new Date(state.timeoutAt).getTime() > now.getTime()) continue;
+
+    state.status = 'Expired';
+    state.closedAt = now.toISOString();
+    await saveChannelState(state);
+    expired.push(state);
+
+    releaseChannelReservation(state);
+    notifyChannelExpired(state);
+  }
+
+  if (expired.length > 0) {
+    log.info(
+      { count: expired.length, channelIds: expired.map((s) => s.id) },
+      'Expired MPP channels swept'
+    );
+  }
+  return expired;
+}
+
+/**
+ * Free the reservation `openChannel` took against the spending limit. Best
+ * effort: the reservation may already have aged out of the window, in which
+ * case there is nothing left to release.
+ */
+function releaseChannelReservation(state: ChannelState): void {
+  if (!state.reservationId) return;
+  try {
+    spendingTracker.release(state.reservationId);
+  } catch (err) {
+    log.warn(
+      { channelId: state.id, reservationId: state.reservationId, error: String(err) },
+      'Could not release MPP channel reservation'
+    );
+  }
+}
+
+/** Emit the lifecycle webhook event and the operator alert for an expiry. */
+function notifyChannelExpired(state: ChannelState): void {
+  const timestamp = new Date().toISOString();
+  const details = {
+    channelId: state.id,
+    participant: state.participant,
+    asset: state.asset,
+    totalAmount: state.totalAmount,
+    timeoutAt: state.timeoutAt,
+  };
+  void emitAlert({
+    type: 'channel_expired',
+    severity: 'warning',
+    message: `MPP payment channel expired: ${state.id}`,
+    details,
+    timestamp,
+  });
+  void dispatchWebhook({
+    event: 'mpp.channel_expired',
+    ...details,
+    openedAt: state.openedAt,
+    timestamp,
+  });
+}
+
+/**
+ * Run {@link sweepExpiredChannels} every `intervalMs` until the returned stop
+ * function is called. The timer is unref'd so it never keeps the process alive
+ * on its own.
+ */
+export function startMppSessionSweeper(
+  intervalMs: number = config.MPP_SESSION_SWEEP_INTERVAL_MS ??
+    DEFAULT_MPP_SESSION_SWEEP_INTERVAL_MS
+): () => void {
+  const timer = setInterval(() => {
+    sweepExpiredChannels().catch((err) =>
+      log.error({ error: String(err) }, 'MPP channel sweep failed')
+    );
+  }, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
 }

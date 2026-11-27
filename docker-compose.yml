@@ -10,6 +10,7 @@
 #   agent-postgres      — agent with STORAGE_BACKEND=postgres (profile: postgres)
 #   test-runner-postgres — storage test suite against Postgres (profile: postgres)
 #   dashboard           — visual dashboard UI (profile: dashboard)
+#   mcp                 — MCP server over HTTP, loopback-only (profile: mcp)
 #
 # Usage:
 #   docker compose up --build          # start everything
@@ -22,6 +23,8 @@
 #   docker compose --profile postgres run --rm test-runner-postgres
 #     # runs tests/storage.test.ts against both SQLite and Postgres
 #   docker compose --profile dashboard up --build dashboard   # start visual dashboard (port 5173)
+#   ADMIN_API_TOKEN=... docker compose --profile mcp up --build mcp
+#     # MCP server on http://127.0.0.1:3002/mcp (Bearer ADMIN_API_TOKEN), see docs/guide/mcp.md
 # =============================================================================
 
 version: "3.9"
@@ -243,20 +246,55 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: node-builder
+      target: dashboard         # production build served by nginx (#970)
     container_name: nodal-dashboard
     profiles:
       - dashboard               # only starts with: docker compose --profile dashboard up
     depends_on:
       agent:
         condition: service_healthy
-    environment:
-      VITE_API_URL: http://agent:3000
-      VITE_API_TOKEN: ${ADMIN_API_TOKEN:-}
-    working_dir: /build
-    command: sh -c "cd apps/dashboard && npm run dev -- --host 0.0.0.0 --port 5173"
+    # The API URL and token are entered in the dashboard's login form and
+    # called from the browser, so no build-time API env is needed.
     ports:
-      - "5173:5173"
+      - "5173:80"
+    restart: unless-stopped
+    networks:
+      - nodal-net
+
+  # ── MCP server (HTTP transport) ─────────────────────────────────────────────
+  # Runs the compiled entrypoint from the production image. Published on the
+  # host loopback interface only, and every request needs the bearer token.
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: nodal-mcp
+    profiles:
+      - mcp                     # only starts with: docker compose --profile mcp up
+    depends_on:
+      stellar-quickstart:
+        condition: service_healthy
+    environment:
+      STELLAR_NETWORK:    local
+      HORIZON_URL:        http://stellar-quickstart:8000
+      SOROBAN_RPC_URL:    http://stellar-quickstart:8000/soroban/rpc
+      AGENT_SECRET_KEY:   ${AGENT_SECRET_KEY:?AGENT_SECRET_KEY is required}
+      X402_ASSET_CODE:    ${X402_ASSET_CODE:-USDC}
+      X402_ASSET_ISSUER:  ${X402_ASSET_ISSUER:?X402_ASSET_ISSUER is required}
+      AGENT_SPENDING_LIMIT: ${AGENT_SPENDING_LIMIT:-100}
+      ADMIN_API_TOKEN:    ${ADMIN_API_TOKEN:?ADMIN_API_TOKEN is required for the MCP HTTP server}
+      MCP_TRANSPORT:      http
+      MCP_PORT:           "3001"
+      MCP_ALLOW_PAYMENTS: ${MCP_ALLOW_PAYMENTS:-false}
+      NODE_ENV:           production
+    command: ["node", "dist/backend/mcp/index.js"]
+    ports:
+      - "127.0.0.1:3002:3001"   # loopback only — never exposed on the host network
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
     restart: unless-stopped
     networks:
       - nodal-net

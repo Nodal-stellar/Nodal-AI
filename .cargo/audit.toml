@@ -1,0 +1,18 @@
+# .cargo/audit.toml
+#
+# cargo-audit configuration for both Rust contracts (#991). Mirrors the
+# `[advisories].ignore` list in ../deny.toml: each ID below is a known
+# advisory in a dependency pinned transitively by soroban-sdk 20.5.0 (itself
+# pinned by rust-toolchain.toml's 1.78.0 pin), with no non-breaking upgrade
+# available. Re-check after any soroban-sdk bump and drop entries that no
+# longer apply — a *new* advisory not in this list still fails CI.
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0387", # crypto-bigint timing variability, via soroban-env-host
+    "RUSTSEC-2024-0344", # curve25519-dalek timing variability, via soroban-env-host
+    "RUSTSEC-2026-0009", # time DoS via stack exhaustion, via soroban-sdk
+    "RUSTSEC-2025-0056", # adler unmaintained, via soroban-env-host
+    "RUSTSEC-2026-0543", # chrono unmaintained, via soroban-sdk
+    "RUSTSEC-2024-0436", # paste unmaintained, via soroban-wasmi
+    "RUSTSEC-2026-0097", # rand unsound-with-custom-logger, via soroban-env-host
+]

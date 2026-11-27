@@ -3,11 +3,19 @@
  * Singleton Pino logger. Import `logger` or use `createLogger` for component-scoped child loggers.
  * Set LOG_LEVEL env var to control verbosity (default: "info").
  * Set NODE_ENV=production to emit raw JSON; otherwise prettified output is used.
+ *
+ * When MCP_TRANSPORT=stdio, stdout is the exclusive JSON-RPC channel.
+ * All log output is routed to stderr (fd 2) in that mode so log lines never
+ * corrupt the protocol stream.
  */
 
 import pino from 'pino';
+import { config } from '../config';
 
-const isDev = process.env.NODE_ENV !== 'production';
+const isDev = config.NODE_ENV !== 'production';
+
+/** True when the process is acting as an MCP stdio server. */
+const isMCPStdio = config.MCP_TRANSPORT === 'stdio';
 
 // Transaction memos (e.g. the nonce slices X402PaymentTool writes) can carry
 // caller-supplied, potentially user-identifiable strings, so they're stripped
@@ -57,14 +65,17 @@ export function redactSecrets(value: unknown): unknown {
   return value;
 }
 
-export const logger = pino({
-  level: process.env.LOG_LEVEL ?? 'info',
+const pinoOptions = {
+  level: config.LOG_LEVEL ?? 'info',
   redact: {
     paths: REDACT_PATHS,
     remove: true,
   },
   hooks: {
-    logMethod(args, method) {
+    logMethod(args, method, level) {
+      if (isVitest && level >= ERROR_LEVEL_THRESHOLD) {
+        testErrorLogCapture.push({ level, msg: extractLogMessage(args) });
+      }
       const redacted = args.map(redactSecrets);
       return method.apply(this, redacted as Parameters<typeof method>);
     },
@@ -72,10 +83,16 @@ export const logger = pino({
   ...(isDev && {
     transport: {
       target: 'pino-pretty',
-      options: { colorize: true },
+      options: {
+        colorize: true,
+        ...(isMCPStdio && { destination: 2 }),
+      },
     },
   }),
-});
+};
+
+export const logger =
+  isMCPStdio && !isDev ? pino(pinoOptions, pino.destination(2)) : pino(pinoOptions);
 
 /**
  * Returns a child logger pre-tagged with `component` and an optional `correlationId`.

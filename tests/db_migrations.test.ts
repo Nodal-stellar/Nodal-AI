@@ -24,6 +24,7 @@ const EXPECTED_TABLES = [
   'agent_results',
   'agent_state',
   'approval_audit_log',
+  'approval_votes',
   'audit_log',
   'idempotency_keys',
   'mpp_sessions',

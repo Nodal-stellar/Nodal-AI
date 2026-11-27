@@ -49,7 +49,7 @@
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error,
-    token::Client as TokenClient, Address, Env, Symbol,
+    token::Client as TokenClient, Address, Env, Symbol, Vec,
 };
 
 // ─── Security constants ───────────────────────────────────────────────────────
@@ -73,6 +73,17 @@ pub const BPS_DENOMINATOR: u32 = 10_000;
 /// most of the locked funds away from the recipient.
 pub const MAX_FEE_BPS: u32 = 1_000;
 
+/// Minimum ledgers of remaining lifetime before instance storage is extended (~1 day at 5s/ledger).
+pub const INSTANCE_TTL_THRESHOLD: u32 = 17_280;
+/// Number of ledgers to extend instance storage lifetime to (~7 days at 5s/ledger).
+pub const INSTANCE_TTL_EXTEND_TO: u32 = 120_960;
+
+fn bump_instance_ttl(env: &Env) {
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+}
+
 // ─── Storage keys ─────────────────────────────────────────────────────────────
 
 #[contracttype]
@@ -89,6 +100,13 @@ pub enum DataKey {
     PendingArbiterTime,
     FeeBps,
     FeeRecipient,
+    /// Cumulative amount paid out to the recipient (net + fee) across all
+    /// release calls so far, used to charge the fee on the running total
+    /// rather than per-call (#988).
+    TotalReleased,
+    /// Cumulative platform fee charged so far, used alongside
+    /// `TotalReleased` to compute only the incremental fee owed on each call.
+    FeePaid,
 }
 
 // ─── Escrow State ─────────────────────────────────────────────────────────────
@@ -137,6 +155,9 @@ pub enum EscrowError {
     InvalidFee = 12,
     /// The caller is not the authorized recipient.
     NotRecipient = 13,
+    /// The token is not on the configured allowlist, or `set_allowed_tokens`
+    /// was called with an empty list or after setup already completed.
+    InvalidToken = 14,
 }
 
 // ─── Contract ─────────────────────────────────────────────────────────────────
@@ -152,6 +173,44 @@ pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
+    /// Configure an optional on-chain allowlist of token contract addresses
+    /// that `initialize` / `initialize_with_fee` will accept for this escrow
+    /// instance. When set, a `token` outside the list is rejected; when never
+    /// called, any token is accepted (unrestricted, matching prior behaviour).
+    ///
+    /// This SDK version has no atomic constructor, so — like every other
+    /// setup call on this contract — it must be submitted by the deployer
+    /// before `initialize`, with no identity to authenticate against yet.
+    /// Call it right after deployment, before sharing the contract id with
+    /// the depositor (#989).
+    ///
+    /// # Panics
+    /// * `AlreadyInitialized` - If the escrow has already been initialised,
+    ///   or the allowlist has already been configured.
+    /// * `InvalidToken` - If `tokens` is empty.
+    //@ requires !has(Depositor) && !has(AllowedTokens)
+    //@ requires tokens.len() > 0
+    //@ ensures stored_allowed_tokens == tokens
+    pub fn set_allowed_tokens(env: Env, tokens: Vec<Address>) {
+        if env.storage().instance().has(&DataKey::Depositor) {
+            panic_with_error!(&env, EscrowError::AlreadyInitialized);
+        }
+        if env.storage().instance().has(&DataKey::AllowedTokens) {
+            panic_with_error!(&env, EscrowError::AlreadyInitialized);
+        }
+        if tokens.is_empty() {
+            panic_with_error!(&env, EscrowError::InvalidToken);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedTokens, &tokens);
+    }
+
+    /// Return the configured token allowlist, or `None` if unrestricted.
+    pub fn get_allowed_tokens(env: Env) -> Option<Vec<Address>> {
+        env.storage().instance().get(&DataKey::AllowedTokens)
+    }
+
     /// Initialise the escrow and transfer funds from depositor to contract.
     ///
     /// # Arguments
@@ -333,6 +392,8 @@ impl EscrowContract {
             (Symbol::new(&env, "escrow"), Symbol::new(&env, "released")),
             (recipient, amount),
         );
+
+        bump_instance_ttl(&env);
     }
 
     /// Refund depositor after expiry. Only callable by the stored depositor.
@@ -402,6 +463,8 @@ impl EscrowContract {
 
         env.events()
             .publish((Symbol::new(&env, "refunded"),), (stored_depositor, amount));
+
+        bump_instance_ttl(&env);
     }
 
     /// Return a snapshot of all escrow fields. Panics if not yet initialized.
@@ -547,6 +610,8 @@ impl EscrowContract {
                 (recipient, release_amount, remaining),
             );
         }
+
+        bump_instance_ttl(&env);
     }
 
     /// Cancel the escrow cooperatively. Requires both depositor and arbiter to authorise.
@@ -618,6 +683,8 @@ impl EscrowContract {
             (Symbol::new(&env, "escrow"), Symbol::new(&env, "cancelled")),
             (stored_depositor, amount),
         );
+
+        bump_instance_ttl(&env);
     }
 
     /// Release the remaining funds to the recipient early. Only callable by the
@@ -683,6 +750,8 @@ impl EscrowContract {
             ),
             (stored_depositor, recipient, amount),
         );
+
+        bump_instance_ttl(&env);
     }
 
     /// Voluntarily return the remaining funds to the depositor. Only callable
@@ -751,6 +820,8 @@ impl EscrowContract {
             ),
             (stored_recipient, depositor, amount),
         );
+
+        bump_instance_ttl(&env);
     }
 
     /// Propose a new arbiter. Only callable by the stored depositor.
@@ -795,6 +866,8 @@ impl EscrowContract {
             (Symbol::new(&env, "arbiter_rotation_proposed"),),
             (depositor, new_arbiter, now),
         );
+
+        bump_instance_ttl(&env);
     }
 
     /// Accept the pending arbiter rotation after the minimum time-lock.
@@ -853,6 +926,13 @@ impl EscrowContract {
             (Symbol::new(&env, "arbiter_rotation_accepted"),),
             (new_arbiter, now),
         );
+
+        bump_instance_ttl(&env);
+    }
+
+    /// Extend instance storage lifetime. Anyone can call this to keep a long-running escrow active.
+    pub fn bump(env: Env) {
+        bump_instance_ttl(&env);
     }
 
     // ─── Internal helpers ────────────────────────────────────────────────────
@@ -871,12 +951,39 @@ impl EscrowContract {
 
     /// Transfer `amount` out of the escrow to `recipient`, splitting off the
     /// configured platform fee. Guarantees `net + fee == amount`.
+    ///
+    /// The fee is charged on the *cumulative* amount released from this
+    /// escrow so far (`TotalReleased`), not on `amount` in isolation: this
+    /// call's fee is `floor(total_released * fee_bps / 10_000) -
+    /// fee_paid_so_far`. Without this, an arbiter could split a release into
+    /// many tranches small enough that each one's own fee floors to zero,
+    /// avoiding the fee entirely (#988). Tracking the running total makes the
+    /// fee on the sum of any split equal the fee on the total.
     fn pay_recipient(env: &Env, token: &Address, recipient: &Address, amount: i128) {
         let fee_bps: u32 = env.storage().instance().get(&DataKey::FeeBps).unwrap_or(0);
         let fee_recipient: Option<Address> = env.storage().instance().get(&DataKey::FeeRecipient);
 
         let fee = match fee_recipient {
-            Some(_) => Self::compute_fee(amount, fee_bps),
+            Some(_) => {
+                let total_released_before: i128 = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::TotalReleased)
+                    .unwrap_or(0);
+                let fee_paid_before: i128 =
+                    env.storage().instance().get(&DataKey::FeePaid).unwrap_or(0);
+                let total_released_after = total_released_before + amount;
+                let fee = Self::compute_fee(total_released_after, fee_bps) - fee_paid_before;
+
+                env.storage()
+                    .instance()
+                    .set(&DataKey::TotalReleased, &total_released_after);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::FeePaid, &(fee_paid_before + fee));
+
+                fee
+            }
             None => 0,
         };
         let net = amount - fee;
@@ -942,6 +1049,20 @@ impl EscrowContract {
             panic_with_error!(&env, EscrowError::InvalidFee);
         }
 
+        // Reject a token outside the configured allowlist (#989). A malicious
+        // token contract can lie about `transfer`/balances or re-enter; when
+        // `set_allowed_tokens` has restricted this instance to known-good
+        // tokens, anything else is refused before any funds move.
+        if let Some(allowed) = env
+            .storage()
+            .instance()
+            .get::<_, Vec<Address>>(&DataKey::AllowedTokens)
+        {
+            if !allowed.contains(&token) {
+                panic_with_error!(&env, EscrowError::InvalidToken);
+            }
+        }
+
         // Pull funds from depositor
         TokenClient::new(&env, &token).transfer(
             &depositor,
@@ -977,6 +1098,8 @@ impl EscrowContract {
             ),
             (depositor.clone(), recipient.clone(), amount),
         );
+
+        bump_instance_ttl(&env);
     }
 
     fn assert_not_released(env: &Env) {

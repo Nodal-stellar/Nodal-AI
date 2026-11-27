@@ -25,6 +25,7 @@ import { createLogger } from '../utils/logger';
 import { SubmitResultSchema, buildMemo } from './StellarPaymentTool';
 import { SOROBAN_TX_TIMEOUT } from './SorobanInvokeTool';
 import { baseAccountId } from '../utils/stellarSchemas';
+import { tryToStroops } from '../utils/amount';
 import { assertDestinationReady } from '../utils/destinationPreflight';
 import { paymentDestinationSchema, resolveDestination } from '../utils/destination';
 import { estimateFee, isInsufficientFeeError, submitFeeBumped } from '../fees';
@@ -50,13 +51,19 @@ export const PathPaymentInputSchema = z.object({
   sendAmount: z
     .string()
     .regex(/^(?!0(\.0+)?$)\d+(\.\d{1,7})?$/, 'sendAmount must be a valid Stellar decimal')
-    .refine((v) => parseFloat(v) > 0, 'sendAmount must be greater than zero'),
+    .refine((v) => {
+      const s = tryToStroops(v);
+      return s !== null && s > 0n;
+    }, 'sendAmount must be greater than zero'),
   destAsset: AssetSchema,
   /** Minimum the destination must receive. Omit to derive it from the best path's quote. */
   destMinAmount: z
     .string()
     .regex(/^(?!0(\.0+)?$)\d+(\.\d{1,7})?$/, 'destMinAmount must be a valid Stellar decimal')
-    .refine((v) => parseFloat(v) > 0, 'destMinAmount must be greater than zero')
+    .refine((v) => {
+      const s = tryToStroops(v);
+      return s !== null && s > 0n;
+    }, 'destMinAmount must be greater than zero')
     .optional(),
   /** Tolerance below the quoted amount, in basis points, used when destMinAmount is omitted. */
   maxSlippageBps: z

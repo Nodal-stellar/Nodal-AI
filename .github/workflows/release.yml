@@ -1,3 +1,187 @@
+name: Release — Build, Scan, Sign & Publish
+
+# Triggered on a published GitHub release (tag vX.Y.Z pushed and released in UI)
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents:    read
+  packages:    write        # push to GHCR
+  id-token:    write        # cosign keyless OIDC signing
+  security-events: write    # upload Trivy SARIF to GitHub Security tab
+
+env:
+  REGISTRY:   ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 1.  Build the Docker image (multi-stage: Rust → Node → production)
+  # ─────────────────────────────────────────────────────────────────────────────
+  build:
+    name: Build Docker image
+    runs-on: ubuntu-latest
+    outputs:
+      image-digest: ${{ steps.push.outputs.digest }}
+      image-ref:    ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Set up Docker Buildx for layer caching and multi-platform support
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Log in to GitHub Container Registry using the workflow GITHUB_TOKEN
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Derive image tags and OCI labels from the Git tag / release metadata
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+          labels: |
+            org.opencontainers.image.title=Nodal AI Agent
+            org.opencontainers.image.description=Stellar PayFi Agent Kit
+            org.opencontainers.image.vendor=Nodal
+
+      # Build and push; capture the image digest for signing
+      - name: Build and push Docker image
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context:   .
+          push:      true
+          tags:      ${{ steps.meta.outputs.tags }}
+          labels:    ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 2.  Vulnerability scan with Trivy — CRITICAL CVEs fail the release
+  # ─────────────────────────────────────────────────────────────────────────────
+  trivy-scan:
+    name: Trivy vulnerability scan
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Fail the job (exit-code 1) on any CRITICAL severity finding
+      - name: Trivy image scan — fail on CRITICAL
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref:    ${{ needs.build.outputs.image-ref }}
+          format:       sarif
+          output:       trivy-results.sarif
+          severity:     CRITICAL
+          exit-code:    "1"
+          ignore-unfixed: true
+
+      # Always upload SARIF even when the step above fails so the findings
+      # appear in the GitHub Security → Code scanning tab
+      - name: Upload Trivy SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 3.  Generate SBOM with Syft and attach it to the GitHub release
+  # ─────────────────────────────────────────────────────────────────────────────
+  sbom:
+    name: Generate SBOM (Syft)
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Install Syft from the official installer
+      - name: Install Syft
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      # Generate SBOM in SPDX JSON format (widely supported) and CycloneDX JSON
+      - name: Generate SBOM (SPDX JSON)
+        run: |
+          syft ${{ needs.build.outputs.image-ref }} \
+            -o spdx-json=sbom.spdx.json \
+            -o cyclonedx-json=sbom.cyclonedx.json
+
+      # Upload both SBOM files as release assets
+      - name: Upload SBOM to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            sbom.spdx.json
+            sbom.cyclonedx.json
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 4.  Sign the image with cosign (keyless OIDC — no long-lived key material)
+  # ─────────────────────────────────────────────────────────────────────────────
+  sign:
+    name: Sign image with cosign (keyless OIDC)
+    runs-on: ubuntu-latest
+    # Only sign after a clean Trivy scan — no signed images with known CVEs
+    needs: [build, trivy-scan]
+
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Sign using the image digest (immutable) rather than the mutable tag
+      - name: Sign the Docker image
+        env:
+          DIGEST: ${{ needs.build.outputs.image-digest }}
+        run: |
+          cosign sign --yes \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
+
+      # Verify the signature was recorded in the Rekor transparency log
+      - name: Verify cosign signature
+        env:
+          DIGEST: ${{ needs.build.outputs.image-digest }}
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "https://github.com/${{ github.repository }}/*" \
+            --certificate-oidc-issuer    "https://token.actions.githubusercontent.com" \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
 name: Release
 
 on:
@@ -7,21 +191,33 @@ on:
       - "v[0-9]+.[0-9]+.[0-9]+-*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
+
+      - name: Validate CHANGELOG.md contains release entry
+        run: |
+          TAG_NAME="${{ github.ref_name }}"
+          VERSION="${TAG_NAME#v}"
+          if ! grep -q "## \[$VERSION\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md is missing an entry for release $VERSION ($TAG_NAME)"
+            exit 1
+          fi
+          echo "Verified CHANGELOG.md contains entry for $VERSION."
 
       - name: Generate changelog
         run: npx conventional-changelog -p angular -i CHANGELOG.md -s
@@ -35,7 +231,7 @@ jobs:
         run: bash scripts/build_escrow_wasm.sh
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
           generate_release_notes: true
           files: |

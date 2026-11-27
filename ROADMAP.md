@@ -16,6 +16,7 @@ The current sprint focuses on five core themes from our issue backlog:
 ### 1. Developer Experience (DX) & Documentation
 *Target Date:* Q3 2026
 - Add public roadmap and contribution documentation to align community contributors ([#485](https://github.com/Nodal-stellar/Nodal-AI/issues/485))
+- Mark `nano_payment` as experimental in README and docs ([#979](https://github.com/Nodal-stellar/Nodal-AI/issues/979))
 - Establish pull request templates with security and test coverage checklists ([#483](https://github.com/Nodal-stellar/Nodal-AI/issues/483))
 - Configure automated pre-commit type checking and formatting hooks ([#475](https://github.com/Nodal-stellar/Nodal-AI/issues/475))
 - Provide test-only Docker profiles and devcontainer configurations ([#481](https://github.com/Nodal-stellar/Nodal-AI/issues/481))

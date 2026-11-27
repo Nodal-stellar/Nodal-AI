@@ -1,17 +1,27 @@
+#!/usr/bin/env node
+/* eslint-disable no-restricted-properties */
 /**
  * backend/mcp/server.ts - Add npx nodal-ai mcp command entry
+ *
+ * Compiled to dist/backend/mcp/index.js and exposed as the `nodal-mcp` bin.
  */
 
+// Normalise MCP_TRANSPORT before any module import so logger.ts picks up the
+// canonical value.  Treat missing / empty as 'stdio' (the default transport).
+if (!process.env.MCP_TRANSPORT) {
+  process.env.MCP_TRANSPORT = 'stdio';
+}
+
 import { PayFiAgent } from '../agent';
+import { config } from '../config';
 import { startMCPServer, startMCPHTTPServer } from './server';
 
 if (require.main === module) {
   const agent = new PayFiAgent();
-  const transport = process.env.MCP_TRANSPORT || 'stdio';
+  const transport = config.MCP_TRANSPORT;
 
   if (transport === 'http') {
-    const port = parseInt(process.env.MCP_PORT || '3001', 10);
-    startMCPHTTPServer(agent, port);
+    startMCPHTTPServer(agent, config.MCP_PORT);
   } else {
     startMCPServer(agent);
   }

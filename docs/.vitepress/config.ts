@@ -35,13 +35,26 @@ export default defineConfig({
           items: [
             { text: 'Architecture', link: '/guide/architecture' },
             { text: 'Agent Configuration', link: '/guide/agent-config' },
-            { text: 'Tools System', link: '/guide/tools' }
+            { text: 'Tools System', link: '/guide/tools' },
+            { text: 'MCP Server', link: '/guide/mcp' }
+          ]
+        },
+        {
+          text: 'AI & Automation',
+          items: [
+            { text: 'AI Payment Safety', link: '/guide/ai-safety' },
+            { text: 'Planning & Confirmation', link: '/guide/planning' },
+            { text: 'Triggers', link: '/guide/triggers' },
+            { text: 'Approvals', link: '/guide/approvals' },
+            { text: 'Tutorial: MCP Client', link: '/tutorials/mcp-client' },
+            { text: 'Tutorial: Escrow Trigger', link: '/tutorials/trigger-escrow-release' }
           ]
         },
         {
           text: 'PayFi & x402',
           items: [
             { text: 'Payment Standard', link: '/guide/payfi' },
+            { text: 'MPP Payments', link: '/guide/mpp' },
             { text: 'Security Model', link: '/guide/security' }
           ]
         },

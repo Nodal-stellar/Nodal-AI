@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import axios from 'axios';
+import { expectLoggedError } from './helpers/expectLoggedError';
 
 vi.mock('../backend/config', () => ({
   config: {
@@ -225,6 +226,7 @@ describe('breaker-open alert', () => {
 
 describe('notifier delivery', () => {
   it('a failing notifier does not stop the others or throw', async () => {
+    expectLoggedError(/Alert notifier failed/);
     registerNotifier({
       name: 'broken',
       notify: async () => {

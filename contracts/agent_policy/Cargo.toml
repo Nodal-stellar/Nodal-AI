@@ -2,6 +2,7 @@
 name = "stellar-agent-policy"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "Prototype custom account that enforces an on-chain per-window spending limit for the Nodal agent key (issue #813)"
 
 [lib]

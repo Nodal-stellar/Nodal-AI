@@ -27,13 +27,18 @@
  * this client cannot drift apart silently.
  */
 
-import { nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
+import { Asset, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
 import type { SorobanInvokeResult } from '../../tools/SorobanInvokeTool';
+import { config } from '../../config';
+import { resolveNetworkPassphrase } from '../../rpc_client';
+import { PolicyViolationError } from '../../errors';
 
 // ─── Contract surface ─────────────────────────────────────────────────────────
 
 /** Every public function exported by the escrow contract. */
 export const ESCROW_METHODS = [
+  'set_allowed_tokens',
+  'get_allowed_tokens',
   'initialize',
   'initialize_with_fee',
   'get_fee_config',
@@ -65,6 +70,7 @@ export enum EscrowErrorCode {
   NoPendingRotation = 11,
   InvalidFee = 12,
   NotRecipient = 13,
+  InvalidToken = 14,
 }
 
 /** Mirrors `MAX_FEE_BPS` in the contract (10%). */
@@ -74,6 +80,10 @@ export const ESCROW_MAX_FEE_BPS = 1_000;
 
 /** A Stellar account (`G…`) or contract (`C…`) address. */
 export type StellarAddress = string;
+
+export interface SetAllowedTokensArgs {
+  tokens: StellarAddress[];
+}
 
 export interface InitializeArgs {
   depositor: StellarAddress;
@@ -143,8 +153,55 @@ const address = (value: StellarAddress): xdr.ScVal => nativeToScVal(value, { typ
 const i128 = (value: bigint): xdr.ScVal => nativeToScVal(value, { type: 'i128' });
 const u64 = (value: bigint): xdr.ScVal => nativeToScVal(value, { type: 'u64' });
 const u32 = (value: number): xdr.ScVal => nativeToScVal(value, { type: 'u32' });
+const addressVec = (values: StellarAddress[]): xdr.ScVal => nativeToScVal(values.map(address));
+
+/**
+ * Returns the set of SAC contract addresses the backend will accept as an
+ * escrow `token` (#989). Always includes native XLM and the default x402
+ * asset (X402_ASSET_CODE/ISSUER); each `ESCROW_ALLOWED_TOKENS` entry is
+ * added too.
+ */
+function allowedEscrowTokenContracts(): Set<string> {
+  const networkPassphrase = resolveNetworkPassphrase(config.STELLAR_NETWORK);
+  const contracts = new Set<string>([Asset.native().contractId(networkPassphrase)]);
+
+  try {
+    contracts.add(
+      new Asset(config.X402_ASSET_CODE, config.X402_ASSET_ISSUER).contractId(networkPassphrase)
+    );
+  } catch {
+    // X402_ASSET_ISSUER can be a non-Stellar placeholder in contexts that
+    // never make an x402 payment (e.g. an escrow-only deployment); native
+    // XLM and ESCROW_ALLOWED_TOKENS are still enforced below.
+  }
+
+  if (config.ESCROW_ALLOWED_TOKENS) {
+    for (const entry of config.ESCROW_ALLOWED_TOKENS.split(',').map((s) => s.trim())) {
+      const [code = '', issuer] = entry.split(':');
+      const asset = entry === 'XLM' ? Asset.native() : new Asset(code, issuer);
+      contracts.add(asset.contractId(networkPassphrase));
+    }
+  }
+
+  return contracts;
+}
+
+/**
+ * Throws unless `token` is a known SAC contract (#989): the default x402
+ * asset, or one of `ESCROW_ALLOWED_TOKENS`. A token contract outside this
+ * set may lie about `transfer()`/balances or re-enter, so the backend never
+ * builds an `initialize`/`initialize_with_fee` call for one.
+ */
+export function assertKnownEscrowToken(token: StellarAddress): void {
+  if (!allowedEscrowTokenContracts().has(token)) {
+    throw new PolicyViolationError(
+      `Escrow token ${token} is not a known SAC contract. Add it to ESCROW_ALLOWED_TOKENS to allow it.`
+    );
+  }
+}
 
 function initializeArgs(a: InitializeArgs): xdr.ScVal[] {
+  assertKnownEscrowToken(a.token);
   return [
     address(a.depositor),
     address(a.recipient),
@@ -161,6 +218,16 @@ function initializeArgs(a: InitializeArgs): xdr.ScVal[] {
  * {@link ESCROW_METHODS}.
  */
 export const escrowCall = {
+  set_allowed_tokens: (a: SetAllowedTokensArgs): EscrowCall<'set_allowed_tokens'> => ({
+    method: 'set_allowed_tokens',
+    args: [addressVec(a.tokens)],
+  }),
+
+  get_allowed_tokens: (): EscrowCall<'get_allowed_tokens'> => ({
+    method: 'get_allowed_tokens',
+    args: [],
+  }),
+
   initialize: (a: InitializeArgs): EscrowCall<'initialize'> => ({
     method: 'initialize',
     args: initializeArgs(a),
@@ -246,6 +313,12 @@ export function decodeFeeConfig(value: xdr.ScVal): FeeConfig {
   return { feeBps: Number(feeBps), feeRecipient: feeRecipient ?? null };
 }
 
+/** Decode the `Option<Vec<Address>>` returned by `get_allowed_tokens`. */
+export function decodeAllowedTokens(value: xdr.ScVal): StellarAddress[] | null {
+  const raw = scValToNative(value) as string[] | null | undefined;
+  return raw ? raw.map(String) : null;
+}
+
 // ─── Client ───────────────────────────────────────────────────────────────────
 
 /** Anything that executes a `soroban_invoke` input — e.g. `SorobanInvokeTool`. */
@@ -280,6 +353,13 @@ export class EscrowClient {
       args: call.args,
       simulateOnly: options.simulateOnly ?? false,
     });
+  }
+
+  setAllowedTokens(
+    a: SetAllowedTokensArgs,
+    options?: EscrowInvokeOptions
+  ): Promise<SorobanInvokeResult> {
+    return this.invoke(escrowCall.set_allowed_tokens(a), options);
   }
 
   initialize(a: InitializeArgs, options?: EscrowInvokeOptions): Promise<SorobanInvokeResult> {

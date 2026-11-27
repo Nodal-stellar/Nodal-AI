@@ -15,6 +15,8 @@
  *   - `repeated_failures`  — N consecutive task failures within a time window.
  *     Fires once per streak; a successful task re-arms it.
  *   - `breaker_open`       — an RPC circuit breaker tripped open.
+ *   - `channel_expired`    — an MPP payment channel reached its timeout and
+ *     was swept to `Expired`, releasing its spending reservation.
  *
  * Configuration (all optional, read from the environment):
  *   ALERT_WEBHOOK_URL           generic JSON webhook receiving the raw event
@@ -32,13 +34,18 @@
  */
 
 import axios from 'axios';
+import { config } from './config';
 import { createLogger } from './utils/logger';
 
 const log = createLogger('alerts');
 
 // ─── Event model ──────────────────────────────────────────────────────────────
 
-export type AlertType = 'spending_threshold' | 'repeated_failures' | 'breaker_open';
+export type AlertType =
+  | 'spending_threshold'
+  | 'repeated_failures'
+  | 'breaker_open'
+  | 'channel_expired';
 export type AlertSeverity = 'warning' | 'critical';
 
 export interface AlertEvent {
@@ -148,7 +155,7 @@ export function clearNotifiers(): void {
 function loadEnvNotifiers(): void {
   if (envNotifiersLoaded) return;
   envNotifiersLoaded = true;
-  const { ALERT_WEBHOOK_URL, ALERT_SLACK_WEBHOOK_URL, ALERT_DISCORD_WEBHOOK_URL } = process.env;
+  const { ALERT_WEBHOOK_URL, ALERT_SLACK_WEBHOOK_URL, ALERT_DISCORD_WEBHOOK_URL } = config;
   if (ALERT_WEBHOOK_URL) notifiers.push(new WebhookNotifier(ALERT_WEBHOOK_URL));
   if (ALERT_SLACK_WEBHOOK_URL) notifiers.push(new SlackNotifier(ALERT_SLACK_WEBHOOK_URL));
   if (ALERT_DISCORD_WEBHOOK_URL) notifiers.push(new DiscordNotifier(ALERT_DISCORD_WEBHOOK_URL));
@@ -180,19 +187,6 @@ function buildEvent(
 
 // ─── Thresholds ──────────────────────────────────────────────────────────────
 
-function parseThresholds(raw: string | undefined): number[] {
-  const parsed = (raw ?? '0.8,1')
-    .split(',')
-    .map((s) => parseFloat(s.trim()))
-    .filter((n) => Number.isFinite(n) && n > 0);
-  return [...new Set(parsed)].sort((a, b) => a - b);
-}
-
-function parsePositiveInt(raw: string | undefined, fallback: number): number {
-  const n = raw === undefined ? NaN : parseInt(raw, 10);
-  return Number.isInteger(n) && n > 0 ? n : fallback;
-}
-
 // ─── Spending threshold alerts ───────────────────────────────────────────────
 
 /**
@@ -201,10 +195,10 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
  * i.e. once the spends that crossed it have aged out of the window.
  */
 export class SpendingAlertMonitor {
-  private readonly thresholds: number[];
+  private readonly thresholds: readonly number[];
   private readonly fired = new Set<number>();
 
-  constructor(thresholds: number[] = parseThresholds(process.env.ALERT_SPENDING_THRESHOLDS)) {
+  constructor(thresholds: readonly number[] = config.ALERT_SPENDING_THRESHOLDS ?? [0.8, 1]) {
     this.thresholds = thresholds;
   }
 
@@ -266,11 +260,8 @@ export class FailureAlertMonitor {
   private alerted = false;
 
   constructor(
-    private readonly threshold: number = parsePositiveInt(process.env.ALERT_FAILURE_THRESHOLD, 5),
-    private readonly windowMs: number = parsePositiveInt(
-      process.env.ALERT_FAILURE_WINDOW_MS,
-      300_000
-    )
+    private readonly threshold: number = config.ALERT_FAILURE_THRESHOLD ?? 5,
+    private readonly windowMs: number = config.ALERT_FAILURE_WINDOW_MS ?? 300_000
   ) {}
 
   recordFailure(taskType: string, now: number = Date.now()): AlertEvent | null {

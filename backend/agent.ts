@@ -11,6 +11,34 @@
  */
 
 // Updated imports
+import { EventEmitter } from "events";
+import { rpc } from "@stellar/stellar-sdk";
+import { config, MAINNET_SPENDING_CAP } from "./config";
+import { logger } from "./logger";
+import { saveResult } from "./persistence";
+import { StructuredError, ErrorType, getErrorType } from "./errors";
+import { StellarPaymentTool } from "./tools/StellarPaymentTool";
+import { SorobanInvokeTool } from "./tools/SorobanInvokeTool";
+import { X402PaymentTool, X402Challenge, X402ChallengeSchema } from "./tools/X402PaymentTool";
+import { AccountInfoTool } from "./tools/AccountInfoTool";
+import { TrustlineTool } from "./tools/TrustlineTool";
+import { MultiSigPaymentTool } from "./tools/MultiSigPaymentTool";
+import { BatchPaymentTool } from "./tools/BatchPaymentTool";
+import { SorobanQueryTool } from "./tools/SorobanQueryTool";
+import { BalanceCheckTool } from "./tools/BalanceCheckTool";
+import { PathPaymentTool } from "./tools/PathPaymentTool";
+import { FeeBumpTool } from "./tools/FeeBumpTool";
+import { DexOfferTool } from "./tools/DexOfferTool";
+import { listen as listenContractEvents } from "./tools/ContractEventListener";
+
+import { horizonServer } from "./rpc_client";
+import { createLogger, generateCorrelationId } from "./utils/logger";
+import { SpendingTracker } from "./spending_tracker";
+import { dispatchWebhook } from "./webhook";
+import { approvalStore } from "./approval_store";
+
+// Instantiate a singleton tracker
+export const spendingTracker = new SpendingTracker();
 import { EventEmitter } from 'events';
 import { createHash, randomUUID } from 'crypto';
 import { rpc } from '@stellar/stellar-sdk';
@@ -25,6 +53,8 @@ import {
   listPendingApprovals,
   decideApproval,
   expirePendingApprovals,
+  saveAgentState,
+  loadAgentState,
   getIdempotencyResult,
   saveIdempotencyResult,
   pruneIdempotencyKeys,
@@ -65,6 +95,7 @@ import { SorobanEventIndexerTool } from './tools/SorobanEventIndexerTool';
 import { StellarIdentityTool } from './tools/StellarIdentityTool';
 import { FriendBotTool } from './tools/FriendBotTool';
 import { NanoPaymentTool } from './tools/NanoPaymentTool';
+import { ClaimableBalanceTool, type ClaimableBalanceInput } from './tools/ClaimableBalanceTool';
 import { listen as listenContractEvents } from './tools/ContractEventListener';
 import {
   watchContractStorage,
@@ -100,6 +131,50 @@ export type { AgentEvents };
  */
 export function _resetSpendingTrackerForTests(): void {
   spendingTracker._resetForTests();
+}
+
+// ─── Approval threshold helper ────────────────────────────────────────────────
+
+/**
+ * Extract the numeric payment amount from a task payload.
+ * Returns NaN when no recognised amount field is present.
+ */
+function extractPaymentAmount(task: AgentTask): number {
+  const p = task.payload as Record<string, unknown>;
+  // Most payment tools use "amount"; path_payment uses "sendAmount";
+  // batch_payment sums individual amounts.
+  if (task.type === "batch_payment") {
+    const payments = Array.isArray(p?.payments) ? p.payments : [];
+    return payments.reduce((sum: number, pay: unknown) => {
+      const amt = parseFloat((pay as Record<string, unknown>)?.amount as string);
+      return sum + (isNaN(amt) ? 0 : amt);
+    }, 0);
+  }
+  if (task.type === "path_payment") return parseFloat(p?.sendAmount as string);
+  return parseFloat(p?.amount as string);
+}
+
+/**
+ * Returns true when the task payload's amount exceeds the configured
+ * `APPROVAL_THRESHOLD` and that threshold is non-zero.
+ */
+function requiresApproval(task: AgentTask): boolean {
+  const threshold = parseFloat(config.APPROVAL_THRESHOLD);
+  if (isNaN(threshold) || threshold <= 0) return false;
+
+  // Only payment-moving task types are subject to approval.
+  const guarded: AgentTask["type"][] = [
+    "stellar_payment",
+    "x402_respond",
+    "multisig_payment",
+    "batch_payment",
+    "path_payment",
+    "dex_offer",
+  ];
+  if (!guarded.includes(task.type)) return false;
+
+  const amount = extractPaymentAmount(task);
+  return !isNaN(amount) && amount > threshold;
 }
 
 // ─── Spending limit guard ─────────────────────────────────────────────────────
@@ -185,6 +260,12 @@ function taskSpends(task: AgentTask): TaskSpend[] {
     case 'dex_offer':
       // Only guard non-zero amounts (delete action sets amount to "0")
       return p.amount && p.amount !== '0' ? one(p.amount, assetObjectKey(p.selling)) : [];
+
+    case 'claimable_balance':
+      // Only creating a balance moves value; claiming one has no amount to guard.
+      return p.action === 'create'
+        ? one(p.amount, assetFieldsKey(p.assetCode, p.assetIssuer, 'XLM'))
+        : [];
 
     default:
       return [];
@@ -295,18 +376,78 @@ function assertDestinationsAllowed(task: AgentTask): void {
  * APPROVAL_THRESHOLD (#736): `sendAmount` for path payments, the sum of every
  * payment for batches, and `amount` otherwise. `null` when the task carries no
  * amount.
+ *
+ * Display/record purposes only — the approval-threshold *decision* is made by
+ * {@link findExceededApprovalThreshold}, which compares per-asset in BigInt
+ * stroops (#953) rather than this function's pooled, float-summed amount.
  */
 function taskAmount(task: AgentTask): string | null {
   const p = (task.payload ?? {}) as Record<string, unknown>;
   if (task.type === 'batch_payment' && Array.isArray(p.payments)) {
-    const total = p.payments.reduce((sum: number, pay: unknown) => {
-      const amt = parseFloat((pay as Record<string, unknown>)?.amount as string);
-      return sum + (isNaN(amt) ? 0 : amt);
-    }, 0);
-    return String(total);
+    let totalStroops = 0n;
+    for (const pay of p.payments) {
+      const amtStr = (pay as Record<string, unknown>)?.amount;
+      if (typeof amtStr === 'string') {
+        const s = tryToStroops(amtStr);
+        if (s !== null) totalStroops += s;
+      }
+    }
+    return stroopsToString(totalStroops);
   }
   const amount = task.type === 'path_payment' ? p.sendAmount : p.amount;
   return typeof amount === 'string' ? amount : null;
+}
+
+/**
+ * The approval threshold that applies to `assetKey`: the per-asset entry in
+ * APPROVAL_THRESHOLDS_MAP (#953) when listed, else the global
+ * APPROVAL_THRESHOLD. `undefined` when neither is configured for this asset.
+ */
+function approvalThresholdFor(assetKey: string): string | undefined {
+  return config.APPROVAL_THRESHOLDS_MAP.get(assetKey) ?? config.APPROVAL_THRESHOLD;
+}
+
+/** Which spend, if any, of `task` exceeds its applicable approval threshold. */
+interface ExceededApprovalThreshold {
+  assetKey: string;
+  amount: string;
+  threshold: string;
+}
+
+/**
+ * Finds the first spend of `task` that exceeds its applicable approval
+ * threshold (#953), comparing in exact BigInt stroops per asset — never with
+ * a float parse, and never pooling two different assets' amounts into one
+ * global number the way the old `taskAmount()`-based check did.
+ *
+ * Task types `taskSpends()` doesn't itemize by asset (i.e. it returns no
+ * entries for them) fall back to comparing `taskAmount()` against the global
+ * APPROVAL_THRESHOLD only, preserving their previous (asset-blind) coverage.
+ */
+function findExceededApprovalThreshold(task: AgentTask): ExceededApprovalThreshold | null {
+  const spends = taskSpends(task);
+  if (spends.length > 0) {
+    for (const spend of spends) {
+      const threshold = approvalThresholdFor(spend.assetKey);
+      if (threshold === undefined) continue;
+      const stroops = tryToStroops(spend.amount);
+      if (stroops !== null && stroops > toStroops(threshold)) {
+        return { assetKey: spend.assetKey, amount: spend.amount, threshold };
+      }
+    }
+    return null;
+  }
+
+  const amount = taskAmount(task);
+  const threshold = config.APPROVAL_THRESHOLD;
+  if (amount === null || threshold === undefined) return null;
+  const stroops = tryToStroops(amount);
+  if (stroops !== null && stroops > toStroops(threshold)) {
+    // This task type isn't itemized by taskSpends(), so there's no specific
+    // asset to name — the comparison above is already asset-blind for it.
+    return { assetKey: '(unspecified asset)', amount, threshold };
+  }
+  return null;
 }
 
 // ─── Task types ───────────────────────────────────────────────────────────────
@@ -343,7 +484,8 @@ export type BuiltinTaskType =
   | 'ledger_info'
   | 'network_status'
   | 'offer_book'
-  | 'soroban_storage';
+  | 'soroban_storage'
+  | 'claimable_balance';
 
 /**
  * Any task type `run()` accepts: a built-in one, or the name of a tool added
@@ -368,6 +510,11 @@ export interface AgentTask {
    * Keys expire after 24 hours.
    */
   idempotencyKey?: string;
+  /**
+   * Hold this value-moving task for human approval regardless of
+   * APPROVAL_THRESHOLD (used by the MCP server's `approve` payment mode, #917).
+   */
+  requireApproval?: boolean;
 }
 
 /**
@@ -453,7 +600,6 @@ export type TaskPayloadMap = {
     amountRaw: string;
     senderAccount?: string;
     senderSeed?: string;
-    rpcUrl?: string;
     skipPrecheck?: boolean;
   };
   soroban_query: { contractId: string; key: string };
@@ -462,6 +608,7 @@ export type TaskPayloadMap = {
   offer_book: { base: string; counter: string; limit?: number };
   soroban_storage: { contractId: string; key: string };
   transaction_build: { operations: unknown[]; fee?: string };
+  claimable_balance: ClaimableBalanceInput;
 };
 
 /**
@@ -511,6 +658,7 @@ export type TaskResultMap = {
   offer_book: { bids: unknown[]; asks: unknown[] };
   soroban_storage: { value: unknown };
   transaction_build: { envelopeXdr: string };
+  claimable_balance: { txHash: string; ledger: number };
 };
 
 export interface AgentResultData {
@@ -535,12 +683,24 @@ export interface AgentResult {
    * (e.g., InsufficientFunds, NetworkTimeout) without string matching.
    */
   errorType?: string;
+  /** Suggested HTTP status for API layers (e.g. 409 for IdempotencyInProgress). */
+  statusCode?: number;
   /**
    * Correlation ID that ties every log line, persisted result, and webhook
    * dispatch for a single task execution together. Generated at dispatch time
    * unless the caller supplies one on the task.
    */
   correlationId?: string;
+  /**
+   * When the task requires human approval before execution, this field is set
+   * to the approval ID returned by the approval store.  The task has NOT been
+   * submitted; call `POST /approvals/:id` to approve or deny it.
+   */
+  approvalId?: string;
+  /**
+   * Set to true when the task was held for human approval rather than executed.
+   */
+  pendingApproval?: boolean;
   /** Wall-clock time in milliseconds spent executing the task (from dispatch to completion/failure). */
   durationMs?: number;
   /**
@@ -578,7 +738,16 @@ export const VALUE_MOVING_TASK_TYPES: ReadonlySet<TaskType> = new Set<TaskType>(
   'swap',
   'set_options',
   'cross_border_payment',
+  'claimable_balance',
 ]);
+
+/** True when a failed result is transient and must not be cached under its idempotency key. */
+export function isRetryableFailure(result: AgentResult): boolean {
+  if (result.success) return false;
+  // No errorType (e.g. capacity rejection) means nothing definitive happened.
+  if (!result.errorType) return true;
+  return RETRYABLE_ERROR_TYPES.has(result.errorType);
+}
 
 // ─── Middleware types ─────────────────────────────────────────────────────────────
 
@@ -722,6 +891,7 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
   private stellarIdentityTool: StellarIdentityTool;
   private friendBotTool: FriendBotTool;
   private nanoPaymentTool: NanoPaymentTool;
+  private claimableBalanceTool: ClaimableBalanceTool;
 
   private activeTasks = 0;
   private isDraining = false;
@@ -782,6 +952,7 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
     this.stellarIdentityTool = new StellarIdentityTool(this.signer);
     this.friendBotTool = new FriendBotTool();
     this.nanoPaymentTool = new NanoPaymentTool();
+    this.claimableBalanceTool = new ClaimableBalanceTool(this.signer);
 
     for (const tool of createBuiltinTools(this.signer)) {
       this.registerTool(tool);
@@ -824,8 +995,12 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
   /**
    * Start polling the Horizon payment stream for incoming x402 challenges.
    * Calls onChallenge for each payment whose memo starts with "x402:".
+   * The callback receives both the parsed challenge and the raw Horizon payment object.
    */
-  startListening(resourceUrl: string, onChallenge: (challenge: X402Challenge) => void): void {
+  startListening(
+    resourceUrl: string,
+    onChallenge: (challenge: X402Challenge, rawPayment: any) => void,
+  ): void {
     if (this._streamStop) return; // already listening
 
     const closeStream = horizonServer
@@ -838,7 +1013,7 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
           try {
             const raw: unknown = JSON.parse(Buffer.from(memo.slice(5), 'base64').toString('utf8'));
             const challenge: X402Challenge = X402ChallengeSchema.parse(raw);
-            onChallenge(challenge);
+            onChallenge(challenge, payment);
           } catch (err) {
             // Malformed or schema-invalid memo — log and drop rather than
             // forwarding to onChallenge (or letting Zod's error surface
@@ -987,6 +1162,30 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
     logger.info('Agent destroyed — all event listeners removed');
   }
 
+  /**
+   * Execute a previously held task after an operator approves it.
+   *
+   * Calls `approvalStore.approve(id)` (which throws on unknown /
+   * already-processed / expired IDs), then re-dispatches the original task
+   * through `run()` while bypassing the approval gate for this specific call.
+   */
+  async executeApproved(approvalId: string): Promise<AgentResult> {
+    const entry = approvalStore.approve(approvalId);
+    this._preApprovedIds.add(approvalId);
+    try {
+      return await this.run({
+        ...entry.task,
+        // Carry original correlationId so logs are linkable to the held result
+        correlationId: entry.task.correlationId ?? `approved:${approvalId}`,
+      });
+    } finally {
+      this._preApprovedIds.delete(approvalId);
+    }
+  }
+
+  /** Approval IDs currently executing — these bypass the threshold gate. */
+  private readonly _preApprovedIds = new Set<string>();
+
   drain(): void {
     this.isDraining = true;
     // Queued tasks have not started, so settle them now rather than letting
@@ -997,6 +1196,10 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
     }
     logger.info({ rejectedQueuedTasks: queued.length }, 'Agent draining — rejecting new tasks');
   }
+  async waitForPendingTasks(): Promise<void> {
+    if (this.activeTasks === 0) return;
+    logger.info("Waiting for pending tasks to finish", { activeTasks: this.activeTasks });
+    return new Promise<void>((resolve) => {
 
   private shuttingDownResult(task: AgentTask, correlationId: string): AgentResult {
     return {
@@ -1050,18 +1253,26 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
   // ─── Human-in-the-loop approvals (#736) ───────────────────────────────────
 
   /**
-   * Hold a task above APPROVAL_THRESHOLD as `pending_approval` instead of
-   * executing it. Its amount is reserved against the spending window straight
-   * away, so a pile of pending approvals cannot together exceed the limit, and
-   * a notification webhook is sent.
+   * Hold a task above APPROVAL_THRESHOLD (or any task with `requireApproval`)
+   * as `pending_approval` instead of executing it. Its amount is reserved
+   * against the spending window straight away, so a pile of pending approvals
+   * cannot together exceed the limit, and a notification webhook is sent.
    *
    * @returns the pending result, or null when the task does not need approval.
    */
   private holdForApproval(task: AgentTask, correlationId: string): AgentResult | null {
-    if (config.APPROVAL_THRESHOLD === undefined) return null;
-    const amount = taskAmount(task);
-    if (amount === null || !(parseFloat(amount) > parseFloat(config.APPROVAL_THRESHOLD))) {
-      return null;
+    let amount = taskAmount(task);
+    let exceeded: ExceededApprovalThreshold | null = null;
+    if (task.requireApproval) {
+      amount = amount ?? '0';
+    } else {
+      if (config.APPROVAL_THRESHOLD === undefined) return null;
+      if (amount === null) return null;
+      const amtStroops = tryToStroops(amount);
+      const threshStroops = tryToStroops(config.APPROVAL_THRESHOLD);
+      if (amtStroops === null || threshStroops === null || !(amtStroops > threshStroops)) {
+        return null;
+      }
     }
 
     const reservationIds = reserveTaskSpends(task);
@@ -1077,6 +1288,7 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
     };
     try {
       savePendingApproval(approval);
+      saveAgentState(`approval_reservations:${approval.id}`, JSON.stringify(reservationIds));
     } catch (err) {
       for (const reservationId of reservationIds) spendingTracker.release(reservationId);
       throw err;
@@ -1096,7 +1308,9 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
         approvalId: approval.id,
         expiresAt: new Date(approval.expiresAt).toISOString(),
       },
-      error: `Amount ${amount} exceeds APPROVAL_THRESHOLD of ${config.APPROVAL_THRESHOLD} — awaiting approval`,
+      error: task.requireApproval
+        ? `${task.type} requires human approval — awaiting approval`
+        : `Amount ${exceeded!.amount} (${exceeded!.assetKey}) exceeds its approval threshold of ${exceeded!.threshold} — awaiting approval`,
       errorType: ErrorType.PendingApproval,
       correlationId,
     };
@@ -1105,9 +1319,24 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
   }
 
   private releaseApprovalReservation(id: string): void {
-    const reservationIds = this.approvalReservations.get(id);
+    let reservationIds = this.approvalReservations.get(id);
+    if (reservationIds === undefined) {
+      try {
+        const stored = loadAgentState(`approval_reservations:${id}`);
+        if (stored) {
+          reservationIds = JSON.parse(stored) as string[];
+        }
+      } catch {
+        // ignore
+      }
+    }
     if (reservationIds === undefined) return;
     this.approvalReservations.delete(id);
+    try {
+      saveAgentState(`approval_reservations:${id}`, '');
+    } catch {
+      // ignore
+    }
     for (const reservationId of reservationIds) spendingTracker.release(reservationId);
   }
 
@@ -1119,26 +1348,68 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
     }
   }
 
-  /** Approvals still waiting for a decision. */
-  listApprovals(): PendingApproval[] {
+  /** Approvals still waiting for a decision, each with its approve votes so far (#954). */
+  listApprovals(): Array<PendingApproval & { votes: string[] }> {
     this.expireApprovals();
-    return listPendingApprovals();
+    return listPendingApprovals().map((approval) => ({
+      ...approval,
+      votes: getApprovalVotes(approval.id),
+    }));
   }
 
   /**
-   * Approve a pending task and execute it. Only the call that moves the
-   * approval out of `pending_approval` executes the task, so approving twice
-   * runs it once; later calls just return the approval's current state.
+   * True when `approval`'s amount requires APPROVAL_MIN_APPROVERS distinct
+   * approvers before it executes (#954), rather than just one.
+   */
+  private needsMultipleApprovers(approval: PendingApproval): boolean {
+    const threshold = config.APPROVAL_MULTI_APPROVER_THRESHOLD;
+    if (threshold === undefined) return false;
+    const stroops = tryToStroops(approval.amount);
+    return stroops !== null && stroops > toStroops(threshold);
+  }
+
+  /**
+   * Approve a pending task and execute it (#954: attributed to `approver`,
+   * "admin" when omitted — the shared ADMIN_API_TOKEN). Only the call that
+   * moves the approval out of `pending_approval` executes the task, so
+   * approving twice runs it once; later calls just return the current state.
+   *
+   * Above APPROVAL_MULTI_APPROVER_THRESHOLD, this records `approver`'s vote
+   * instead of deciding immediately, and only executes once
+   * APPROVAL_MIN_APPROVERS distinct approvers have voted; `votes` on the
+   * returned approval shows who has voted so far.
    *
    * @returns null when no approval has this id.
    */
-  async approve(id: string): Promise<{ approval: PendingApproval; result?: AgentResult } | null> {
+  async approve(
+    id: string,
+    approver: string | null = null
+  ): Promise<{ approval: PendingApproval & { votes?: string[] }; result?: AgentResult } | null> {
     this.expireApprovals();
     const approval = getPendingApproval(id);
     if (!approval) return null;
-    if (!decideApproval(id, 'approved')) return { approval };
+    const decidedBy = approver ?? 'admin';
 
-    log.warn({ approvalId: id, taskType: approval.taskType }, 'Pending approval approved');
+    if (this.needsMultipleApprovers(approval)) {
+      const voteCount = recordApprovalVote(id, decidedBy);
+      const votes = getApprovalVotes(id);
+      if (voteCount < config.APPROVAL_MIN_APPROVERS) {
+        log.warn(
+          { approvalId: id, votes, required: config.APPROVAL_MIN_APPROVERS },
+          'Approval vote recorded; awaiting more approvers'
+        );
+        return { approval: { ...(getPendingApproval(id) ?? approval), votes } };
+      }
+    }
+
+    if (!decideApproval(id, 'approved', Date.now(), decidedBy)) {
+      return { approval: getPendingApproval(id) ?? approval };
+    }
+
+    log.warn(
+      { approvalId: id, taskType: approval.taskType, decidedBy },
+      'Pending approval approved'
+    );
     // The task reserves its own amount when it runs.
     this.releaseApprovalReservation(id);
     const task: AgentTask = {
@@ -1152,16 +1423,19 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
   }
 
   /**
-   * Deny a pending task and release its spending reservation.
+   * Deny a pending task and release its spending reservation (#954:
+   * attributed to `approver`, "admin" when omitted). Any single approver may
+   * deny regardless of APPROVAL_MIN_APPROVERS — consensus is required only
+   * to move money, not to block it.
    *
    * @returns null when no approval has this id.
    */
-  deny(id: string): PendingApproval | null {
+  deny(id: string, approver: string | null = null): PendingApproval | null {
     this.expireApprovals();
     if (!getPendingApproval(id)) return null;
-    if (decideApproval(id, 'denied')) {
+    if (decideApproval(id, 'denied', Date.now(), approver ?? 'admin')) {
       this.releaseApprovalReservation(id);
-      log.warn({ approvalId: id }, 'Pending approval denied');
+      log.warn({ approvalId: id, deniedBy: approver ?? 'admin' }, 'Pending approval denied');
     }
     return getPendingApproval(id) ?? null;
   }
@@ -1239,27 +1513,62 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
       return this.shuttingDownResult(task, correlationId);
     }
 
-    // ── Idempotency check (#payment-idempotency) ─────────────────────────────
-    if (task.idempotencyKey) {
-      const existing = getIdempotencyResult(task.idempotencyKey, task.payload);
-      if (existing && 'conflict' in existing) {
-        return {
-          success: false,
-          taskType: task.type,
-          error: `Idempotency key "${task.idempotencyKey}" already used with a different payload`,
-          errorType: ErrorType.IdempotencyConflict,
-          correlationId,
-        };
-      }
-      if (existing) {
-        taskLog.info(
-          { idempotencyKey: task.idempotencyKey },
-          'Returning cached result for idempotent request'
-        );
-        return { ...existing, correlationId };
-      }
+    if (!task.idempotencyKey) {
+      return this.dispatch(task, correlationId, taskLog);
     }
 
+    // ── Idempotency claim (#payment-idempotency, #950, #951) ─────────────────
+    // Atomically claim the key with an in_progress record before executing so
+    // two concurrent requests with the same key cannot both execute.
+    const key = task.idempotencyKey;
+    const claim = claimIdempotencyKey(key, task.type, task.payload);
+    if (claim.status === 'conflict') {
+      return {
+        success: false,
+        taskType: task.type,
+        error: `Idempotency key "${key}" already used with a different payload`,
+        errorType: ErrorType.IdempotencyConflict,
+        correlationId,
+      };
+    }
+    if (claim.status === 'in_progress') {
+      return {
+        success: false,
+        taskType: task.type,
+        error: `A request with idempotency key "${key}" is already in progress`,
+        errorType: ErrorType.IdempotencyInProgress,
+        statusCode: 409,
+        correlationId,
+      };
+    }
+    if (claim.status === 'cached') {
+      taskLog.info({ idempotencyKey: key }, 'Returning cached result for idempotent request');
+      return { ...claim.result, correlationId };
+    }
+
+    let result: AgentResult;
+    try {
+      result = await this.dispatch(task, correlationId, taskLog);
+    } catch (err) {
+      releaseIdempotencyKey(key);
+      throw err;
+    }
+    // Cache successes and definitive failures; release the key on transient
+    // failures so a retry with the same key re-executes (#950).
+    if (result.success || !isRetryableFailure(result)) {
+      saveIdempotencyResult(key, task.type, task.payload, result);
+    } else {
+      releaseIdempotencyKey(key);
+    }
+    return result;
+  }
+
+  /** Capacity check + execution, after the idempotency claim. */
+  private async dispatch(
+    task: AgentTask,
+    correlationId: string,
+    taskLog: ReturnType<typeof createLogger>
+  ): Promise<AgentResult> {
     // ── Concurrency rate limit — queue when saturated if queueCapacity allows,
     // otherwise reject ──
     if (this.activeTasks >= config.MAX_CONCURRENT_TASKS) {
@@ -1346,6 +1655,34 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
     taskLog: ReturnType<typeof createLogger>
   ): Promise<AgentResult> {
     this.activeTasks++;
+    taskLog.info({ taskType: task.type }, "Running task");
+    try {
+      // ── Approval gate: hold tasks that exceed APPROVAL_THRESHOLD ──────────
+      // Pre-approved tasks (from executeApproved()) skip this gate.
+      const isPreApproved =
+        correlationId.startsWith("approved:") ||
+        this._preApprovedIds.has(correlationId.replace("approved:", ""));
+      if (!isPreApproved && requiresApproval(task)) {        this.activeTasks--;
+        const approvalId = approvalStore.hold(task);
+        taskLog.info(
+          { taskType: task.type, approvalId },
+          "Task held for approval — amount exceeds APPROVAL_THRESHOLD"
+        );
+        const heldResult: AgentResult = {
+          success: false,
+          taskType: task.type,
+          pendingApproval: true,
+          approvalId,
+          correlationId,
+          error: `Task requires human approval (id: ${approvalId})`,
+        };
+        this.emit("task:held", heldResult);
+        saveResult({ ...heldResult, timestamp: new Date().toISOString() });
+        void dispatchWebhook(heldResult);
+        return heldResult;
+      }
+
+      let data: unknown;
     this.emit('task:started', { taskType: task.type, correlationId });
     const startMs = Date.now();
 
@@ -1498,6 +1835,10 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
             data = await this.nanoPaymentTool.execute(task.payload);
             break;
 
+          case 'claimable_balance':
+            data = await this.claimableBalanceTool.execute(task.payload);
+            break;
+
           default: {
             // Registry dispatch (#746): built-in tools without a case above and
             // custom tools added with registerTool().
@@ -1554,11 +1895,6 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
         const timestamp = new Date().toISOString();
         saveResult({ ...result, timestamp });
 
-        // Store idempotency result if key provided (#payment-idempotency)
-        if (task.idempotencyKey) {
-          saveIdempotencyResult(task.idempotencyKey, task.type, task.payload, result);
-        }
-
         // The transaction is already on-chain at this point, so an audit-log
         // failure is logged loudly rather than reported as a task failure that
         // could prompt the caller to resubmit the payment.
@@ -1601,11 +1937,6 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
         // Persist failed result (#failed-results-persistence)
         const timestamp = new Date().toISOString();
         saveResult({ ...result, timestamp });
-
-        // Store idempotency result for failures too (#payment-idempotency)
-        if (task.idempotencyKey) {
-          saveIdempotencyResult(task.idempotencyKey, task.type, task.payload, result);
-        }
 
         void dispatchWebhook(result);
         return result;
@@ -1675,11 +2006,6 @@ export class PayFiAgent extends EventEmitter<AgentEvents> {
       // Persist middleware failure result
       const timestamp = new Date().toISOString();
       saveResult({ ...result, timestamp });
-
-      // Store idempotency result for middleware failures too
-      if (task.idempotencyKey) {
-        saveIdempotencyResult(task.idempotencyKey, task.type, task.payload, result);
-      }
 
       void dispatchWebhook(result);
       return result;

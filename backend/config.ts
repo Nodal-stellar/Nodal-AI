@@ -23,8 +23,31 @@ import * as dotenv from 'dotenv';
 import { Asset, Keypair, Networks } from '@stellar/stellar-sdk';
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
 import { isValidStellarContractId, isValidStellarPublicKey } from './utils/stellarSchemas';
+import { toStroops, tryToStroops } from './utils/amount';
 
 export const MAINNET_SPENDING_CAP = 10_000;
+
+/**
+ * Validates a comma-separated asset allowlist: each entry must be "XLM" or
+ * "CODE:ISSUER" (code <= 12 chars, issuer a valid Ed25519 public key).
+ * Shared by X402_ALLOWED_ASSETS and ESCROW_ALLOWED_TOKENS.
+ */
+function isValidAssetAllowlist(val: string): boolean {
+  return val
+    .split(',')
+    .map((entry) => entry.trim())
+    .every((entry) => {
+      if (entry === 'XLM') return true;
+      const [code, issuer, ...extra] = entry.split(':');
+      return (
+        extra.length === 0 &&
+        !!code &&
+        code.length <= 12 &&
+        !!issuer &&
+        isValidStellarPublicKey(issuer)
+      );
+    });
+}
 
 // Load .env file (no-op when running in CI / production with real env vars)
 dotenv.config();
@@ -106,8 +129,8 @@ export const EnvSchema = z.object({
   AGENT_SECRET_KEY_ARN: z.string().optional(),
 
   // Signing backend — `local` signs with the in-memory agent keypair, `vault`
-  // delegates to a HashiCorp Vault transit ed25519 key (VAULT_TOKEN is read
-  // from the environment by backend/signers, never stored on config).
+  // delegates to a HashiCorp Vault transit ed25519 key (VAULT_TOKEN is
+  // validated here and exposed only through getVaultToken()).
   SIGNER_BACKEND: z
     .enum(['local', 'vault'], {
       error: () => 'SIGNER_BACKEND must be one of: local | vault',
@@ -116,6 +139,8 @@ export const EnvSchema = z.object({
   VAULT_ADDR: z.string().url('VAULT_ADDR must be a valid URL').optional(),
   VAULT_TRANSIT_MOUNT: z.string().min(1).default('transit'),
   VAULT_TRANSIT_KEY: z.string().min(1).optional(),
+  // Secret used to authenticate to Vault; captured privately and never exposed on AgentConfig.
+  VAULT_TOKEN: z.string().min(1).optional(),
 
   // x402 / PayFi asset
   X402_ASSET_CODE: z.string().min(1).max(12).default('USDC'),
@@ -132,6 +157,12 @@ export const EnvSchema = z.object({
     }),
   // SEP-41 contract (C…) of the x402 asset — its Stellar Asset Contract (SAC).
   // Derived from X402_ASSET_CODE + X402_ASSET_ISSUER when unset (#776).
+  AGENT_POLICY_ACCOUNT: z
+    .string()
+    .refine((val) => isValidStellarContractId(val), {
+      message: 'AGENT_POLICY_ACCOUNT must be a valid contract address (C…)',
+    })
+    .optional(),
   X402_ASSET_CONTRACT: z
     .string()
     .refine((val) => isValidStellarContractId(val), {
@@ -151,24 +182,22 @@ export const EnvSchema = z.object({
   // Unset = any asset, but a known code must still use its configured issuer.
   X402_ALLOWED_ASSETS: z
     .string()
-    .refine(
-      (val) =>
-        val
-          .split(',')
-          .map((entry) => entry.trim())
-          .every((entry) => {
-            if (entry === 'XLM') return true;
-            const [code, issuer, ...extra] = entry.split(':');
-            return (
-              extra.length === 0 &&
-              !!code &&
-              code.length <= 12 &&
-              !!issuer &&
-              isValidStellarPublicKey(issuer)
-            );
-          }),
-      { message: 'X402_ALLOWED_ASSETS must be a comma-separated list of "XLM" or "CODE:ISSUER"' }
-    )
+    .refine(isValidAssetAllowlist, {
+      message: 'X402_ALLOWED_ASSETS must be a comma-separated list of "XLM" or "CODE:ISSUER"',
+    })
+    .optional(),
+
+  // Comma-separated allowlist of tokens the backend will accept as an escrow
+  // `token` argument, each "XLM" or "CODE:ISSUER" (#989). Unset = only native
+  // XLM and the default x402 asset (X402_ASSET_CODE/ISSUER) are accepted — the
+  // backend never passes an arbitrary, unverified token contract to the escrow
+  // contract's initialize()/initialize_with_fee(), since a malicious token
+  // can lie about transfer()/balances or re-enter.
+  ESCROW_ALLOWED_TOKENS: z
+    .string()
+    .refine(isValidAssetAllowlist, {
+      message: 'ESCROW_ALLOWED_TOKENS must be a comma-separated list of "XLM" or "CODE:ISSUER"',
+    })
     .optional(),
 
   // Spending cap
@@ -176,7 +205,8 @@ export const EnvSchema = z.object({
 
   // Human-in-the-loop approval: value-moving tasks above this amount are held
   // as pending_approval until approved or denied via POST /approvals/:id.
-  // Unset = no approval step.
+  // Unset = no approval step. Acts as the fallback for any asset not listed
+  // in APPROVAL_THRESHOLDS (#953).
   APPROVAL_THRESHOLD: z
     .string()
     .regex(
@@ -184,8 +214,50 @@ export const EnvSchema = z.object({
       "APPROVAL_THRESHOLD must be a positive decimal (e.g. '500' or '50.0000000')"
     )
     .optional(),
+  /**
+   * Per-asset approval thresholds (#953), so e.g. 100 XLM and 100 of a
+   * high-value asset aren't held to the same bar. Same shape as
+   * SPENDING_LIMITS: comma-separated 'CODE:LIMIT' (XLM/native) or
+   * 'CODE:ISSUER:LIMIT' (credit assets), e.g. 'XLM:5000,USDC:GA5Z…:500'.
+   * An asset not listed here falls back to APPROVAL_THRESHOLD.
+   */
+  APPROVAL_THRESHOLDS: z
+    .string()
+    .optional()
+    .refine(
+      (val) => {
+        if (!val) return true;
+        const limitRe = /^[1-9]\d*(\.\d{1,7})?$/;
+        const g56Re = /^G[A-Z2-7]{55}$/;
+        for (const entry of val.split(',')) {
+          const parts = entry.trim().split(':');
+          if (parts.length === 2) {
+            const [, limit] = parts as [string, string];
+            if (!limitRe.test(limit)) return false;
+          } else if (parts.length === 3) {
+            const [, issuer, limit] = parts as [string, string, string];
+            if (!g56Re.test(issuer)) return false;
+            if (!limitRe.test(limit)) return false;
+          } else {
+            return false;
+          }
+        }
+        return true;
+      },
+      {
+        message:
+          'APPROVAL_THRESHOLDS must be a comma-separated list of ' +
+          "'ASSET_CODE:THRESHOLD' (for XLM/native) or " +
+          "'ASSET_CODE:ISSUER:THRESHOLD' (for credit assets), " +
+          "e.g. 'XLM:5000,USDC:GA5Z…:500'",
+      }
+    ),
   // How long a pending approval waits for a decision before it expires.
   APPROVAL_TTL_MS: z.coerce.number().int().min(1_000).default(3_600_000),
+
+  // How often the MPP channel sweeper marks timed-out channels Expired and
+  // releases their spending reservations. Defaults to 60,000 (1 minute).
+  MPP_SESSION_SWEEP_INTERVAL_MS: z.coerce.number().int().min(1_000).default(60_000),
 
   // Counterparty policy for value-moving tasks: `allowlist` permits only the
   // listed destinations, `denylist` blocks them, `open` (default) permits any.
@@ -205,11 +277,24 @@ export const EnvSchema = z.object({
   STORAGE_BACKEND: z.enum(['sqlite', 'postgres']).default('sqlite'),
   DATABASE_URL: z.string().min(1).optional(),
 
+  // Data retention (#963): how long to keep rows in tables that otherwise
+  // grow without bound. The hash-chained audit log is never pruned.
+  RETENTION_DAYS_RESULTS: z.coerce.number().int().positive().default(30),
+  RETENTION_DAYS_APPROVALS: z.coerce.number().int().positive().default(30),
+  RETENTION_DAYS_TRIGGER_EVENTS: z.coerce.number().int().positive().default(30),
+  // How often the retention job sweeps every table above (default: daily).
+  RETENTION_JOB_INTERVAL_MS: z.coerce.number().int().min(1_000).default(86_400_000),
+
   // Logging
+  NODE_ENV: z.string().min(1).default('development'),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 
   // OpenTelemetry
   OTLP_ENDPOINT: z.string().url().optional(),
+  OTEL_REDACT_TX_HASH: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
 
   // Spending window for rate/cap computation
   SPENDING_WINDOW_MS: z.coerce.number().int().min(100).default(86_400_000),
@@ -264,8 +349,37 @@ export const EnvSchema = z.object({
   // Health check HTTP server
   HEALTH_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
 
+  /**
+   * Payments above this amount (in the agent's asset) are held for human
+   * approval before execution rather than submitted immediately.
+   * "0" disables the threshold (all tasks execute immediately).
+   * Defaults to "0" (threshold disabled).
+   */
+  APPROVAL_THRESHOLD: z
+    .string()
+    .regex(
+      /^\d+(\.\d{1,7})?$/,
+      "APPROVAL_THRESHOLD must be a non-negative decimal (e.g. '50' or '0')"
+    )
+    .default("0"),
   // Nano node RPC endpoint used by NanoPaymentTool.
   NANO_RPC_URL: z.string().url().default('http://127.0.0.1:7076'),
+  // Operator-controlled exception for bypassing Nano recipient prechecks.
+  NANO_ALLOW_SKIP_PRECHECK: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  // Nano signing seed (#975). Loaded from env or AWS Secrets Manager, never
+  // from a task payload. Required at startup when NANO_ENABLED=true.
+  NANO_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  NANO_SEED: z
+    .string()
+    .regex(/^[0-9A-Fa-f]{64}$/, 'NANO_SEED must be a 64-character hex seed')
+    .optional(),
+  NANO_SEED_ARN: z.string().optional(),
 
   // MCP server
   MCP_ALLOW_PAYMENTS: z
@@ -285,12 +399,48 @@ export const EnvSchema = z.object({
   // Requests that exceed this limit are rejected with 413. Defaults to 1 MiB.
   MCP_MAX_BODY_BYTES: z.coerce.number().int().min(1024).default(1_048_576),
 
+  // Triggers
+  TRIGGER_ALLOW_PAYMENTS: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  // How long to retain deduplication event records before pruning.
+  TRIGGER_EVENTS_RETENTION_MS: z.coerce
+    .number()
+    .int()
+    .min(60_000) // minimum 1 minute
+    .default(7 * 24 * 60 * 60 * 1000), // 7 days
+
   // Contract event listener polling interval in milliseconds.
   CONTRACT_EVENT_POLL_MS: z.coerce.number().int().min(100).optional(),
 
   // Webhook notifications
   WEBHOOK_URL: z.string().url().optional(),
   WEBHOOK_SECRET: z.string().min(1).optional(),
+
+  // Alert delivery endpoints and threshold controls.
+  ALERT_WEBHOOK_URL: z.string().url().optional(),
+  ALERT_SLACK_WEBHOOK_URL: z.string().url().optional(),
+  ALERT_DISCORD_WEBHOOK_URL: z.string().url().optional(),
+  ALERT_SPENDING_THRESHOLDS: z
+    .string()
+    .default('0.8,1')
+    .refine(
+      (value) =>
+        value.split(',').every((entry) => {
+          const threshold = Number(entry.trim());
+          return Number.isFinite(threshold) && threshold > 0;
+        }),
+      'ALERT_SPENDING_THRESHOLDS must be comma-separated positive numbers'
+    )
+    .transform((value) =>
+      [...new Set(value.split(',').map((entry) => Number(entry.trim())))].sort((a, b) => a - b)
+    ),
+  ALERT_FAILURE_THRESHOLD: z.coerce.number().int().min(1).default(5),
+  ALERT_FAILURE_WINDOW_MS: z.coerce.number().int().min(1).default(300_000),
+
+  // Optional fallback API key for OpenZeppelin facilitator integrations.
+  OZ_API_KEY: z.string().min(1).optional(),
 
   /**
    * Per-asset spending limits encoded as a comma-separated string.
@@ -357,6 +507,10 @@ export const EnvSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  // How often each instance re-reads the paused state from the shared storage
+  // backend (#960), so a pause/resume on one instance reaches the others
+  // within this bound. Only matters with multiple instances sharing one store.
+  KILL_SWITCH_SYNC_INTERVAL_MS: z.coerce.number().int().min(100).default(2_000),
 
   // Backward-compat: sign the body only (no timestamp). Deprecated — removed next release.
   WEBHOOK_LEGACY_SIGNATURE: z
@@ -379,6 +533,9 @@ export const EnvSchema = z.object({
   // LLM provider: openai, anthropic, or mock (for testing)
   LLM_PROVIDER: z.enum(['openai', 'anthropic', 'mock']).default('mock').optional(),
 
+  // OpenAI-compatible planner endpoint.
+  LLM_ENDPOINT: z.string().url().optional(),
+
   // Model identifier (e.g., gpt-4o, claude-3-sonnet-20240229)
   LLM_MODEL: z.string().min(1).optional(),
 
@@ -396,9 +553,25 @@ export const EnvSchema = z.object({
 
   // Temperature for LLM sampling (0-2)
   LLM_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.7),
+
+  // AI budget limits.
+  LLM_MAX_TOKENS_PER_REQUEST: z.coerce.number().int().min(1).default(8_000),
+  LLM_MAX_TOKENS_PER_STEP: z.coerce.number().int().min(1).default(16_000),
+  LLM_MAX_TOOL_CALL_ITERATIONS: z.coerce.number().int().min(1).default(25),
+  LLM_MAX_TOKENS_PER_DAY: z.coerce.number().int().min(1).default(1_000_000),
+
+  // Bounded in-memory AI conversation store.
+  SESSION_TTL_MS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .default(30 * 60 * 1_000),
+  SESSION_MAX_MESSAGES: z.coerce.number().int().min(1).default(50),
+  SESSION_MAX_SESSIONS: z.coerce.number().int().min(1).default(500),
 });
 
 type RawEnv = z.infer<typeof EnvSchema>;
+const ApiTokenSchema = EnvSchema.pick({ ADMIN_API_TOKEN: true, WEBHOOK_SECRET: true });
 
 // ─── Derived / enriched config type ──────────────────────────────────────────
 
@@ -443,11 +616,22 @@ export interface AgentConfig {
    */
   readonly DATABASE_URL?: string | undefined;
 
+  /** Days to keep persisted agent_results rows before the retention job deletes them (#963). */
+  readonly RETENTION_DAYS_RESULTS: number;
+  /** Days to keep decided/expired pending_approvals rows before the retention job deletes them (#963). */
+  readonly RETENTION_DAYS_APPROVALS: number;
+  /** Days to keep trigger_events dedupe rows before the retention job deletes them (#963). */
+  readonly RETENTION_DAYS_TRIGGER_EVENTS: number;
+  /** How often the retention job runs, in milliseconds. Defaults to once a day. */
+  readonly RETENTION_JOB_INTERVAL_MS: number;
+
   /**
    * The asset code for the x402 / PayFi asset.
    * Validated by EnvSchema to be a string between 1 and 12 characters.
    * Defaults to "USDC".
    */
+  /** Optional Soroban custom account used for policy-protected spending. */
+  readonly AGENT_POLICY_ACCOUNT?: string | undefined;
   readonly X402_ASSET_CODE: string;
 
   /**
@@ -476,14 +660,29 @@ export interface AgentConfig {
   /**
    * Amount above which a value-moving task is held as `pending_approval` until
    * an operator approves or denies it. Optional — when unset no task is held.
+   * Used as the fallback for any asset not listed in APPROVAL_THRESHOLDS_MAP.
    */
   readonly APPROVAL_THRESHOLD?: string | undefined;
+
+  /**
+   * Parsed form of APPROVAL_THRESHOLDS (#953): asset key ("XLM" or
+   * "CODE:ISSUER", matching backend/spending_tracker.ts's assetKey()) to its
+   * threshold. Empty when APPROVAL_THRESHOLDS is unset.
+   */
+  readonly APPROVAL_THRESHOLDS_MAP: ReadonlyMap<string, string>;
 
   /**
    * How long (ms) a pending approval waits for a decision before it expires and
    * its spending reservation is released. Defaults to 3,600,000 (1 hour).
    */
   readonly APPROVAL_TTL_MS: number;
+
+  /**
+   * MPP channel sweep interval in milliseconds. The sweeper marks channels
+   * past their `timeoutAt` as `Expired` and releases their reservations.
+   * Defaults to 60,000 (1 minute).
+   */
+  readonly MPP_SESSION_SWEEP_INTERVAL_MS: number;
 
   /**
    * Counterparty policy enforced for every value-moving task.
@@ -552,6 +751,14 @@ export interface AgentConfig {
    * known code (X402_ASSET_CODE) must use its configured issuer.
    */
   readonly X402_ALLOWED_ASSETS?: string | undefined;
+
+  /**
+   * Comma-separated allowlist of tokens the backend will accept as an escrow
+   * `token` argument, each "XLM" or "CODE:ISSUER". Optional — when unset,
+   * only native XLM and the default x402 asset (X402_ASSET_CODE/ISSUER) are
+   * accepted (#989).
+   */
+  readonly ESCROW_ALLOWED_TOKENS?: string | undefined;
   readonly AGENT_SECRET_KEY_ARN?: string | undefined;
 
   /**
@@ -589,6 +796,23 @@ export interface AgentConfig {
    * Validated by EnvSchema to be a valid URL string.
    */
   readonly OTLP_ENDPOINT?: string | undefined;
+  /** Whether transaction hashes are omitted from exported traces. Defaults to false. */
+  readonly OTEL_REDACT_TX_HASH: boolean;
+
+  /** Runtime environment name used to select logger output. Defaults to development. */
+  readonly NODE_ENV: string;
+  /** Pino verbosity. Defaults to info. */
+  readonly LOG_LEVEL: 'debug' | 'info' | 'warn' | 'error';
+  /** Alert webhook destinations; each is optional and URL-validated. */
+  readonly ALERT_WEBHOOK_URL?: string | undefined;
+  readonly ALERT_SLACK_WEBHOOK_URL?: string | undefined;
+  readonly ALERT_DISCORD_WEBHOOK_URL?: string | undefined;
+  /** Spending-limit fractions that trigger alerts. Defaults to [0.8, 1]. */
+  readonly ALERT_SPENDING_THRESHOLDS: readonly number[];
+  /** Consecutive task failures before an alert is raised. Defaults to 5. */
+  readonly ALERT_FAILURE_THRESHOLD: number;
+  /** Failure alert rolling window in milliseconds. Defaults to 300,000. */
+  readonly ALERT_FAILURE_WINDOW_MS: number;
 
   /**
    * Spending window in milliseconds for rate/cap computation.
@@ -692,6 +916,21 @@ export interface AgentConfig {
    * Requests exceeding this limit receive a 413 response. Defaults to 1 MiB.
    */
   readonly MCP_MAX_BODY_BYTES: number;
+
+  /**
+   * When true, value-moving triggers (e.g., stellar_payment, multisig_payment)
+   * can be created and executed. When false (default), attempting to create
+   * a value-moving trigger throws an error.
+   */
+  readonly TRIGGER_ALLOW_PAYMENTS: boolean;
+
+  /**
+   * How long (ms) to retain deduplication event records before pruning.
+   * Prevents unbounded growth of the trigger_events table.
+   * Defaults to 7 days (604,800,000 ms).
+   */
+  readonly TRIGGER_EVENTS_RETENTION_MS: number;
+
   /**
    * Port for the health-check HTTP server.
    * Validated by EnvSchema to be an integer between 1 and 65535.
@@ -699,12 +938,43 @@ export interface AgentConfig {
    */
   readonly HEALTH_PORT: number;
 
-  /** Nano node RPC endpoint used by NanoPaymentTool (default: http://127.0.0.1:7076). */
+  /**
+   * Comma-separated allowlist of exact origins the health server's CORS
+   * preflight handling accepts. Optional — unset means no CORS (#966).
+   */
+  readonly CORS_ALLOWED_ORIGINS?: string | undefined;
+
+  /** LLM request budget in tokens. Defaults to 8,000. */
+  readonly LLM_MAX_TOKENS_PER_REQUEST: number;
+  /** Per-step LLM token budget. Defaults to 16,000. */
+  readonly LLM_MAX_TOKENS_PER_STEP: number;
+  /** Maximum planner tool-call iterations. Defaults to 25. */
+  readonly LLM_MAX_TOOL_CALL_ITERATIONS: number;
+  /** Rolling daily LLM token budget. Defaults to 1,000,000. */
+  readonly LLM_MAX_TOKENS_PER_DAY: number;
+  /** In-memory session idle TTL in milliseconds. Defaults to 30 minutes. */
+  readonly SESSION_TTL_MS: number;
+  /** Maximum conversation messages retained per session. Defaults to 50. */
+  readonly SESSION_MAX_MESSAGES: number;
+  /** Maximum concurrent in-memory sessions. Defaults to 500. */
+  readonly SESSION_MAX_SESSIONS: number;
+
+  /** Nano node RPC endpoint (default local HTTP; HTTPS required on mainnet). */
   readonly NANO_RPC_URL: string;
+  /** Whether operators allow Nano payments to bypass recipient prechecks. */
+  readonly NANO_ALLOW_SKIP_PRECHECK: boolean;
+  /** Whether the nano_payment task is enabled (requires NANO_SEED or NANO_SEED_ARN). */
+  readonly NANO_ENABLED: boolean;
+  readonly NANO_SEED_ARN?: string | undefined;
   readonly CONTRACT_EVENT_POLL_MS?: number | undefined;
   readonly WEBHOOK_URL?: string | undefined;
   readonly WEBHOOK_SECRET?: string | undefined;
   /**
+   * Payments above this amount are held for human approval before execution.
+   * "0" means threshold is disabled — all tasks execute immediately.
+   * Defaults to "0".
+   */
+  readonly APPROVAL_THRESHOLD: string;
    * Bearer token required by the HTTP API. Separate from WEBHOOK_SECRET so
    * leaking one does not compromise the other. When unset WEBHOOK_SECRET is
    * accepted in its place (deprecated).
@@ -720,6 +990,12 @@ export interface AgentConfig {
    * errorType AGENT_PAUSED until resumed via POST /admin/resume. Defaults to false.
    */
   readonly PAUSED: boolean;
+  /**
+   * How often (ms) each instance re-reads the paused state from the shared
+   * storage backend, so a pause/resume on one instance is picked up by every
+   * other instance sharing that store within this bound (#960). Defaults to 2000.
+   */
+  readonly KILL_SWITCH_SYNC_INTERVAL_MS: number;
 
   // ─── LLM Provider Configuration ─────────────────────────────────────────
 
@@ -736,6 +1012,9 @@ export interface AgentConfig {
    * Optional - each provider has its own default if not specified.
    */
   readonly LLM_MODEL?: string | undefined;
+
+  /** OpenAI-compatible planner endpoint. */
+  readonly LLM_ENDPOINT?: string | undefined;
 
   /**
    * Base URL for OpenAI-compatible APIs.
@@ -818,7 +1097,7 @@ function parseConfigAndDerive(
   const raw: RawEnv = result.data;
 
   // ── Mainnet HTTPS enforcement ──────────────────────────────────────────────
-  // On mainnet, both RPC endpoints MUST use HTTPS to prevent credential/data
+  // On mainnet, all RPC endpoints MUST use HTTPS to prevent credential/data
   // exposure over unencrypted connections. Testnet and futurenet permit HTTP
   // for local devnets and CI environments.
   if (raw.STELLAR_NETWORK === 'mainnet') {
@@ -830,6 +1109,9 @@ function parseConfigAndDerive(
       httpsErrors.push(
         `  • SOROBAN_RPC_URL: must use HTTPS on mainnet (got: ${raw.SOROBAN_RPC_URL})`
       );
+    }
+    if (!raw.NANO_RPC_URL.startsWith('https://')) {
+      httpsErrors.push(`  • NANO_RPC_URL: must use HTTPS on mainnet (got: ${raw.NANO_RPC_URL})`);
     }
     if (httpsErrors.length > 0) {
       process.stderr.write(
@@ -870,8 +1152,8 @@ function parseConfigAndDerive(
 
   // ── Mainnet safety guard ───────────────────────────────────────────────────
   if (raw.STELLAR_NETWORK === 'mainnet') {
-    const limit = parseFloat(raw.AGENT_SPENDING_LIMIT);
-    if (limit > MAINNET_SPENDING_CAP) {
+    const limitStroops = tryToStroops(raw.AGENT_SPENDING_LIMIT);
+    if (limitStroops !== null && limitStroops > toStroops(String(MAINNET_SPENDING_CAP))) {
       process.stderr.write(
         `❌ [Config] AGENT_SPENDING_LIMIT (${raw.AGENT_SPENDING_LIMIT}) exceeds ` +
           `the mainnet safety cap of ${MAINNET_SPENDING_CAP.toLocaleString('en-US')}. Lower it or explicitly override.\n`
@@ -894,6 +1176,30 @@ function parseConfigAndDerive(
         const [code, issuer, limit] = parts as [string, string, string];
         spendingLimitsMap.set(`${code.toUpperCase()}:${issuer}`, limit);
       }
+    }
+  }
+
+  // ── Parse per-asset approval thresholds (#953) ─────────────────────────────
+  const approvalThresholdsMap = new Map<string, string>();
+  if (raw.APPROVAL_THRESHOLDS) {
+    for (const entry of raw.APPROVAL_THRESHOLDS.split(',')) {
+      const parts = entry.trim().split(':');
+      if (parts.length === 2) {
+        const [code, threshold] = parts as [string, string];
+        approvalThresholdsMap.set(code.toUpperCase(), threshold);
+      } else if (parts.length === 3) {
+        const [code, issuer, threshold] = parts as [string, string, string];
+        approvalThresholdsMap.set(`${code.toUpperCase()}:${issuer}`, threshold);
+      }
+    }
+  }
+
+  // ── Parse named approver tokens (#954) ─────────────────────────────────────
+  const approverTokensMap = new Map<string, string>();
+  if (raw.APPROVER_TOKENS) {
+    for (const entry of raw.APPROVER_TOKENS.split(',')) {
+      const [name, hash] = entry.trim().split(':') as [string, string];
+      approverTokensMap.set(name, hash.toLowerCase());
     }
   }
 
@@ -996,13 +1302,28 @@ function parseConfigAndDerive(
     ALLOWED_X402_ORIGINS,
     AGENT_SECRET_KEY_ARN,
     SPENDING_LIMITS: _rawLimits,
+    APPROVAL_THRESHOLDS: _rawApprovalThresholds,
+    APPROVER_TOKENS: _rawApproverTokens,
     OTLP_ENDPOINT,
     WEBHOOK_URL,
     WEBHOOK_SECRET,
+    APPROVAL_THRESHOLD,
     DATABASE_URL,
-    LLM_API_KEY: _llmApiKey, // Secret - never exposed on config
+    LLM_API_KEY: llmApiKey,
+    VAULT_TOKEN: vaultToken,
+    OZ_API_KEY: ozApiKey,
+    NANO_SEED: nanoSeed, // Secret - exposed only through getNanoSeed()
     ...rest
   } = raw;
+
+  if (raw.NANO_ENABLED && !nanoSeed) {
+    process.stderr.write('❌ [Config] NANO_ENABLED=true requires NANO_SEED or NANO_SEED_ARN.\n');
+    process.exit(1);
+  }
+  _nanoSeed = nanoSeed;
+  _llmApiKey = llmApiKey;
+  _vaultToken = vaultToken;
+  _ozApiKey = ozApiKey;
 
   const rpcTimeoutMs = raw.RPC_TIMEOUT_MS ?? raw.RETRY_DELAY_MS * raw.MAX_RETRIES * 2;
 
@@ -1017,10 +1338,19 @@ function parseConfigAndDerive(
     MAX_X402_PAYMENTS_PER_MINUTE: raw.MAX_X402_PAYMENTS_PER_MINUTE,
     X402_NONCE_TTL_MS: raw.X402_NONCE_TTL_MS,
     MAX_SOROBAN_FEE_STROOPS: raw.MAX_SOROBAN_FEE_STROOPS,
+    APPROVAL_THRESHOLD,
+    ...(ALLOWED_X402_ORIGINS && { ALLOWED_X402_ORIGINS }),
+    ...(AGENT_SECRET_KEY_ARN && { AGENT_SECRET_KEY_ARN }),
+    ...(OTLP_ENDPOINT && { OTLP_ENDPOINT }),
+    ...(WEBHOOK_URL && { WEBHOOK_URL }),
+    ...(WEBHOOK_SECRET && { WEBHOOK_SECRET }),
     SPENDING_LIMITS_MAP: spendingLimitsMap,
+    APPROVAL_THRESHOLDS_MAP: approvalThresholdsMap,
+    APPROVER_TOKENS_MAP: approverTokensMap,
     SPENDING_LIMITS_ALLOW_UNKNOWN: raw.SPENDING_LIMITS_ALLOW_UNKNOWN,
     PAYMENT_DESTINATIONS: paymentDestinations,
     X402_ASSET_CONTRACT: x402AssetContract,
+    ...(raw.AGENT_POLICY_ACCOUNT ? { AGENT_POLICY_ACCOUNT: raw.AGENT_POLICY_ACCOUNT } : {}),
     ...(ALLOWED_X402_ORIGINS ? { ALLOWED_X402_ORIGINS } : {}),
     ...(AGENT_SECRET_KEY_ARN ? { AGENT_SECRET_KEY_ARN } : {}),
     ...(OTLP_ENDPOINT ? { OTLP_ENDPOINT } : {}),
@@ -1072,7 +1402,42 @@ function loadConfigSync(): AgentConfig {
   return parseConfigAndDerive();
 }
 
+let _nanoSeed: string | undefined;
+let _llmApiKey: string | undefined;
+let _vaultToken: string | undefined;
+let _ozApiKey: string | undefined;
+
+/** The Nano signing seed from NANO_SEED / NANO_SEED_ARN, if configured. */
+export function getNanoSeed(): string | undefined {
+  return _nanoSeed;
+}
+
+/** Returns the Vault token without exposing it on the public config object. */
+export function getVaultToken(): string | undefined {
+  return _vaultToken;
+}
+
+/** Returns the OpenZeppelin API key without exposing it on the public config object. */
+export function getOZApiKey(): string | undefined {
+  return _ozApiKey;
+}
+
+/** Read the HTTP API token per request while validating any runtime rotation. */
+export function getAdminApiToken(): string | undefined {
+  const result = ApiTokenSchema.safeParse(process.env);
+  if (!result.success) {
+    throw new Error(
+      `Invalid HTTP API token configuration:\n${formatValidationErrors(result.error)}`
+    );
+  }
+  return result.data.ADMIN_API_TOKEN || result.data.WEBHOOK_SECRET || undefined;
+}
+
 function assertSecretConfigCompatibility(): void {
+  if (process.env.NANO_SEED && process.env.NANO_SEED_ARN) {
+    process.stderr.write('❌ [Config] Cannot specify both NANO_SEED and NANO_SEED_ARN.\n');
+    process.exit(1);
+  }
   if (process.env.AGENT_SECRET_KEY && process.env.AGENT_SECRET_KEY_ARN) {
     process.stderr.write(
       '❌ [Config] Cannot specify both AGENT_SECRET_KEY and AGENT_SECRET_KEY_ARN.\n'
@@ -1116,6 +1481,17 @@ export async function loadConfig(): Promise<AgentConfig> {
     }
   }
 
+  if (process.env.NANO_SEED_ARN) {
+    try {
+      process.env.NANO_SEED = (await fetchSecretFromArn(process.env.NANO_SEED_ARN)).trim();
+    } catch (err: any) {
+      process.stderr.write(
+        `❌ [Config] Failed to fetch NANO_SEED_ARN from AWS Secrets Manager: ${err.message}\n`
+      );
+      process.exit(1);
+    }
+  }
+
   return parseConfigAndDerive();
 }
 
@@ -1130,7 +1506,11 @@ if (process.env.AGENT_SECRET_KEY && process.env.AGENT_SECRET_KEY_ARN) {
   process.stderr.write(
     '❌ [Config] Cannot specify both AGENT_SECRET_KEY and AGENT_SECRET_KEY_ARN.\n'
   );
-} else if (process.env.AGENT_SECRET_KEY && !process.env.AGENT_SECRET_KEY_ARN) {
+} else if (
+  process.env.AGENT_SECRET_KEY &&
+  !process.env.AGENT_SECRET_KEY_ARN &&
+  !process.env.NANO_SEED_ARN
+) {
   try {
     _config = loadConfigSync();
   } catch (err: any) {
@@ -1171,12 +1551,12 @@ export const configPromise = {
 // ─── LLM Provider Helper ───────────────────────────────────────────────────
 
 /**
- * Gets the LLM API key from the environment.
+ * Gets the validated LLM API key from private config state.
  * The key is NEVER exposed on the config object - call this function directly.
  * @returns The LLM API key or undefined if not configured
  */
 export function getLLMApiKey(): string | undefined {
-  return process.env.LLM_API_KEY;
+  return _llmApiKey;
 }
 
 /**
@@ -1191,8 +1571,8 @@ export function getLLMApiKey(): string | undefined {
  */
 export function createLLMProvider():
   ReturnType<typeof import('./ai/providers').createLLMProvider> | undefined {
-  const providerType = process.env.LLM_PROVIDER as 'openai' | 'anthropic' | 'mock' | undefined;
-  const apiKey = process.env.LLM_API_KEY;
+  const providerType = config.LLM_PROVIDER;
+  const apiKey = getLLMApiKey();
 
   if (!providerType) {
     return undefined;
@@ -1206,10 +1586,10 @@ export function createLLMProvider():
   return createProvider({
     provider: providerType,
     // Empty selects each provider's own default model (`config.model || defaultModel`).
-    model: process.env.LLM_MODEL ?? '',
+    model: config.LLM_MODEL ?? '',
     apiKey: apiKey || '',
-    ...(process.env.LLM_BASE_URL ? { baseUrl: process.env.LLM_BASE_URL } : {}),
-    timeoutMs: parseInt(process.env.LLM_TIMEOUT_MS || '60000', 10),
+    ...(config.LLM_BASE_URL ? { baseUrl: config.LLM_BASE_URL } : {}),
+    timeoutMs: config.LLM_TIMEOUT_MS,
     maxRetries: 3,
   });
 }
@@ -1225,6 +1605,7 @@ const FALLBACK_CONFIG: AgentConfig = new Proxy({} as AgentConfig, {
   get(_target, prop, receiver) {
     _fallbackConfig ??= parseConfigAndDerive(
       {
+        ...process.env,
         STELLAR_NETWORK: 'testnet',
         HORIZON_URL: 'https://horizon-testnet.stellar.org',
         SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org',
@@ -1232,7 +1613,13 @@ const FALLBACK_CONFIG: AgentConfig = new Proxy({} as AgentConfig, {
         X402_ASSET_ISSUER: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
         AGENT_SECRET_KEY: Keypair.random().secret(),
         AGENT_SPENDING_LIMIT: '100',
-        ...(process.env.DB_PATH ? { DB_PATH: process.env.DB_PATH } : {}),
+        AGENT_SECRET_KEY_ARN: undefined,
+        SIGNER_BACKEND: 'local',
+        VAULT_TOKEN: undefined,
+        OZ_API_KEY: undefined,
+        NANO_ENABLED: 'false',
+        NANO_SEED: undefined,
+        NANO_SEED_ARN: undefined,
       },
       { announce: false }
     );

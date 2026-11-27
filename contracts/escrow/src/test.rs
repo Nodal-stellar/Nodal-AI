@@ -44,6 +44,32 @@ mod tests {
         (token_id, token)
     }
 
+    // TTL bump check (#805)
+    #[test]
+    fn test_instance_ttl_bump_and_storage_survival() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let depositor = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let arbiter = Address::generate(&env);
+        let (token_id, _token) = create_token(&env, &depositor);
+        StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let expiry = env.ledger().timestamp() + 10_000;
+        client.initialize(&depositor, &recipient, &arbiter, &token_id, &500, &expiry);
+
+        env.ledger().with_mut(|li| {
+            li.sequence_number += 10_000;
+        });
+
+        client.bump();
+
+        let state = client.get_state();
+        assert_eq!(state.amount, 500);
+        assert_eq!(state.released, false);
+    }
+
     // 1. initialize -> release
     #[test]
     fn test_initialize_and_release() {
@@ -70,6 +96,137 @@ mod tests {
         client.release(&arbiter);
         assert_eq!(token.balance(&recipient), 500);
         assert_eq!(token.balance(&contract_id), 0);
+    }
+
+    // Token allowlist (#989): optional, set once before initialize.
+
+    #[test]
+    fn test_initialize_accepts_allowlisted_token() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let depositor = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let arbiter = Address::generate(&env);
+        let (token_id, token) = create_token(&env, &depositor);
+        StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        client.set_allowed_tokens(&soroban_sdk::vec![&env, token_id.clone()]);
+        client.initialize(
+            &depositor,
+            &recipient,
+            &arbiter,
+            &token_id,
+            &500,
+            &(env.ledger().timestamp() + EXPIRY_OFFSET),
+        );
+
+        assert_eq!(token.balance(&contract_id), 500);
+    }
+
+    #[test]
+    fn test_initialize_rejects_non_allowlisted_token() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let depositor = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let arbiter = Address::generate(&env);
+        let (token_id, _token) = create_token(&env, &depositor);
+        StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
+        // A different token, not on the allowlist configured below.
+        let (other_token_id, _) = create_token(&env, &depositor);
+
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        client.set_allowed_tokens(&soroban_sdk::vec![&env, other_token_id]);
+
+        let result = outcome(client.try_initialize(
+            &depositor,
+            &recipient,
+            &arbiter,
+            &token_id,
+            &500,
+            &(env.ledger().timestamp() + EXPIRY_OFFSET),
+        ));
+        assert_eq!(
+            result,
+            Err(EscrowError::InvalidToken),
+            "a token outside the configured allowlist must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_initialize_unrestricted_when_allowlist_never_set() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let depositor = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let arbiter = Address::generate(&env);
+        let (token_id, token) = create_token(&env, &depositor);
+        StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+
+        assert_eq!(client.get_allowed_tokens(), None);
+        client.initialize(
+            &depositor,
+            &recipient,
+            &arbiter,
+            &token_id,
+            &500,
+            &(env.ledger().timestamp() + EXPIRY_OFFSET),
+        );
+
+        assert_eq!(token.balance(&contract_id), 500);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_set_allowed_tokens_empty_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        client.set_allowed_tokens(&soroban_sdk::vec![&env]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_set_allowed_tokens_twice_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let depositor = Address::generate(&env);
+        let (token_id, _) = create_token(&env, &depositor);
+        let (other_token_id, _) = create_token(&env, &depositor);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        client.set_allowed_tokens(&soroban_sdk::vec![&env, token_id]);
+        client.set_allowed_tokens(&soroban_sdk::vec![&env, other_token_id]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_set_allowed_tokens_after_initialize_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let depositor = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let arbiter = Address::generate(&env);
+        let (token_id, _) = create_token(&env, &depositor);
+        StellarAssetClient::new(&env, &token_id).mint(&depositor, &1_000);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        client.initialize(
+            &depositor,
+            &recipient,
+            &arbiter,
+            &token_id,
+            &500,
+            &(env.ledger().timestamp() + EXPIRY_OFFSET),
+        );
+        client.set_allowed_tokens(&soroban_sdk::vec![&env, token_id]);
     }
 
     // 3. initialize with max i128 amount should panic
@@ -1258,6 +1415,73 @@ mod tests {
             let state = client.get_state();
             prop_assert_eq!(state.amount, 0, "stored amount must reach zero");
             prop_assert!(state.released, "escrow must be sealed once fully released");
+        });
+    }
+
+    /// Strategy: `(amount, cuts, fee_bps)` — a `partial_release_strategy()`
+    /// pair plus a fee in `0..=MAX_FEE_BPS`.
+    fn partial_release_with_fee_strategy() -> impl Strategy<Value = (i128, Vec<i128>, u32)> {
+        (partial_release_strategy(), 0..=crate::MAX_FEE_BPS)
+            .prop_map(|((amount, cuts), fee_bps)| (amount, cuts, fee_bps))
+    }
+
+    // 39b. property: splitting a release into many tranches charges the same
+    // total fee as releasing it all at once (#988) — the bug this fixes was
+    // that `compute_fee` was applied per call, so any tranche below
+    // `10_000 / fee_bps` stroops floored to a zero fee, letting the fee be
+    // avoided entirely by splitting finely enough.
+    #[test]
+    fn prop_split_fee_equals_fee_on_total() {
+        proptest!(ProptestConfig::with_cases(128), |((amount, cuts, fee_bps) in partial_release_with_fee_strategy())| {
+            let env = Env::default();
+            env.mock_all_auths();
+            let depositor = Address::generate(&env);
+            let recipient = Address::generate(&env);
+            let arbiter = Address::generate(&env);
+            let fee_recipient = Address::generate(&env);
+            let (token_id, token) = create_token(&env, &depositor);
+            StellarAssetClient::new(&env, &token_id).mint(&depositor, &amount);
+            let contract_id = env.register_contract(None, EscrowContract);
+            let client = EscrowContractClient::new(&env, &contract_id);
+            client.initialize_with_fee(
+                &depositor,
+                &recipient,
+                &arbiter,
+                &token_id,
+                &amount,
+                &(env.ledger().timestamp() + EXPIRY_OFFSET),
+                &fee_bps,
+                &fee_recipient,
+            );
+
+            let mut points = cuts;
+            points.sort_unstable();
+            points.dedup();
+            let mut boundaries = vec![0];
+            boundaries.extend(points);
+            boundaries.push(amount);
+            let parts: Vec<i128> = boundaries.windows(2).map(|w| w[1] - w[0]).collect();
+
+            for part in parts {
+                client.release_partial(&arbiter, &part);
+            }
+
+            let expected_total_fee = EscrowContract::compute_fee(amount, fee_bps);
+            prop_assert_eq!(
+                token.balance(&fee_recipient),
+                expected_total_fee,
+                "fee charged over any split must equal the fee on the full amount"
+            );
+            prop_assert_eq!(
+                token.balance(&recipient),
+                amount - expected_total_fee,
+                "recipient must receive the amount net of the total fee, regardless of split"
+            );
+            prop_assert_eq!(
+                token.balance(&contract_id),
+                0,
+                "no funds may remain stuck in the contract"
+            );
         });
     }
 

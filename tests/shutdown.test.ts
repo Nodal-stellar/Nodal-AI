@@ -51,6 +51,11 @@ vi.mock('../backend/config', () => ({
   configPromise: Promise.resolve({}),
 }));
 
+vi.mock('../backend/payments/mpp_session', () => ({
+  sweepExpiredChannels: vi.fn(async () => []),
+  startMppSessionSweeper: vi.fn(() => vi.fn()),
+}));
+
 vi.mock('../backend/utils/logger', () => ({
   createLogger: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn() })),
 }));

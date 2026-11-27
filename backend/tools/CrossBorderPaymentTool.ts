@@ -28,6 +28,7 @@ import { withRetry } from '../rpc_client';
 import { createAgentSigner, Signer } from '../signer';
 import { createLogger } from '../utils/logger';
 import { stellarPublicKeySchema } from '../utils/stellarSchemas';
+import { toStroops } from '../utils/amount';
 import { StellarIdentityTool } from './StellarIdentityTool';
 import { StellarPaymentTool } from './StellarPaymentTool';
 import { StellarTomlTool } from './StellarTomlTool';
@@ -330,13 +331,13 @@ export class CrossBorderPaymentTool {
         `${input.anchorDomain} does not receive ${input.assetCode} via SEP-31`
       );
     }
-    const amount = parseFloat(input.amount);
-    if (asset.min_amount !== undefined && amount < asset.min_amount) {
+    const amountStroops = toStroops(input.amount);
+    if (asset.min_amount !== undefined && amountStroops < toStroops(String(asset.min_amount))) {
       throw new ValidationError(
         `Amount ${input.amount} is below the anchor minimum of ${asset.min_amount}`
       );
     }
-    if (asset.max_amount !== undefined && amount > asset.max_amount) {
+    if (asset.max_amount !== undefined && amountStroops > toStroops(String(asset.max_amount))) {
       throw new ValidationError(
         `Amount ${input.amount} is above the anchor maximum of ${asset.max_amount}`
       );
@@ -382,7 +383,7 @@ export class CrossBorderPaymentTool {
         sell_amount: input.amount,
         context: 'sep31',
       });
-      if (parseFloat(quote.sell_amount) !== amount) {
+      if (toStroops(quote.sell_amount) !== amountStroops) {
         throw new ValidationError(
           `Quote sells ${quote.sell_amount}, not the requested ${input.amount}`
         );

@@ -42,6 +42,7 @@ import { LedgerInfoTool, LedgerInfoInputSchema } from './LedgerInfoTool';
 import { NetworkStatusTool } from './NetworkStatusTool';
 import { OfferBookTool, OfferBookInputSchema } from './OfferBookTool';
 import { SorobanStorageTool, SorobanStorageInputSchema } from './SorobanStorageTool';
+import { ClaimableBalanceTool, ClaimableBalanceInputSchema } from './ClaimableBalanceTool';
 
 /** Identity helper that lets TypeScript infer `I` from `inputSchema` per entry. */
 function defineTool<I, O>(tool: AgentTool<I, O>): AgentTool<I, O> {
@@ -86,13 +87,14 @@ export function createBuiltinTools(signer: Signer = createAgentSigner()): AgentT
   const networkStatusTool = new NetworkStatusTool();
   const offerBookTool = new OfferBookTool();
   const sorobanStorageTool = new SorobanStorageTool();
+  const claimableBalanceTool = new ClaimableBalanceTool(signer);
 
   return [
     defineTool({
       name: 'nano_payment',
       description:
         'Send a feeless Nano micro-payment. Amounts are raw units; pre-checks that the ' +
-        'recipient account is open unless skipPrecheck is set.',
+        'recipient account is open. Pre-check bypass is available only when enabled by an operator.',
       inputSchema: NanoPaymentInputSchema,
       valueMoving: true,
       execute: (input) => nanoPaymentTool.execute(input),
@@ -340,6 +342,20 @@ export function createBuiltinTools(signer: Signer = createAgentSigner()): AgentT
       inputSchema: SorobanStorageInputSchema,
       valueMoving: false,
       execute: (input) => sorobanStorageTool.execute(input),
+    }),
+    defineTool({
+      name: 'claimable_balance',
+      description:
+        'Create a Stellar claimable balance for one or more claimants, or claim one the ' +
+        'agent is entitled to. Spending limit enforced on create.',
+      inputSchema: ClaimableBalanceInputSchema,
+      valueMoving: true,
+      execute: async (input, ctx) => {
+        if (input.action === 'create') {
+          ctx.assertWithinSpendingLimit(input.amount);
+        }
+        return claimableBalanceTool.execute(input);
+      },
     }),
   ];
 }

@@ -15,7 +15,7 @@ import {
 } from '@stellar/stellar-sdk';
 import { z } from 'zod';
 import { config, MAINNET_SPENDING_CAP } from '../config';
-import { createAgentSigner, Signer } from '../signer';
+import { createAgentSigner, signSorobanAuthEntries, Signer } from '../signer';
 import { logger } from '../utils/logger';
 import {
   loadAccount,
@@ -25,6 +25,7 @@ import {
 } from '../rpc_client';
 import { spendingTracker } from '../spending_tracker';
 import { stellarContractIdSchema } from '../utils/stellarSchemas';
+import { toStroops, tryToStroops } from '../utils/amount';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -337,6 +338,8 @@ export class SorobanInvokeTool {
     // verifies the same object that will be submitted. If the transaction is ever
     // rebuilt (e.g., after a fee bump), this alias must be updated accordingly.
     const signedTx = preparedTx;
+    const { sequence } = await sorobanServer.getLatestLedger();
+    await signSorobanAuthEntries(signedTx, this.signer, sequence + 100);
     this.signer.signTransaction(signedTx);
 
     // Guard: ensure at least one signature was attached. A no-op sign() call
@@ -377,20 +380,19 @@ export class SorobanInvokeTool {
     events: readonly xdr.DiagnosticEvent[],
     record: boolean
   ): void {
-    const totalRaw = extractSacTransferTotal(events, this.signer.publicKey());
+    const totalRaw = extractSacTransferTotal(events, this.signer.policyAccount ?? this.signer.publicKey());
     if (totalRaw <= 0n) return;
 
     const amountStr = sacRawToDecimal(totalRaw);
-    const parsed = parseFloat(amountStr);
-    const limit = parseFloat(config.AGENT_SPENDING_LIMIT);
+    const limitStroops = tryToStroops(config.AGENT_SPENDING_LIMIT);
 
-    if (!isNaN(parsed) && !isNaN(limit) && parsed > limit) {
+    if (limitStroops !== null && totalRaw > limitStroops) {
       throw new Error(
         `Contract invocation transfers ${amountStr} ${config.X402_ASSET_CODE} exceeds ` +
           `AGENT_SPENDING_LIMIT of ${config.AGENT_SPENDING_LIMIT}`
       );
     }
-    if (!isNaN(parsed) && config.STELLAR_NETWORK === 'mainnet' && parsed > MAINNET_SPENDING_CAP) {
+    if (config.STELLAR_NETWORK === 'mainnet' && totalRaw > toStroops(String(MAINNET_SPENDING_CAP))) {
       throw new Error(
         `Contract invocation transfers ${amountStr} ${config.X402_ASSET_CODE} exceeds ` +
           `mainnet spending cap of ${MAINNET_SPENDING_CAP}`

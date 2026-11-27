@@ -9,6 +9,7 @@ import { config } from '../config';
 import { horizonServer, withRetry } from '../rpc_client';
 import { withBackoffGuard } from '../network';
 import { createLogger } from '../utils/logger';
+import { toStroops, stroopsToString } from '../utils/amount';
 
 const log = createLogger('offer-book-tool');
 
@@ -128,10 +129,10 @@ export class OfferBookTool {
     const topBid = bids[0];
     const topAsk = asks[0];
     if (topBid && topAsk) {
-      const bestBid = parseFloat(topBid.price);
-      const bestAsk = parseFloat(topAsk.price);
+      const bestBid = toStroops(topBid.price);
+      const bestAsk = toStroops(topAsk.price);
       const diff = bestAsk - bestBid;
-      spread = diff.toFixed(7);
+      spread = diff >= 0n ? stroopsToString(diff) : `-${stroopsToString(-diff)}`;
     }
 
     log.info({ bidCount: bids.length, askCount: asks.length, spread }, 'Order book query complete');

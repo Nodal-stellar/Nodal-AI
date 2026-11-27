@@ -10,6 +10,7 @@
  */
 
 import {
+  Address,
   authorizeEntry,
   FeeBumpTransaction,
   Keypair,
@@ -38,6 +39,8 @@ export interface Signer {
   ): Promise<xdr.SorobanAuthorizationEntry>;
   /** Ed25519 signature over arbitrary bytes, e.g. an off-chain MPP channel commitment. */
   sign(data: Buffer): Buffer;
+  /** Contract account whose authorization entries this signer may authorize. */
+  readonly policyAccount?: string;
 }
 
 /**
@@ -46,6 +49,7 @@ export interface Signer {
  * holding its own copy.
  */
 export class KeypairSigner implements Signer {
+  readonly policyAccount?: string;
   private readonly getKeypair: () => Keypair;
 
   constructor(keypair: Keypair | (() => Keypair)) {
@@ -78,7 +82,52 @@ export class KeypairSigner implements Signer {
   }
 }
 
+/** Sign every Soroban auth entry assembled by simulation. */
+export async function signSorobanAuthEntries(
+  tx: Transaction,
+  signer: Signer,
+  validUntilLedgerSeq: number
+): Promise<void> {
+  for (const operation of tx.operations) {
+    const value = operation.body().value();
+    const auth = value.auth();
+    if (!auth || auth.length === 0) continue;
+    const signed = await Promise.all(
+      auth.map((entry) => {
+        if (!signer.policyAccount) return entry;
+        try {
+          const address = Address.fromScAddress(entry.credentials().address()).toString();
+          return address === signer.policyAccount
+            ? signer.signAuthEntry(entry, validUntilLedgerSeq)
+            : entry;
+        } catch {
+          return entry;
+        }
+      })
+    );
+    value.auth(signed);
+  }
+}
+
+/** Fee-payer signer that authorizes entries for the configured custom policy account. */
+export class PolicyAccountSigner implements Signer {
+  readonly policyAccount: string;
+  private readonly delegate: KeypairSigner;
+  constructor(policyAccount: string, keypair: () => Keypair) {
+    this.policyAccount = policyAccount;
+    this.delegate = new KeypairSigner(keypair);
+  }
+  publicKey(): string { return this.delegate.publicKey(); }
+  signTransaction(tx: Transaction | FeeBumpTransaction): void { this.delegate.signTransaction(tx); }
+  signAuthEntry(entry: xdr.SorobanAuthorizationEntry, validUntilLedgerSeq: number, networkPassphrase?: string) {
+    return this.delegate.signAuthEntry(entry, validUntilLedgerSeq, networkPassphrase);
+  }
+  sign(data: Buffer): Buffer { return this.delegate.sign(data); }
+}
+
 /** Signer for the configured agent account. Resolves the keypair from config on each use. */
 export function createAgentSigner(): Signer {
-  return new KeypairSigner(() => config.agentKeypair());
+  return config.AGENT_POLICY_ACCOUNT
+    ? new PolicyAccountSigner(config.AGENT_POLICY_ACCOUNT, () => config.agentKeypair())
+    : new KeypairSigner(() => config.agentKeypair());
 }

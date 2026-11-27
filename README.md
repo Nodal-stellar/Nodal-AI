@@ -175,12 +175,22 @@ docker-compose --profile test-only up --build --abort-on-container-exit --exit-c
 
 State (spending window, x402 nonces, audit log, agent results) lives in SQLite at `DB_PATH` by default, which suits a single instance. To run several instances against one shared store, set `STORAGE_BACKEND=postgres` and `DATABASE_URL`. The `postgres` profile starts Postgres, a Postgres-backed agent on port 3001 and the shared storage test suite:
 
+The shared SQLite connection sets `journal_mode=WAL`, `busy_timeout=5000` and `foreign_keys=ON` on open (#962), so the health server, SSE polling and the agent contending for the same database file retry instead of failing with `SQLITE_BUSY` under load.
+
 ```bash
 docker compose --profile postgres up --build agent-postgres
 docker compose --profile postgres run --rm test-runner-postgres
 ```
 
 Schema changes are numbered SQL files in [`backend/db/migrations/`](./backend/db/migrations/) (`postgres/` holds the Postgres equivalents). Pending files are applied at startup inside a transaction and recorded in `schema_version`. To change the schema, add the next `NNN_<name>.sql` for both backends. Never edit a migration that has already shipped.
+
+### Data Retention (#963)
+
+`agent_results`, decided/expired `pending_approvals` and `trigger_events` dedupe rows grow without bound for a long-running agent. A daily job (`backend/retention.ts`, interval set by `RETENTION_JOB_INTERVAL_MS`) deletes rows older than `RETENTION_DAYS_RESULTS`, `RETENTION_DAYS_APPROVALS` and `RETENTION_DAYS_TRIGGER_EVENTS` respectively (all default to 30 days), and opportunistically prunes expired idempotency keys and x402 rate-limit records past their own windows. The hash-chained `audit_log` is never touched — pruning it would break the chain. Run the same sweep on demand, or from an external cron instead of in-process, with:
+
+```bash
+npm run db:prune
+```
 
 ### Visual Dashboard
 
@@ -221,7 +231,7 @@ The container forwards port `3000` and preinstalls `dbaeumer.vscode-eslint`, `es
 
 ## Security Policy
 
-Security is the foundation of PayFi. See [SECURITY.md](./SECURITY.md) for the full responsible disclosure policy, response SLAs, core security invariants, and secret management guidelines.
+Security is the foundation of PayFi. See [SECURITY.md](./SECURITY.md) for the full responsible disclosure policy, response SLAs, core security invariants, and secret management guidelines. See [AI Payment Safety](./docs/guide/ai-safety.md) for every way an LLM, MCP client, or event can cause a payment, and which controls apply.
 
 To report a vulnerability privately, use [GitHub Security Advisories](https://github.com/Nodal-stellar/Nodal-AI/security/advisories/new).
 
@@ -350,12 +360,28 @@ Operators can freeze fund movement during an incident without stopping the proce
 
 - `POST /admin/pause` and `POST /admin/resume` on the health server toggle it. Both require `Authorization: Bearer <WEBHOOK_SECRET>` and return `401` when `WEBHOOK_SECRET` is not configured.
 - `PAUSED=true` starts the agent paused.
-- The paused state is stored in the agent database (`DB_PATH`), so a paused agent stays paused across restarts until resumed.
+- The paused state is stored in the shared storage backend (SQLite or Postgres, whichever `STORAGE_BACKEND` selects), so a paused agent stays paused across restarts until resumed.
+- **Multi-instance sync (#960):** with several instances sharing one store, pausing/resuming one is picked up by the others within `KILL_SWITCH_SYNC_INTERVAL_MS` (default 2s) — each instance polls the shared state on that interval. The instance that issues the pause/resume takes effect immediately for itself.
 - While paused, every task that signs and submits a transaction (`VALUE_MOVING_TASK_TYPES` in `backend/agent.ts`) fails with `errorType: "AGENT_PAUSED"`.
 - Each pause/resume sends a webhook event: `{ "event": "agent.paused" | "agent.resumed", "paused": boolean, "reason"?: string, "timestamp": string }`.
 
 ```bash
 curl -X POST -H "Authorization: Bearer $WEBHOOK_SECRET" http://localhost:3000/admin/pause
+```
+
+### Human-in-the-Loop Approvals
+
+Value-moving tasks above a configured amount are held as `pending_approval` instead of executing immediately, until an operator decides via `POST /approvals/:id`.
+
+- `APPROVAL_THRESHOLD` sets a single global amount. `APPROVAL_THRESHOLDS` (#953) sets per-asset amounts instead — comma-separated `'CODE:THRESHOLD'` (XLM/native) or `'CODE:ISSUER:THRESHOLD'` (credit assets), e.g. `XLM:5000,USDC:GA5Z…:500` — with `APPROVAL_THRESHOLD` as the fallback for any asset not listed. Comparisons are exact BigInt stroops, never a float parse, so two different assets' amounts are never pooled into one number.
+- `GET /approvals` lists pending approvals; `POST /approvals/:id { "decision": "approve" | "deny" }` decides one.
+- **Named approvers (#954):** `APPROVER_TOKENS='name:sha256hex,...'` gives each approver their own credential — distinct from `ADMIN_API_TOKEN` — so the token that submits tasks doesn't have to be the one that approves them. The decision is recorded as `decidedBy` (the matched name, or `"admin"` for the shared token) on the approval and in the audit log. Compute a token's hash with e.g. `printf '%s' 'the-raw-token' | sha256sum`.
+- **2-of-N consensus (#954):** above `APPROVAL_MULTI_APPROVER_THRESHOLD`, `"approve"` records a vote instead of deciding; the task only executes once `APPROVAL_MIN_APPROVERS` (default 2) *distinct* approvers have voted. `GET /approvals` shows each pending approval's `votes` so far. A single approver may still `"deny"` at any time — consensus is required to move money, not to block it.
+
+```bash
+curl -H "Authorization: Bearer $APPROVER_TOKEN" http://localhost:3000/approvals
+curl -X POST -H "Authorization: Bearer $APPROVER_TOKEN" -H "Content-Type: application/json" \
+  -d '{"decision":"approve"}' http://localhost:3000/approvals/<id>
 ```
 
 ### Prometheus Metrics
@@ -562,6 +588,17 @@ Wraps a transaction in a fee-bump envelope for sponsored retry flows. This is us
 INNER_TX_XDR=AAAA... npx ts-node scripts/examples/fee_bump.ts
 ```
 
+### `trigger_escrow_release.ts` — Event-Driven Escrow Release
+
+> 🧪 **Experimental**, testnet only.
+
+Deploys an escrow, creates a payment trigger filtered by asset code and issuer, sends the buyer's payment, and observes the release. `--approval` holds the release until you approve it. Needs `TRIGGER_ALLOW_PAYMENTS=true` and `CONTRACT_WASM_PATH`; see the [walkthrough](./docs/tutorials/trigger-escrow-release.md).
+
+```bash
+npx ts-node scripts/examples/trigger_escrow_release.ts
+npx ts-node scripts/examples/trigger_escrow_release.ts --approval
+```
+
 ### `anchor_deposit.ts` — SEP-0010 + SEP-0006 anchor deposit
 
 Demonstrates a complete PayFi onboarding scenario by combining `StellarIdentityTool` (SEP-0010 web auth) with an anchor USDC deposit flow:
@@ -734,6 +771,7 @@ Each value below is a `BuiltinTaskType` wired into `PayFiAgent.run()` in `backen
 | `offer_book` | `OfferBookTool` | Query the Stellar DEX order book for an asset pair and return bids, asks, and the top-of-book spread. Read-only. |
 | `cross_border_payment` | `CrossBorderPaymentTool` | SEP-31 payment as the sending anchor: SEP-12 KYC for sender and receiver, optional SEP-38 firm quote, SEP-31 transaction, then the on-chain payment with the anchor's memo. Spending limit enforced. |
 | `soroban_storage` | `SorobanStorageTool` | Read a Soroban contract's storage entry (`persistent`, `temporary`, or `instance`) and return the decoded value. Read-only. |
+| `claimable_balance` | `ClaimableBalanceTool` | Create a Stellar claimable balance for one or more claimants, or claim one the agent is entitled to. Spending limit enforced on create. |
 
 > **Standalone use:** read-only tools such as `BalanceCheckTool` (`backend/tools/BalanceCheckTool.ts`) and `SorobanQueryTool` (`backend/tools/SorobanQueryTool.ts`) can also be imported and used directly, outside the agent task loop, when you only need a query.
 
@@ -763,6 +801,7 @@ Input wrapper for task dispatch. The `payload` shape depends on `type`:
 - `network_status`: no payload fields (pass `{}`)
 - `offer_book`: `{ sellingAsset: string | { code: string; issuer?: string }; buyingAsset: string | { code: string; issuer?: string }; limit?: number }` (string assets are `"XLM"`, `"native"` or `"CODE:ISSUER"`; `limit` is 1–200)
 - `soroban_storage`: `{ contractId: string; keys: unknown[]; durability?: "persistent" | "temporary" | "instance" }` (exactly one key; `durability` defaults to `"persistent"`)
+- `claimable_balance`: `{ action: "create"; assetCode: string; assetIssuer?: string; amount: string; claimants: { destination: string; predicate?: ClaimPredicate }[] } | { action: "claim"; balanceId: string }` (spending limit enforced on `create`; `claim` verifies the agent is a listed claimant before submitting)
 - `swap`: `{ sellAsset: { code: string; issuer?: string }; buyAsset: { code: string; issuer?: string }; sellAmount: string; maxSlippagePct: number }` (`maxSlippagePct` is 0–100)
 - `account_history`: `{ publicKey?: string; limit?: number; cursor?: string; assetCode?: string }` (`limit` is 1–200, default 10, and counts *matching* payments after non-`payment` operations and the `assetCode` filter are dropped; the tool pages through Horizon to fill it, up to 5 pages per call. The result adds `pagesFetched` and `pageLimitReached` — when `pageLimitReached` is true, fewer than `limit` records does not mean history is exhausted; continue from `nextCursor`)
 - `soroban_deploy`: `{ action: "upload" | "deploy"; wasm?: Buffer | string; wasmBuffer?: Buffer | string }` or `{ action: "instantiate"; wasmHash: string }` — `upload`/`deploy` require WASM bytes (a `Buffer`, file path, hex or base64 string)
@@ -832,6 +871,122 @@ if (result.success) {
 // Clean up
 agent.destroy();
 ```
+
+---
+
+## AI & Automation
+
+Features that let an AI client, an LLM, or an on-chain event drive the agent. Each links to a full guide. Read [AI Payment Safety](./docs/guide/ai-safety.md) before you enable payments on any of them.
+
+| Feature | Status | Guide |
+|---|---|---|
+| [MCP server](#mcp-server) | 🧪 Experimental | [docs/guide/mcp.md](./docs/guide/mcp.md), [client tutorial](./docs/tutorials/mcp-client.md) |
+| [Triggers](#triggers) | 🧪 Experimental | [docs/guide/triggers.md](./docs/guide/triggers.md), [escrow walkthrough](./docs/tutorials/trigger-escrow-release.md) |
+| [Natural-language planning](#natural-language-planning) | 🧪 Experimental | [docs/guide/planning.md](./docs/guide/planning.md) |
+| [Approval decisions](#approval-decisions) | Available | [docs/guide/approvals.md](./docs/guide/approvals.md) |
+| [MPP Charge](#mpp-charge-facilitator-free-payments) | Available (client) | [docs/guide/mpp.md](./docs/guide/mpp.md) |
+| [MPP Session](#mpp-session) | 🧪 Prototype, moves no funds | [docs/guide/mpp.md](./docs/guide/mpp.md#session) |
+
+### MCP Server
+
+> 🧪 **Experimental.** Start on testnet with payments off and the kill switch on, as below.
+
+Expose agent tools to Claude Desktop, Cursor, and other MCP clients.
+
+```bash
+npm run build
+node dist/backend/mcp/index.js
+```
+
+```json
+{
+  "mcpServers": {
+    "nodal-ai": {
+      "command": "node",
+      "args": ["/absolute/path/to/Nodal-AI/dist/backend/mcp/index.js"],
+      "env": {
+        "MCP_ALLOW_PAYMENTS": "false",
+        "PAUSED": "true",
+        "STELLAR_NETWORK": "testnet",
+        "HORIZON_URL": "https://horizon-testnet.stellar.org",
+        "SOROBAN_RPC_URL": "https://soroban-testnet.stellar.org",
+        "AGENT_SECRET_KEY": "S...",
+        "X402_ASSET_ISSUER": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+      }
+    }
+  }
+}
+```
+
+Config: `MCP_TRANSPORT`, `MCP_ALLOW_PAYMENTS`, `MCP_PORT`, `MCP_HOST`, `MCP_API_TOKEN`, `MCP_MAX_BODY_BYTES`. [Guide](./docs/guide/mcp.md) · [Client tutorial](./docs/tutorials/mcp-client.md)
+
+### Triggers
+
+> 🧪 **Experimental.** A library API; the agent process does not start triggers itself.
+
+Run a task when a payment arrives. Always filter by issuer as well as asset code.
+
+```typescript
+import { PayFiAgent } from "./backend/agent";
+import { TriggerManager } from "./backend/triggers";
+
+const manager = new TriggerManager(new PayFiAgent());
+await manager.createTrigger({
+  source: "payment",
+  filter: {
+    assetCode: "USDC",
+    assetIssuer: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+    minAmount: "25",
+  },
+  task: {
+    type: "stellar_payment",
+    payload: { destination: "G...", amount: "1" },
+    requireApproval: true,
+  },
+});
+```
+
+Config: `TRIGGER_ALLOW_PAYMENTS`, `TRIGGER_EVENTS_RETENTION_MS`, `CONTRACT_EVENT_POLL_MS`. [Guide](./docs/guide/triggers.md) · [Escrow release walkthrough](./docs/tutorials/trigger-escrow-release.md)
+
+### Natural-Language Planning
+
+> 🧪 **Experimental.** LLM plans contain read-only steps only; value-moving steps are discarded.
+
+Plan, show the summary, then execute. Without `confirm`, a plan runs immediately.
+
+```typescript
+import { PayFiAgent } from "./backend/agent";
+import { createPlan, executePlan } from "./backend/executor";
+import { Planner } from "./backend/planner";
+
+const agent = new PayFiAgent();
+const readPlan = await new Planner(agent).plan("Show my balances");
+
+const payPlan = createPlan([
+  { type: "stellar_payment", payload: { destination: "G...", amount: "5" } },
+]);
+const { status, results } = await executePlan(agent, payPlan, {
+  confirm: async (summary) => askOperator(summary), // your prompt; resolve true to proceed
+});
+```
+
+Config: `LLM_ENDPOINT`, `LLM_MODEL`, `LLM_API_KEY`. [Guide](./docs/guide/planning.md)
+
+### Approval Decisions
+
+A value-moving task is checked in this order: kill switch, destination policy, approval, spending limit. `requireApproval: true` holds a task whatever its amount; otherwise `APPROVAL_THRESHOLD` decides. An approved task goes through every other check again, so an approval cannot override a limit.
+
+```typescript
+const held = await agent.run({
+  type: "stellar_payment",
+  payload: { destination: "G...", amount: "5" },
+  requireApproval: true,
+});
+const { approvalId } = held.data as { approvalId: string };
+await agent.approve(approvalId, "alice"); // or agent.deny(approvalId, "alice")
+```
+
+Config: `APPROVAL_THRESHOLD`, `APPROVAL_THRESHOLDS`, `APPROVAL_TTL_MS`, `ADMIN_API_TOKEN`. [Guide](./docs/guide/approvals.md) · [HTTP API](#human-in-the-loop-approvals)
 
 ---
 
@@ -1015,6 +1170,22 @@ It signs with the agent signer and applies the same spending policy as other val
 | Agent needs XLM for fees | Yes | Yes (sponsored `feePayer` mode not supported here) |
 | Replay protection | Nonce store + memo binding | HMAC-bound challenge `id` verified by the server |
 | Best for | Servers that already speak x402 | Self-hosted deployments with no third-party dependency |
+
+### MPP Session
+
+> 🧪 **Prototype.** No escrow contract is deployed, no funds move, and it refuses mainnet. Do not treat a closed channel as settled.
+
+[`backend/payments/mpp_session.ts`](./backend/payments/mpp_session.ts) models a payment channel: `openChannel` reserves the total, `commitPayment` signs an off-chain balance update, and `closeChannel` updates local state and throws `SimulatedChannelError`.
+
+```typescript
+import { MppSessionClient } from "./backend/payments/mpp_session";
+
+const client = new MppSessionClient();
+const channel = await client.openChannel("G...", "C...", "100000000", 3600); // base units, seconds
+await client.commitPayment(channel.id, "1000000");
+```
+
+Config: `AGENT_SPENDING_LIMIT`, `SPENDING_LIMITS`, `SPENDING_WINDOW_MS`, `MPP_SESSION_SWEEP_INTERVAL_MS`. [Guide](./docs/guide/mpp.md) · [Design](./docs/design/mpp-session.md)
 
 ## Handsoff notes
 

@@ -8,6 +8,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import axios from 'axios';
 import { NanoPaymentTool, NanoPaymentInputSchema } from '../backend/tools/NanoPaymentTool';
 
+const { nanoConfig } = vi.hoisted(() => ({
+  nanoConfig: {
+    NANO_RPC_URL: 'http://127.0.0.1:7076',
+    NANO_ALLOW_SKIP_PRECHECK: false,
+    STELLAR_NETWORK: 'testnet',
+  },
+}));
+
+vi.mock('../backend/config', () => ({
+  config: nanoConfig,
+  getNanoSeed: () => 'A'.repeat(64),
+}));
 vi.mock('axios');
 
 describe('NanoPaymentTool — Feeless settlement rail (#715)', () => {
@@ -18,6 +30,7 @@ describe('NanoPaymentTool — Feeless settlement rail (#715)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    nanoConfig.NANO_ALLOW_SKIP_PRECHECK = false;
     tool = new NanoPaymentTool();
   });
 
@@ -34,6 +47,27 @@ describe('NanoPaymentTool — Feeless settlement rail (#715)', () => {
         amountRaw: '1',
       });
       expect(parsedXrb.recipient).toBe(VALID_XRB_ADDR);
+    });
+
+    it('rejects a task-supplied RPC URL', () => {
+      expect(() =>
+        NanoPaymentInputSchema.parse({
+          recipient: VALID_NANO_ADDR,
+          amountRaw: SUB_CENT_RAW,
+          rpcUrl: 'http://127.0.0.1:8080',
+        })
+      ).toThrow(/Unrecognized key/);
+    });
+
+    it('rejects a task-supplied RPC URL before making any request', async () => {
+      await expect(
+        tool.execute({
+          recipient: VALID_NANO_ADDR,
+          amountRaw: SUB_CENT_RAW,
+          rpcUrl: 'http://127.0.0.1:8080',
+        })
+      ).rejects.toThrow(/Unrecognized key/);
+      expect(axios.post).not.toHaveBeenCalled();
     });
 
     it('rejects invalid recipient addresses', () => {
@@ -86,8 +120,8 @@ describe('NanoPaymentTool — Feeless settlement rail (#715)', () => {
         },
       });
 
-      const passed = await tool.precheckRecipient(VALID_NANO_ADDR, 'http://127.0.0.1:7076');
-      expect(passed).toBe(true);
+      const result = await tool.precheckRecipient(VALID_NANO_ADDR);
+      expect(result).toEqual({ passed: true, accountStatus: 'open' });
     });
 
     it('passes pre-check when recipient account is unopened (valid for open block)', async () => {
@@ -97,15 +131,22 @@ describe('NanoPaymentTool — Feeless settlement rail (#715)', () => {
         },
       });
 
-      const passed = await tool.precheckRecipient(VALID_NANO_ADDR, 'http://127.0.0.1:7076');
-      expect(passed).toBe(true);
+      const result = await tool.precheckRecipient(VALID_NANO_ADDR);
+      expect(result).toEqual({ passed: true, accountStatus: 'unopened' });
+    });
+
+    it('fails closed when the recipient precheck cannot reach the Nano node', async () => {
+      vi.mocked(axios.post).mockRejectedValueOnce(new Error('connection refused'));
+
+      const result = await tool.precheckRecipient(VALID_NANO_ADDR);
+      expect(result).toEqual({ passed: false, reason: 'network_error' });
     });
   });
 
   describe('Execution & Feeless Receipt', () => {
     it('executes a sub-cent payment and returns block hash receipt', async () => {
       vi.mocked(axios.post).mockResolvedValue({
-        data: { hash: 'C'.repeat(64) },
+        data: { frontier: 'D'.repeat(64), hash: 'C'.repeat(64) },
       });
 
       const result = await tool.execute({
@@ -121,7 +162,19 @@ describe('NanoPaymentTool — Feeless settlement rail (#715)', () => {
       expect(result.timestamp).toBeDefined();
     });
 
-    it('supports skipping precheck when requested', async () => {
+    it('blocks a requested precheck bypass unless operator config explicitly allows it', async () => {
+      await expect(
+        tool.execute({
+          recipient: VALID_NANO_ADDR,
+          amountRaw: SUB_CENT_RAW,
+          skipPrecheck: true,
+        })
+      ).rejects.toThrow(/disabled by operator configuration/);
+      expect(axios.post).not.toHaveBeenCalled();
+    });
+
+    it('supports skipping precheck when operator config explicitly allows it', async () => {
+      nanoConfig.NANO_ALLOW_SKIP_PRECHECK = true;
       const result = await tool.execute({
         recipient: VALID_NANO_ADDR,
         amountRaw: SUB_CENT_RAW,
@@ -130,6 +183,15 @@ describe('NanoPaymentTool — Feeless settlement rail (#715)', () => {
 
       expect(result.precheckPassed).toBe(true);
       expect(result.blockHash).toBeDefined();
+    });
+
+    it('does not broadcast when recipient precheck fails', async () => {
+      vi.mocked(axios.post).mockRejectedValueOnce(new Error('connection refused'));
+
+      await expect(
+        tool.execute({ recipient: VALID_NANO_ADDR, amountRaw: SUB_CENT_RAW })
+      ).rejects.toThrow(/Nano recipient precheck failed/);
+      expect(axios.post).toHaveBeenCalledTimes(1);
     });
   });
 });
