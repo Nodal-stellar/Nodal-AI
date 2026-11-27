@@ -5,6 +5,7 @@
  * AI-generated payments must never execute silently.
  */
 
+import { randomUUID } from 'crypto';
 import { PayFiAgent, AgentTask, AgentResult, Plan, VALUE_MOVING_TASK_TYPES } from './agent';
 import { createLogger } from './utils/logger';
 
@@ -113,7 +114,7 @@ export function createPlan(tasks: AgentTask[], expirationMs = 300000): Plan {
   const expires = new Date(now.getTime() + expirationMs);
 
   return {
-    id: `plan_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+    id: randomUUID(),
     tasks,
     summary: generatePlanSummary(tasks),
     createdAt: now.toISOString(),

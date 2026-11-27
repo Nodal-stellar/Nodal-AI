@@ -309,3 +309,171 @@ export function clearX402RateRecords(): void {
 export function _setDb(db: Database.Database | null): void {
   sqlite._setDb(db);
 }
+
+// ─── Plan persistence (issue #908) ───────────────────────────────────────────
+
+export type PlanStatus = 'pending' | 'confirmed' | 'cancelled' | 'expired' | 'executed';
+
+export type PlanAuditEvent =
+  | 'created'
+  | 'confirmed'
+  | 'cancelled'
+  | 'expired'
+  | 'executed'
+  | 'execute_failed';
+
+export interface PersistedPlan {
+  id: string;
+  /** SHA-256 hex of JSON.stringify(tasks). */
+  hash: string;
+  /** Raw JSON string of the tasks array. */
+  tasks: string;
+  /** Human-readable summary. */
+  preview: string;
+  status: PlanStatus;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface PlanAuditRow {
+  id: number;
+  planId: string;
+  event: PlanAuditEvent;
+  ts: string;
+  detail: string | null;
+}
+
+/** Compute the canonical hash for a tasks array. */
+export function computePlanHash(tasks: unknown): string {
+  return createHash('sha256').update(JSON.stringify(tasks)).digest('hex');
+}
+
+/** Persist a newly created plan in `pending` status and write a `created` audit row. */
+export function savePlan(plan: Omit<PersistedPlan, 'status'>): PersistedPlan {
+  const db = getDb();
+  const persist = db.transaction((): PersistedPlan => {
+    db.prepare(
+      `INSERT INTO plans (id, hash, tasks, preview, status, createdAt, expiresAt)
+       VALUES (@id, @hash, @tasks, @preview, 'pending', @createdAt, @expiresAt)`
+    ).run(plan);
+    db.prepare(
+      `INSERT INTO plan_audit_log (planId, event, ts, detail) VALUES (?, 'created', ?, NULL)`
+    ).run(plan.id, new Date().toISOString());
+    return { ...plan, status: 'pending' };
+  });
+  return persist();
+}
+
+/** Load a single plan by id. Returns undefined when not found. */
+export function getPlan(id: string): PersistedPlan | undefined {
+  return getDb()
+    .prepare(`SELECT id, hash, tasks, preview, status, createdAt, expiresAt FROM plans WHERE id = ?`)
+    .get(id) as PersistedPlan | undefined;
+}
+
+/**
+ * Atomically confirm a pending, unexpired plan.
+ *
+ * Uses a conditional UPDATE so two concurrent confirm calls can never both
+ * succeed.  The plan moves to `confirmed`; callers should then immediately
+ * execute it and call `markPlanExecuted` or `markPlanExecuteFailed`.
+ *
+ * @returns true when this call made the transition, false otherwise.
+ */
+export function confirmPlan(id: string, now: string = new Date().toISOString()): boolean {
+  const db = getDb();
+  const confirm = db.transaction((): boolean => {
+    const info = db
+      .prepare(
+        `UPDATE plans SET status = 'confirmed'
+         WHERE id = ? AND status = 'pending' AND expiresAt > ?`
+      )
+      .run(id, now);
+    if (info.changes !== 1) return false;
+    db.prepare(
+      `INSERT INTO plan_audit_log (planId, event, ts, detail) VALUES (?, 'confirmed', ?, NULL)`
+    ).run(id, now);
+    return true;
+  });
+  return confirm();
+}
+
+/**
+ * Atomically cancel a pending plan.
+ *
+ * @returns true when this call made the transition, false otherwise.
+ */
+export function cancelPlan(id: string, now: string = new Date().toISOString()): boolean {
+  const db = getDb();
+  const cancel = db.transaction((): boolean => {
+    const info = db
+      .prepare(`UPDATE plans SET status = 'cancelled' WHERE id = ? AND status = 'pending'`)
+      .run(id);
+    if (info.changes !== 1) return false;
+    db.prepare(
+      `INSERT INTO plan_audit_log (planId, event, ts, detail) VALUES (?, 'cancelled', ?, NULL)`
+    ).run(id, now);
+    return true;
+  });
+  return cancel();
+}
+
+/**
+ * Mark a confirmed plan as executed.
+ * @param detail - Optional JSON-serialisable detail (e.g. tx hashes).
+ */
+export function markPlanExecuted(id: string, detail?: unknown): void {
+  const db = getDb();
+  const ts = new Date().toISOString();
+  db.transaction(() => {
+    db.prepare(`UPDATE plans SET status = 'executed' WHERE id = ? AND status = 'confirmed'`).run(id);
+    db.prepare(
+      `INSERT INTO plan_audit_log (planId, event, ts, detail) VALUES (?, 'executed', ?, ?)`
+    ).run(id, ts, detail !== undefined ? JSON.stringify(detail) : null);
+  })();
+}
+
+/** Mark a confirmed plan as failed to execute. */
+export function markPlanExecuteFailed(id: string, error: string): void {
+  const db = getDb();
+  const ts = new Date().toISOString();
+  db.transaction(() => {
+    // Revert to pending so the operator can retry.
+    db.prepare(`UPDATE plans SET status = 'pending' WHERE id = ? AND status = 'confirmed'`).run(id);
+    db.prepare(
+      `INSERT INTO plan_audit_log (planId, event, ts, detail) VALUES (?, 'execute_failed', ?, ?)`
+    ).run(id, ts, JSON.stringify({ error }));
+  })();
+}
+
+/**
+ * Mark every pending plan past its deadline as `expired`.
+ * @returns ids that were expired in this call.
+ */
+export function expireOldPlans(now: string = new Date().toISOString()): string[] {
+  const db = getDb();
+  const expire = db.transaction((): string[] => {
+    const rows = db
+      .prepare(`SELECT id FROM plans WHERE status = 'pending' AND expiresAt <= ?`)
+      .all(now) as Array<{ id: string }>;
+    const update = db.prepare(`UPDATE plans SET status = 'expired' WHERE id = ?`);
+    const audit = db.prepare(
+      `INSERT INTO plan_audit_log (planId, event, ts, detail) VALUES (?, 'expired', ?, NULL)`
+    );
+    for (const { id } of rows) {
+      update.run(id);
+      audit.run(id, now);
+    }
+    return rows.map((r) => r.id);
+  });
+  return expire();
+}
+
+/** Full audit trail for a plan, oldest first. */
+export function getPlanAuditLog(planId: string): PlanAuditRow[] {
+  return getDb()
+    .prepare(
+      `SELECT id, planId, event, ts, detail FROM plan_audit_log WHERE planId = ? ORDER BY id ASC`
+    )
+    .all(planId) as PlanAuditRow[];
+}

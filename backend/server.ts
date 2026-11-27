@@ -276,6 +276,8 @@ const STREAM_PATH = '/stream';
 const STREAM_TICKET_PATH = '/stream/ticket';
 const ADMIN_PAUSE_PATH = '/admin/pause';
 const ADMIN_RESUME_PATH = '/admin/resume';
+// Issue #908 — plan CRUD + confirm/cancel
+const PLANS_PATH = '/plans';
 
 /**
  * True when `req.url`'s pathname (query string stripped) equals `path`.
